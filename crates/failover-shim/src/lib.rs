@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Failover shim — automatic failover for HA databases.
 //!
 //! Monitors a primary database, detects failure, promotes a replica,
@@ -44,18 +45,14 @@ pub struct FailoverEvent {
 /// Check if a database is reachable via TCP.
 async fn check_database(addr: &str) -> bool {
     let addr_str = addr.to_string();
-    match tokio::task::spawn_blocking(move || {
-        let parsed: std::net::SocketAddr = match addr_str.parse() {
-            Ok(a) => a,
-            Err(_) => return false,
+    tokio::task::spawn_blocking(move || {
+        let Ok(parsed) = addr_str.parse::<std::net::SocketAddr>() else {
+            return false;
         };
         TcpStream::connect_timeout(&parsed, std::time::Duration::from_secs(3)).is_ok()
     })
     .await
-    {
-        Ok(result) => result,
-        Err(_) => false,
-    }
+    .unwrap_or(false)
 }
 
 /// Failover shim for automatic database failover.
@@ -76,12 +73,18 @@ pub struct FailoverShim {
 impl FailoverShim {
     pub fn new() -> Self {
         Self {
-            primary: std::env::var("FAILOVER_PRIMARY").unwrap_or_else(|_| "127.0.0.1:5432".to_string()),
-            replica: std::env::var("FAILOVER_REPLICA").unwrap_or_else(|_| "127.0.0.1:5433".to_string()),
+            primary: std::env::var("FAILOVER_PRIMARY")
+                .unwrap_or_else(|_| "127.0.0.1:5432".to_string()),
+            replica: std::env::var("FAILOVER_REPLICA")
+                .unwrap_or_else(|_| "127.0.0.1:5433".to_string()),
             check_interval_secs: std::env::var("FAILOVER_CHECK_INTERVAL")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(5),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5),
             failure_threshold: std::env::var("FAILOVER_FAILURE_THRESHOLD")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(3),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
             webhook: std::env::var("FAILOVER_WEBHOOK").ok(),
             db_type: std::env::var("FAILOVER_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
             state: FailoverState::Healthy,
@@ -114,7 +117,9 @@ impl Capability for FailoverShim {
         self.current_primary = self.primary.clone();
         tracing::info!(
             "FailoverShim initialized (primary={}, replica={}, interval={}s)",
-            self.primary, self.replica, self.check_interval_secs,
+            self.primary,
+            self.replica,
+            self.check_interval_secs,
         );
         Ok(())
     }
@@ -137,7 +142,8 @@ impl Capability for FailoverShim {
         self.shutdown_tx = Some(shutdown_tx);
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
             let mut current_primary = primary.clone();
             let mut consecutive_failures: u32 = 0;
             let mut state = FailoverState::Healthy;
@@ -161,7 +167,10 @@ impl Capability for FailoverShim {
                             );
 
                             if consecutive_failures >= failure_threshold {
-                                state = FailoverState::FailingOver;
+                                #[allow(unused_assignments)]
+                                {
+                                    state = FailoverState::FailingOver;
+                                }
                                 tracing::error!(
                                     "FAILOVER TRIGGERED: {} failed {} consecutive checks",
                                     current_primary, consecutive_failures
@@ -202,7 +211,8 @@ impl Capability for FailoverShim {
 
         tracing::info!(
             "FailoverShim started (check every {}s, failover after {} failures)",
-            self.check_interval_secs, self.failure_threshold,
+            self.check_interval_secs,
+            self.failure_threshold,
         );
         Ok(())
     }
@@ -227,7 +237,10 @@ impl Capability for FailoverShim {
         vec![
             Metric::new("failover_state", state_val),
             Metric::new("failover_events_total", self.failover_count as f64),
-            Metric::new("failover_consecutive_failures", self.consecutive_failures as f64),
+            Metric::new(
+                "failover_consecutive_failures",
+                self.consecutive_failures as f64,
+            ),
         ]
     }
 }

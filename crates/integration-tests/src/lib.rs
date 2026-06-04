@@ -6,6 +6,6 @@
 //! Prerequisites:
 //!   docker compose -f tests/docker-compose.yml up -d
 
-mod failover;
 mod backup;
+mod failover;
 mod vault;

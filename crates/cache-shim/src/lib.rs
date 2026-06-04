@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Cache shim — query result caching with Redis/Memcached.
 //!
 //! Intercepts database queries and caches results for faster repeated access.
@@ -35,25 +36,46 @@ impl CacheShim {
     pub fn new() -> Self {
         Self {
             backend: std::env::var("CACHE_BACKEND").unwrap_or_else(|_| "redis".to_string()),
-            url: std::env::var("CACHE_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-            ttl_secs: std::env::var("CACHE_TTL").ok().and_then(|s| s.parse().ok()).unwrap_or(300),
-            max_size: std::env::var("CACHE_MAX_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(1_073_741_824),
+            url: std::env::var("CACHE_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+            ttl_secs: std::env::var("CACHE_TTL")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(300),
+            max_size: std::env::var("CACHE_MAX_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1_073_741_824),
             strategy: std::env::var("CACHE_STRATEGY").unwrap_or_else(|_| "lru".to_string()),
             prefix: std::env::var("CACHE_PREFIX").unwrap_or_else(|_| "shim:".to_string()),
-            hits: 0, misses: 0, evictions: 0, size_bytes: 0,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            size_bytes: 0,
             shutdown_tx: None,
         }
     }
 }
 
-impl Default for CacheShim { fn default() -> Self { Self::new() } }
+impl Default for CacheShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for CacheShim {
-    fn name(&self) -> &str { "cache" }
+    fn name(&self) -> &str {
+        "cache"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("CacheShim initialized (backend={}, url={}, ttl={}s)", self.backend, self.url, self.ttl_secs);
+        tracing::info!(
+            "CacheShim initialized (backend={}, url={}, ttl={}s)",
+            self.backend,
+            self.url,
+            self.ttl_secs
+        );
         Ok(())
     }
 
@@ -65,7 +87,9 @@ impl Capability for CacheShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("CacheShim stopped");
         Ok(())
     }

@@ -28,7 +28,11 @@ impl Metric {
     }
 
     /// Create a metric with labels.
-    pub fn with_labels(name: &str, value: f64, labels: std::collections::HashMap<String, String>) -> Self {
+    pub fn with_labels(
+        name: &str,
+        value: f64,
+        labels: std::collections::HashMap<String, String>,
+    ) -> Self {
         Self {
             name: name.to_string(),
             value,

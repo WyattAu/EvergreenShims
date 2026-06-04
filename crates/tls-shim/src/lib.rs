@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! TLS shim — automatic TLS certificate management.
 //!
 //! Obtains and renews TLS certificates from Let's Encrypt or an internal CA.
@@ -55,7 +56,9 @@ impl TlsShim {
             domain: std::env::var("TLS_DOMAIN").unwrap_or_default(),
             email: std::env::var("TLS_EMAIL").unwrap_or_default(),
             renew_before_secs: std::env::var("TLS_RENEW_BEFORE")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(259200),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(259200),
             cert_file: std::env::var("TLS_CERT_FILE").ok().map(PathBuf::from),
             key_file: std::env::var("TLS_KEY_FILE").ok().map(PathBuf::from),
             listen: std::env::var("TLS_LISTEN").unwrap_or_else(|_| ":80".to_string()),
@@ -138,7 +141,8 @@ impl Capability for TlsShim {
         }
         tracing::info!(
             "TlsShim initialized (provider={}, domain={})",
-            self.provider, self.domain,
+            self.provider,
+            self.domain,
         );
         Ok(())
     }
@@ -181,7 +185,9 @@ impl Capability for TlsShim {
 
         tracing::info!(
             "TlsShim started (provider={}, domain={}, renew_before={}s)",
-            self.provider, self.domain, self.renew_before_secs,
+            self.provider,
+            self.domain,
+            self.renew_before_secs,
         );
         Ok(())
     }

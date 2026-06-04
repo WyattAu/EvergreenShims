@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Queue shim — background job processing.
 //!
 //! Manages a job queue for background tasks (email, reports, etc.).
@@ -32,22 +33,41 @@ impl QueueShim {
         Self {
             backend: std::env::var("QUEUE_BACKEND").unwrap_or_else(|_| "memory".to_string()),
             url: std::env::var("QUEUE_URL").ok(),
-            max_workers: std::env::var("QUEUE_MAX_WORKERS").ok().and_then(|s| s.parse().ok()).unwrap_or(4),
-            max_retries: std::env::var("QUEUE_MAX_RETRIES").ok().and_then(|s| s.parse().ok()).unwrap_or(3),
-            jobs_enqueued: 0, jobs_processed: 0, jobs_failed: 0, jobs_retried: 0,
+            max_workers: std::env::var("QUEUE_MAX_WORKERS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(4),
+            max_retries: std::env::var("QUEUE_MAX_RETRIES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
+            jobs_enqueued: 0,
+            jobs_processed: 0,
+            jobs_failed: 0,
+            jobs_retried: 0,
             shutdown_tx: None,
         }
     }
 }
 
-impl Default for QueueShim { fn default() -> Self { Self::new() } }
+impl Default for QueueShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for QueueShim {
-    fn name(&self) -> &str { "queue" }
+    fn name(&self) -> &str {
+        "queue"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("QueueShim initialized (backend={}, workers={})", self.backend, self.max_workers);
+        tracing::info!(
+            "QueueShim initialized (backend={}, workers={})",
+            self.backend,
+            self.max_workers
+        );
         Ok(())
     }
 
@@ -59,7 +79,9 @@ impl Capability for QueueShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("QueueShim stopped");
         Ok(())
     }

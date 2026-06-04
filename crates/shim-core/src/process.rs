@@ -88,7 +88,10 @@ impl ChildProcess {
 
             // Force kill if still running
             if start.elapsed() >= timeout {
-                tracing::warn!("Child process PID {} did not exit gracefully, sending SIGKILL", pid);
+                tracing::warn!(
+                    "Child process PID {} did not exit gracefully, sending SIGKILL",
+                    pid
+                );
                 let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
             }
 

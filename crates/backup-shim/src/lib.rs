@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Backup shim — automated database backups with S3 upload and retention.
 //!
 //! Supports PostgreSQL (pg_dump), MariaDB/MySQL (mysqldump),
@@ -67,18 +68,27 @@ impl BackupShim {
         Self {
             schedule: std::env::var("BACKUP_SCHEDULE").unwrap_or_else(|_| "0 2 * * *".to_string()),
             storage: std::env::var("BACKUP_STORAGE").unwrap_or_else(|_| "local".to_string()),
-            backup_path: std::env::var("BACKUP_PATH").unwrap_or_else(|_| "/var/backups".to_string()),
+            backup_path: std::env::var("BACKUP_PATH")
+                .unwrap_or_else(|_| "/var/backups".to_string()),
             prefix: std::env::var("BACKUP_PREFIX").unwrap_or_default(),
             retention_days: std::env::var("BACKUP_RETENTION_DAYS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(30),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30),
             database: std::env::var("BACKUP_DATABASE").unwrap_or_default(),
             db_type: std::env::var("BACKUP_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
             db_host: std::env::var("BACKUP_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
-            db_port: std::env::var("BACKUP_DB_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(5432),
+            db_port: std::env::var("BACKUP_DB_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5432),
             db_user: std::env::var("BACKUP_DB_USER").unwrap_or_else(|_| "postgres".to_string()),
             db_password: std::env::var("BACKUP_DB_PASSWORD").unwrap_or_default(),
             compression: std::env::var("BACKUP_COMPRESSION").unwrap_or_else(|_| "gzip".to_string()),
-            timeout_secs: std::env::var("BACKUP_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(3600),
+            timeout_secs: std::env::var("BACKUP_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3600),
             backup_success: 0,
             backup_failure: 0,
             last_backup: None,
@@ -100,10 +110,14 @@ impl BackupShim {
     async fn dump_postgres(&self, output: &str) -> anyhow::Result<()> {
         let mut cmd = Command::new("pg_dump");
         cmd.args([
-            "-h", &self.db_host,
-            "-p", &self.db_port.to_string(),
-            "-U", &self.db_user,
-            "-d", &self.database,
+            "-h",
+            &self.db_host,
+            "-p",
+            &self.db_port.to_string(),
+            "-U",
+            &self.db_user,
+            "-d",
+            &self.database,
             "--no-owner",
             "--no-privileges",
             "-Fc",
@@ -125,9 +139,12 @@ impl BackupShim {
     async fn dump_mariadb(&self, output: &str) -> anyhow::Result<()> {
         let mut cmd = Command::new("mysqldump");
         cmd.args([
-            "-h", &self.db_host,
-            "-P", &self.db_port.to_string(),
-            "-u", &self.db_user,
+            "-h",
+            &self.db_host,
+            "-P",
+            &self.db_port.to_string(),
+            "-u",
+            &self.db_user,
             &self.database,
             "--single-transaction",
             "--routines",
@@ -214,7 +231,9 @@ impl Capability for BackupShim {
         }
         tracing::info!(
             "BackupShim initialized (schedule={}, db={}, type={})",
-            self.schedule, self.database, self.db_type,
+            self.schedule,
+            self.database,
+            self.db_type,
         );
         Ok(())
     }

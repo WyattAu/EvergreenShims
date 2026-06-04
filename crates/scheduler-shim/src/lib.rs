@@ -39,19 +39,31 @@ impl SchedulerShim {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
             timezone: std::env::var("SCHEDULER_TIMEZONE").unwrap_or_else(|_| "UTC".to_string()),
-            tasks_executed: 0, tasks_failed: 0, shutdown_tx: None,
+            tasks_executed: 0,
+            tasks_failed: 0,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for SchedulerShim { fn default() -> Self { Self::new() } }
+impl Default for SchedulerShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for SchedulerShim {
-    fn name(&self) -> &str { "scheduler" }
+    fn name(&self) -> &str {
+        "scheduler"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("SchedulerShim initialized (tasks={}, tz={})", self.tasks.len(), self.timezone);
+        tracing::info!(
+            "SchedulerShim initialized (tasks={}, tz={})",
+            self.tasks.len(),
+            self.timezone
+        );
         Ok(())
     }
 
@@ -63,7 +75,9 @@ impl Capability for SchedulerShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("SchedulerShim stopped");
         Ok(())
     }

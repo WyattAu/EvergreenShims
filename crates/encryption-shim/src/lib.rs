@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Encryption shim — transparent data encryption.
 //!
 //! Encrypts/decrypts data at rest and in transit.
@@ -31,18 +32,30 @@ impl EncryptionShim {
             method: std::env::var("ENCRYPTION_METHOD").unwrap_or_else(|_| "aes-gcm".to_string()),
             key: std::env::var("ENCRYPTION_KEY").ok(),
             key_id: std::env::var("ENCRYPTION_KEY_ID").ok(),
-            columns: std::env::var("ENCRYPTION_COLUMNS").unwrap_or_default()
-                .split(',').filter(|s| !s.is_empty()).map(|s| s.trim().to_string()).collect(),
-            encryptions_total: 0, decryptions_total: 0, shutdown_tx: None,
+            columns: std::env::var("ENCRYPTION_COLUMNS")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim().to_string())
+                .collect(),
+            encryptions_total: 0,
+            decryptions_total: 0,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for EncryptionShim { fn default() -> Self { Self::new() } }
+impl Default for EncryptionShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for EncryptionShim {
-    fn name(&self) -> &str { "encryption" }
+    fn name(&self) -> &str {
+        "encryption"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
         tracing::info!("EncryptionShim initialized (method={})", self.method);
@@ -57,15 +70,23 @@ impl Capability for EncryptionShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("EncryptionShim stopped");
         Ok(())
     }
 
     fn metrics(&self) -> Vec<Metric> {
         vec![
-            Metric::new("encryption_encryptions_total", self.encryptions_total as f64),
-            Metric::new("encryption_decryptions_total", self.decryptions_total as f64),
+            Metric::new(
+                "encryption_encryptions_total",
+                self.encryptions_total as f64,
+            ),
+            Metric::new(
+                "encryption_decryptions_total",
+                self.decryptions_total as f64,
+            ),
         ]
     }
 }

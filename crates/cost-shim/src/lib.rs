@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Cost shim — resource tracking per tenant.
 //!
 //! Tracks resource usage (CPU, memory, storage) per tenant for billing.
@@ -26,22 +27,38 @@ pub struct CostShim {
 impl CostShim {
     pub fn new() -> Self {
         Self {
-            enabled: std::env::var("COST_TRACKING_ENABLED").map(|v| v == "true" || v == "1").unwrap_or(true),
-            tenant_key: std::env::var("COST_TENANT_KEY").unwrap_or_else(|_| "X-Tenant-ID".to_string()),
-            report_schedule: std::env::var("COST_REPORT_SCHEDULE").unwrap_or_else(|_| "daily".to_string()),
-            tenants_tracked: 0, resources_tracked: 0, shutdown_tx: None,
+            enabled: std::env::var("COST_TRACKING_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(true),
+            tenant_key: std::env::var("COST_TENANT_KEY")
+                .unwrap_or_else(|_| "X-Tenant-ID".to_string()),
+            report_schedule: std::env::var("COST_REPORT_SCHEDULE")
+                .unwrap_or_else(|_| "daily".to_string()),
+            tenants_tracked: 0,
+            resources_tracked: 0,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for CostShim { fn default() -> Self { Self::new() } }
+impl Default for CostShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for CostShim {
-    fn name(&self) -> &str { "cost" }
+    fn name(&self) -> &str {
+        "cost"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("CostShim initialized (enabled={}, key={})", self.enabled, self.tenant_key);
+        tracing::info!(
+            "CostShim initialized (enabled={}, key={})",
+            self.enabled,
+            self.tenant_key
+        );
         Ok(())
     }
 
@@ -53,7 +70,9 @@ impl Capability for CostShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("CostShim stopped");
         Ok(())
     }

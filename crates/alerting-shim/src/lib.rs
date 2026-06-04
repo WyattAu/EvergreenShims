@@ -37,19 +37,30 @@ impl AlertingShim {
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
-            alerts_sent: 0, alerts_failed: 0, shutdown_tx: None,
+            alerts_sent: 0,
+            alerts_failed: 0,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for AlertingShim { fn default() -> Self { Self::new() } }
+impl Default for AlertingShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for AlertingShim {
-    fn name(&self) -> &str { "alerting" }
+    fn name(&self) -> &str {
+        "alerting"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("AlertingShim initialized ({} webhooks)", self.webhooks.len());
+        tracing::info!(
+            "AlertingShim initialized ({} webhooks)",
+            self.webhooks.len()
+        );
         Ok(())
     }
 
@@ -61,7 +72,9 @@ impl Capability for AlertingShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("AlertingShim stopped");
         Ok(())
     }

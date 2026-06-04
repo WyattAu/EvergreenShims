@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Chaos shim — fault injection for resilience testing.
 //!
 //! Injects faults (latency, errors, partitions) to test application resilience.
@@ -29,25 +30,49 @@ pub struct ChaosShim {
 impl ChaosShim {
     pub fn new() -> Self {
         Self {
-            enabled: std::env::var("CHAOS_ENABLED").map(|v| v == "true" || v == "1").unwrap_or(false),
-            latency_ms: std::env::var("CHAOS_LATENCY_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(0),
-            error_rate: std::env::var("CHAOS_ERROR_RATE").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0),
-            partition: std::env::var("CHAOS_PARTITION").map(|v| v == "true" || v == "1").unwrap_or(false),
-            kill_probability: std::env::var("CHAOS_KILL_PROBABILITY").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0),
-            faults_injected: 0, shutdown_tx: None,
+            enabled: std::env::var("CHAOS_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            latency_ms: std::env::var("CHAOS_LATENCY_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            error_rate: std::env::var("CHAOS_ERROR_RATE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0),
+            partition: std::env::var("CHAOS_PARTITION")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            kill_probability: std::env::var("CHAOS_KILL_PROBABILITY")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0),
+            faults_injected: 0,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for ChaosShim { fn default() -> Self { Self::new() } }
+impl Default for ChaosShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for ChaosShim {
-    fn name(&self) -> &str { "chaos" }
+    fn name(&self) -> &str {
+        "chaos"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("ChaosShim initialized (enabled={}, latency={}ms, error_rate={})",
-            self.enabled, self.latency_ms, self.error_rate);
+        tracing::info!(
+            "ChaosShim initialized (enabled={}, latency={}ms, error_rate={})",
+            self.enabled,
+            self.latency_ms,
+            self.error_rate
+        );
         Ok(())
     }
 
@@ -59,14 +84,17 @@ impl Capability for ChaosShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("ChaosShim stopped");
         Ok(())
     }
 
     fn metrics(&self) -> Vec<Metric> {
-        vec![
-            Metric::new("chaos_faults_injected", self.faults_injected as f64),
-        ]
+        vec![Metric::new(
+            "chaos_faults_injected",
+            self.faults_injected as f64,
+        )]
     }
 }

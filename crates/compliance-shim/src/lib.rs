@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Compliance shim — CIS/STIG compliance checking.
 //!
 //! Checks database configuration against security benchmarks.
@@ -34,22 +35,37 @@ impl ComplianceShim {
         Self {
             benchmark: std::env::var("COMPLIANCE_BENCHMARK").unwrap_or_else(|_| "cis".to_string()),
             db_type: std::env::var("COMPLIANCE_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
-            report_format: std::env::var("COMPLIANCE_REPORT").unwrap_or_else(|_| "json".to_string()),
+            report_format: std::env::var("COMPLIANCE_REPORT")
+                .unwrap_or_else(|_| "json".to_string()),
             output: std::env::var("COMPLIANCE_OUTPUT").unwrap_or_else(|_| "stdout".to_string()),
-            checks_passed: 0, checks_failed: 0, checks_total: 0,
-            compliance_score: 0.0, last_check: None, shutdown_tx: None,
+            checks_passed: 0,
+            checks_failed: 0,
+            checks_total: 0,
+            compliance_score: 0.0,
+            last_check: None,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for ComplianceShim { fn default() -> Self { Self::new() } }
+impl Default for ComplianceShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for ComplianceShim {
-    fn name(&self) -> &str { "compliance" }
+    fn name(&self) -> &str {
+        "compliance"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("ComplianceShim initialized (benchmark={}, db={})", self.benchmark, self.db_type);
+        tracing::info!(
+            "ComplianceShim initialized (benchmark={}, db={})",
+            self.benchmark,
+            self.db_type
+        );
         Ok(())
     }
 
@@ -61,7 +77,9 @@ impl Capability for ComplianceShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("ComplianceShim stopped");
         Ok(())
     }

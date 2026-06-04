@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Audit shim — database query logging and SIEM export.
 //!
 //! Captures database queries and exports them to syslog, file, or webhook.
@@ -76,10 +77,8 @@ impl AuditShim {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.trim().to_string())
                 .collect(),
-            format: std::env::var("AUDIT_FORMAT")
-                .unwrap_or_else(|_| "json".to_string()),
-            output: std::env::var("AUDIT_OUTPUT")
-                .unwrap_or_else(|_| "stdout".to_string()),
+            format: std::env::var("AUDIT_FORMAT").unwrap_or_else(|_| "json".to_string()),
+            output: std::env::var("AUDIT_OUTPUT").unwrap_or_else(|_| "stdout".to_string()),
             output_file: std::env::var("AUDIT_OUTPUT_FILE").ok(),
             webhook_url: std::env::var("AUDIT_WEBHOOK_URL").ok(),
             log_queries: std::env::var("AUDIT_LOG_QUERIES")
@@ -132,17 +131,14 @@ impl AuditShim {
                         .append(true)
                         .open(path)
                         .await?;
-                    file.write_all(format!("{}\n", formatted).as_bytes()).await?;
+                    file.write_all(format!("{}\n", formatted).as_bytes())
+                        .await?;
                 }
             }
             "webhook" => {
                 if let Some(url) = &self.webhook_url {
                     let client = reqwest::Client::new();
-                    client
-                        .post(url)
-                        .json(entry)
-                        .send()
-                        .await?;
+                    client.post(url).json(entry).send().await?;
                 }
             }
             _ => {}
@@ -174,7 +170,11 @@ impl Capability for AuditShim {
             "AuditShim initialized (database={}, format={}, tables={})",
             self.database,
             self.format,
-            if self.tables.is_empty() { "all".to_string() } else { self.tables.join(",") },
+            if self.tables.is_empty() {
+                "all".to_string()
+            } else {
+                self.tables.join(",")
+            },
         );
         Ok(())
     }
@@ -195,8 +195,9 @@ impl Capability for AuditShim {
     }
 
     fn metrics(&self) -> Vec<Metric> {
-        vec![
-            Metric::new("audit_queries_logged_total", self.queries_logged as f64),
-        ]
+        vec![Metric::new(
+            "audit_queries_logged_total",
+            self.queries_logged as f64,
+        )]
     }
 }

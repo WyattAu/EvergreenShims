@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Migration shim — database schema migrations with rollback support.
 //!
 //! Runs SQL migration files from a directory in order, tracking applied
@@ -70,20 +71,17 @@ impl MigrationShim {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/migrations")),
             database: std::env::var("MIGRATION_DATABASE").unwrap_or_default(),
-            db_host: std::env::var("MIGRATION_DB_HOST")
-                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            db_host: std::env::var("MIGRATION_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             db_port: std::env::var("MIGRATION_DB_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(5432),
-            db_user: std::env::var("MIGRATION_DB_USER")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            db_user: std::env::var("MIGRATION_DB_USER").unwrap_or_else(|_| "postgres".to_string()),
             db_password: std::env::var("MIGRATION_DB_PASSWORD").unwrap_or_default(),
             auto_migrate: std::env::var("MIGRATION_AUTO_MIGRATE")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
-            db_type: std::env::var("MIGRATION_DB_TYPE")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            db_type: std::env::var("MIGRATION_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
             current_version: 0,
             migrations_applied: 0,
             last_migration: None,
@@ -108,7 +106,8 @@ impl MigrationShim {
                     // Parse version from filename: NNN_name.up.sql
                     let parts: Vec<&str> = name.splitn(2, '_').collect();
                     if let Ok(version) = parts[0].parse::<u32>() {
-                        let migration_name = parts.get(1)
+                        let migration_name = parts
+                            .get(1)
                             .unwrap_or(&"")
                             .trim_end_matches(".up.sql")
                             .to_string();
@@ -124,9 +123,9 @@ impl MigrationShim {
 
     /// Read a migration file.
     async fn read_migration(&self, path: &PathBuf) -> anyhow::Result<String> {
-        fs::read_to_string(path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to read migration {}: {}", path.display(), e)
-        })
+        fs::read_to_string(path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read migration {}: {}", path.display(), e))
     }
 }
 

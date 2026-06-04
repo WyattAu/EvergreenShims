@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! CDC shim — Change Data Capture for event-driven architectures.
 //!
 //! Reads database WAL/binlog and publishes changes to Kafka, NATS, or webhooks.
@@ -40,30 +41,50 @@ impl CdcShim {
     pub fn new() -> Self {
         Self {
             output: std::env::var("CDC_OUTPUT").unwrap_or_else(|_| "kafka".to_string()),
-            tables: std::env::var("CDC_TABLES").unwrap_or_default()
-                .split(',').filter(|s| !s.is_empty()).map(|s| s.trim().to_string()).collect(),
+            tables: std::env::var("CDC_TABLES")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim().to_string())
+                .collect(),
             format: std::env::var("CDC_FORMAT").unwrap_or_else(|_| "json".to_string()),
             compression: std::env::var("CDC_COMPRESSION").unwrap_or_else(|_| "none".to_string()),
             kafka_brokers: std::env::var("CDC_KAFKA_BROKERS").ok(),
             kafka_topic: std::env::var("CDC_KAFKA_TOPIC").ok(),
             webhook_url: std::env::var("CDC_WEBHOOK_URL").ok(),
             db_type: std::env::var("CDC_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
-            events_captured: 0, events_published: 0, events_failed: 0, lag_seconds: 0.0,
+            events_captured: 0,
+            events_published: 0,
+            events_failed: 0,
+            lag_seconds: 0.0,
             shutdown_tx: None,
         }
     }
 }
 
-impl Default for CdcShim { fn default() -> Self { Self::new() } }
+impl Default for CdcShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for CdcShim {
-    fn name(&self) -> &str { "cdc" }
+    fn name(&self) -> &str {
+        "cdc"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("CdcShim initialized (output={}, format={}, tables={})",
-            self.output, self.format,
-            if self.tables.is_empty() { "all".to_string() } else { self.tables.join(",") });
+        tracing::info!(
+            "CdcShim initialized (output={}, format={}, tables={})",
+            self.output,
+            self.format,
+            if self.tables.is_empty() {
+                "all".to_string()
+            } else {
+                self.tables.join(",")
+            }
+        );
         Ok(())
     }
 
@@ -75,7 +96,9 @@ impl Capability for CdcShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("CdcShim stopped");
         Ok(())
     }

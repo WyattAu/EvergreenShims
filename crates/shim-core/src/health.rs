@@ -61,8 +61,7 @@ impl HealthCheck for CommandHealthCheck {
 /// Execute a health check command.
 async fn execute_health_cmd(cmd: &str, timeout_secs: u64) -> HealthStatus {
     // Handle special commands
-    if cmd.starts_with("exec:") {
-        let exec_cmd = &cmd[5..];
+    if let Some(exec_cmd) = cmd.strip_prefix("exec:") {
         if exec_cmd == "true" {
             return HealthStatus::Healthy;
         }
@@ -72,18 +71,16 @@ async fn execute_health_cmd(cmd: &str, timeout_secs: u64) -> HealthStatus {
     }
 
     // Handle TCP checks
-    if cmd.starts_with("tcp:") {
-        let addr = &cmd[4..];
+    if let Some(addr) = cmd.strip_prefix("tcp:") {
         match tokio::net::TcpStream::connect(addr).await {
             Ok(_) => HealthStatus::Healthy,
             Err(_) => HealthStatus::Unhealthy,
         }
     }
     // Handle HTTP checks (requires "http" feature)
-    else if cmd.starts_with("http:") {
+    else if let Some(url) = cmd.strip_prefix("http:") {
         #[cfg(feature = "http")]
         {
-            let url = &cmd[5..];
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(timeout_secs))
                 .build()
@@ -107,8 +104,7 @@ async fn execute_health_cmd(cmd: &str, timeout_secs: u64) -> HealthStatus {
         }
     }
     // Handle exec commands
-    else if cmd.starts_with("exec:") {
-        let exec_cmd = &cmd[5..];
+    else if let Some(exec_cmd) = cmd.strip_prefix("exec:") {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             tokio::process::Command::new("sh")

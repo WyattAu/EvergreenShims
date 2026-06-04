@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Sharding shim — automatic sharding for distributed databases.
 //!
 //! Routes queries to the correct shard based on a shard key.
@@ -30,23 +31,42 @@ impl ShardingShim {
         Self {
             strategy: std::env::var("SHARDING_STRATEGY").unwrap_or_else(|_| "hash".to_string()),
             shard_key: std::env::var("SHARDING_KEY").unwrap_or_default(),
-            shard_count: std::env::var("SHARDING_COUNT").ok().and_then(|s| s.parse().ok()).unwrap_or(4),
-            addresses: std::env::var("SHARDING_ADDRESSES").unwrap_or_default()
-                .split(',').filter(|s| !s.is_empty()).map(|s| s.trim().to_string()).collect(),
-            queries_routed: 0, queries_missed: 0, shutdown_tx: None,
+            shard_count: std::env::var("SHARDING_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(4),
+            addresses: std::env::var("SHARDING_ADDRESSES")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim().to_string())
+                .collect(),
+            queries_routed: 0,
+            queries_missed: 0,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for ShardingShim { fn default() -> Self { Self::new() } }
+impl Default for ShardingShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for ShardingShim {
-    fn name(&self) -> &str { "sharding" }
+    fn name(&self) -> &str {
+        "sharding"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("ShardingShim initialized (strategy={}, key={}, shards={})",
-            self.strategy, self.shard_key, self.shard_count);
+        tracing::info!(
+            "ShardingShim initialized (strategy={}, key={}, shards={})",
+            self.strategy,
+            self.shard_key,
+            self.shard_count
+        );
         Ok(())
     }
 
@@ -58,7 +78,9 @@ impl Capability for ShardingShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("ShardingShim stopped");
         Ok(())
     }

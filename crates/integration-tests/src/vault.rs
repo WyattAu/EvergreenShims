@@ -9,9 +9,7 @@ async fn test_vault_credentials_serialization() {
         username: "postgres".to_string(),
         password: "s3cret_p@ssw0rd".to_string(),
         fetched_at: chrono::Utc::now().to_rfc3339(),
-        expires_at: Some(
-            (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
-        ),
+        expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
     };
 
     let json = serde_json::to_string(&creds).unwrap();

@@ -72,19 +72,12 @@ impl VaultShim {
         Self {
             vault_addr: std::env::var("VAULT_ADDR")
                 .unwrap_or_else(|_| "https://127.0.0.1:8200".to_string()),
-            vault_token: std::env::var("VAULT_TOKEN")
-                .unwrap_or_default(),
-            vault_role: std::env::var("VAULT_ROLE")
-                .unwrap_or_default(),
-            vault_secret: std::env::var("VAULT_SECRET")
-                .unwrap_or_default(),
-            vault_key: std::env::var("VAULT_KEY")
-                .unwrap_or_else(|_| "password".to_string()),
-            vault_mount: std::env::var("VAULT_MOUNT")
-                .unwrap_or_else(|_| "secret".to_string()),
-            output_file: std::env::var("VAULT_OUTPUT_FILE")
-                .ok()
-                .map(PathBuf::from),
+            vault_token: std::env::var("VAULT_TOKEN").unwrap_or_default(),
+            vault_role: std::env::var("VAULT_ROLE").unwrap_or_default(),
+            vault_secret: std::env::var("VAULT_SECRET").unwrap_or_default(),
+            vault_key: std::env::var("VAULT_KEY").unwrap_or_else(|_| "password".to_string()),
+            vault_mount: std::env::var("VAULT_MOUNT").unwrap_or_else(|_| "secret".to_string()),
+            output_file: std::env::var("VAULT_OUTPUT_FILE").ok().map(PathBuf::from),
             rotation_secs: std::env::var("VAULT_ROTATION_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -102,10 +95,7 @@ impl VaultShim {
 
     /// Read a secret from Vault.
     pub async fn read_secret(&self, path: &str) -> anyhow::Result<Credentials> {
-        let url = format!(
-            "{}/v1/{}/{}",
-            self.vault_addr, self.vault_mount, path
-        );
+        let url = format!("{}/v1/{}/{}", self.vault_addr, self.vault_mount, path);
 
         let response = self
             .http_client
@@ -143,10 +133,7 @@ impl VaultShim {
 
     /// Generate dynamic credentials via Vault's database secrets engine.
     pub async fn generate_dynamic(&self) -> anyhow::Result<Credentials> {
-        let url = format!(
-            "{}/v1/database/creds/{}",
-            self.vault_addr, self.vault_role
-        );
+        let url = format!("{}/v1/database/creds/{}", self.vault_addr, self.vault_role);
 
         let response = self
             .http_client
@@ -158,7 +145,10 @@ impl VaultShim {
             .json::<serde_json::Value>()
             .await?;
 
-        let lease = response.get("lease_duration").and_then(|v| v.as_u64()).unwrap_or(3600);
+        let lease = response
+            .get("lease_duration")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3600);
         let data = response.get("data").unwrap_or(&serde_json::Value::Null);
 
         let username = data
@@ -173,8 +163,7 @@ impl VaultShim {
             .unwrap_or("")
             .to_string();
 
-        let expires_at = chrono::Utc::now()
-            + chrono::Duration::seconds(lease as i64);
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(lease as i64);
 
         Ok(Credentials {
             username,
@@ -285,9 +274,7 @@ impl Capability for VaultShim {
                 shutdown_tx: None,
             };
 
-            let mut interval = tokio::time::interval(
-                std::time::Duration::from_secs(rotation_secs),
-            );
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(rotation_secs));
 
             loop {
                 tokio::select! {

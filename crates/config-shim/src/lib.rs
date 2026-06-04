@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Config shim — hot-reload configuration for applications.
 //!
 //! Watches a configuration file for changes, validates new config,
@@ -57,7 +58,9 @@ impl ConfigShim {
             reload_signal: std::env::var("CONFIG_RELOAD_SIGNAL")
                 .unwrap_or_else(|_| "SIGHUP".to_string()),
             reload_debounce_secs: std::env::var("CONFIG_RELOAD_DEBOUNCE")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(5),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5),
             validate_cmd: std::env::var("CONFIG_VALIDATE_CMD").ok(),
             keep_backup: std::env::var("CONFIG_BACKUP")
                 .map(|v| v == "true" || v == "1")
@@ -123,7 +126,9 @@ impl Capability for ConfigShim {
     async fn init(&mut self, _config: &Config) -> Result<()> {
         tracing::info!(
             "ConfigShim initialized (path={}, watch={}, signal={})",
-            self.config_path.display(), self.watch_enabled, self.reload_signal,
+            self.config_path.display(),
+            self.watch_enabled,
+            self.reload_signal,
         );
         Ok(())
     }
@@ -144,9 +149,8 @@ impl Capability for ConfigShim {
                     .and_then(|m| m.modified())
                     .ok();
 
-                let mut interval = tokio::time::interval(
-                    std::time::Duration::from_secs(debounce_secs),
-                );
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(debounce_secs));
 
                 loop {
                     tokio::select! {

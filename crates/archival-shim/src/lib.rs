@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Archival shim — data archival to cold storage.
 //!
 //! Moves old data from hot storage to cold storage (S3, Glacier, etc.).
@@ -31,26 +32,47 @@ pub struct ArchivalShim {
 impl ArchivalShim {
     pub fn new() -> Self {
         Self {
-            schedule: std::env::var("ARCHIVAL_SCHEDULE").unwrap_or_else(|_| "0 3 * * *".to_string()),
-            tables: std::env::var("ARCHIVAL_TABLES").unwrap_or_default()
-                .split(',').filter(|s| !s.is_empty()).map(|s| s.trim().to_string()).collect(),
-            age_days: std::env::var("ARCHIVAL_AGE_DAYS").ok().and_then(|s| s.parse().ok()).unwrap_or(90),
+            schedule: std::env::var("ARCHIVAL_SCHEDULE")
+                .unwrap_or_else(|_| "0 3 * * *".to_string()),
+            tables: std::env::var("ARCHIVAL_TABLES")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim().to_string())
+                .collect(),
+            age_days: std::env::var("ARCHIVAL_AGE_DAYS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(90),
             storage: std::env::var("ARCHIVAL_STORAGE").unwrap_or_else(|_| "s3".to_string()),
             bucket: std::env::var("ARCHIVAL_BUCKET").unwrap_or_default(),
-            records_archived: 0, bytes_archived: 0, last_archival: None, shutdown_tx: None,
+            records_archived: 0,
+            bytes_archived: 0,
+            last_archival: None,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for ArchivalShim { fn default() -> Self { Self::new() } }
+impl Default for ArchivalShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for ArchivalShim {
-    fn name(&self) -> &str { "archival" }
+    fn name(&self) -> &str {
+        "archival"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("ArchivalShim initialized (schedule={}, age={}d, storage={})",
-            self.schedule, self.age_days, self.storage);
+        tracing::info!(
+            "ArchivalShim initialized (schedule={}, age={}d, storage={})",
+            self.schedule,
+            self.age_days,
+            self.storage
+        );
         Ok(())
     }
 
@@ -62,7 +84,9 @@ impl Capability for ArchivalShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("ArchivalShim stopped");
         Ok(())
     }

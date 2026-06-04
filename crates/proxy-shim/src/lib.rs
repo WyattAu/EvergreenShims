@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Proxy shim — connection pooling, retries, and circuit breaker.
 //!
 //! Sits between the application and database, providing:
@@ -74,23 +75,41 @@ impl ProxyShim {
             listen: std::env::var("PROXY_LISTEN").unwrap_or_else(|_| "0.0.0.0:5432".to_string()),
             target: std::env::var("PROXY_TARGET").unwrap_or_else(|_| "127.0.0.1:5432".to_string()),
             max_connections: std::env::var("PROXY_MAX_CONNECTIONS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(20),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(20),
             min_idle: std::env::var("PROXY_MIN_IDLE")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(5),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5),
             max_lifetime_secs: std::env::var("PROXY_MAX_LIFETIME_SECS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(1800),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1800),
             idle_timeout_secs: std::env::var("PROXY_IDLE_TIMEOUT_SECS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(600),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(600),
             connect_timeout: std::env::var("PROXY_CONNECT_TIMEOUT")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(5),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5),
             retry_attempts: std::env::var("PROXY_RETRY_ATTEMPTS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(3),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
             retry_base_ms: std::env::var("PROXY_RETRY_BASE_MS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(100),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(100),
             circuit_threshold: std::env::var("PROXY_CIRCUIT_THRESHOLD")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(5),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5),
             circuit_reset_secs: std::env::var("PROXY_CIRCUIT_RESET_SECS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(30),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30),
             circuit_state: CircuitState::Closed,
             circuit_failures: 0,
             connections_active: 0,
@@ -148,7 +167,9 @@ impl Capability for ProxyShim {
     async fn init(&mut self, _config: &Config) -> Result<()> {
         tracing::info!(
             "ProxyShim initialized (listen={}, target={}, max_conn={})",
-            self.listen, self.target, self.max_connections,
+            self.listen,
+            self.target,
+            self.max_connections,
         );
         Ok(())
     }
@@ -161,9 +182,8 @@ impl Capability for ProxyShim {
         let circuit_reset_secs = self.circuit_reset_secs;
 
         tokio::spawn(async move {
-            let mut circuit_timer = tokio::time::interval(
-                std::time::Duration::from_secs(circuit_reset_secs),
-            );
+            let mut circuit_timer =
+                tokio::time::interval(std::time::Duration::from_secs(circuit_reset_secs));
 
             loop {
                 tokio::select! {
@@ -180,7 +200,9 @@ impl Capability for ProxyShim {
 
         tracing::info!(
             "ProxyShim started (listen={}, pool={}/{})",
-            self.listen, self.min_idle, self.max_connections,
+            self.listen,
+            self.min_idle,
+            self.max_connections,
         );
         Ok(())
     }
@@ -205,7 +227,10 @@ impl Capability for ProxyShim {
             Metric::new("proxy_connections_total", self.connections_total as f64),
             Metric::new("proxy_requests_total", self.requests_total as f64),
             Metric::new("proxy_requests_retried", self.requests_retried as f64),
-            Metric::new("proxy_requests_circuit_broken", self.requests_circuit_broken as f64),
+            Metric::new(
+                "proxy_requests_circuit_broken",
+                self.requests_circuit_broken as f64,
+            ),
             Metric::new("proxy_circuit_state", circuit_val),
             Metric::new("proxy_circuit_failures", self.circuit_failures as f64),
         ]

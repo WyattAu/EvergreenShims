@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Replication shim — database replication management.
 //!
 //! Manages primary-replica replication for PostgreSQL and MariaDB.
@@ -61,8 +62,11 @@ impl ReplicationShim {
                 .collect(),
             mode: std::env::var("REPLICATION_MODE").unwrap_or_else(|_| "asynchronous".to_string()),
             check_secs: std::env::var("REPLICATION_CHECK_SECS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(10),
-            db_type: std::env::var("REPLICATION_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
+            db_type: std::env::var("REPLICATION_DB_TYPE")
+                .unwrap_or_else(|_| "postgres".to_string()),
             state: ReplicationState::Healthy,
             replicas_healthy: 0,
             replicas_broken: 0,
@@ -73,16 +77,24 @@ impl ReplicationShim {
 }
 
 impl Default for ReplicationShim {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[async_trait::async_trait]
 impl Capability for ReplicationShim {
-    fn name(&self) -> &str { "replication" }
+    fn name(&self) -> &str {
+        "replication"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
-        tracing::info!("ReplicationShim initialized (primary={}, replicas={}, mode={})",
-            self.primary, self.replicas.len(), self.mode);
+        tracing::info!(
+            "ReplicationShim initialized (primary={}, replicas={}, mode={})",
+            self.primary,
+            self.replicas.len(),
+            self.mode
+        );
         Ok(())
     }
 
@@ -94,7 +106,9 @@ impl Capability for ReplicationShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("ReplicationShim stopped");
         Ok(())
     }

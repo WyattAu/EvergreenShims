@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Auth shim — authentication/authorization layer.
 //!
 //! Provides authentication and authorization for database connections.
@@ -35,16 +36,24 @@ impl AuthShim {
             ldap_base: std::env::var("AUTH_LDAP_BASE").ok(),
             oauth_issuer: std::env::var("AUTH_OAUTH_ISSUER").ok(),
             oauth_audience: std::env::var("AUTH_OAUTH_AUDIENCE").ok(),
-            auth_success: 0, auth_failure: 0, shutdown_tx: None,
+            auth_success: 0,
+            auth_failure: 0,
+            shutdown_tx: None,
         }
     }
 }
 
-impl Default for AuthShim { fn default() -> Self { Self::new() } }
+impl Default for AuthShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Capability for AuthShim {
-    fn name(&self) -> &str { "auth" }
+    fn name(&self) -> &str {
+        "auth"
+    }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
         tracing::info!("AuthShim initialized (method={})", self.method);
@@ -59,7 +68,9 @@ impl Capability for AuthShim {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(true); }
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
         tracing::info!("AuthShim stopped");
         Ok(())
     }
