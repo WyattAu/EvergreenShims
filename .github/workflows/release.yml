@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64
+            features: full
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64
+            features: full
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64-db
+            features: db-shim
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64-health
+            features: health
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-${{ matrix.features }}
+
+      # Install cross-compilation tools
+      - name: Install musl-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            rustup target add aarch64-unknown-linux-musl
+          fi
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            cargo build --release --target ${{ matrix.target }} \
+              -p evergreen-shim --features ${{ matrix.features }} \
+              --config "target.aarch64-unknown-linux-musl.linker='aarch64-linux-gnu-gcc'"
+          else
+            cargo build --release --target ${{ matrix.target }} \
+              -p evergreen-shim --features ${{ matrix.features }}
+          fi
+
+      - name: Package
+        run: |
+          BINARY_NAME="shim-${{ matrix.arch }}"
+          cp target/${{ matrix.target }}/release/shim ${BINARY_NAME}
+          gzip ${BINARY_NAME}
+          echo "BINARY=${BINARY_NAME}.gz" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY }}
+          path: ${{ env.BINARY }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/**/*.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

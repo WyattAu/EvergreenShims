@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "TlsShimShim for EvergreenShims"
+description = "Auto-TLS with Let's Encrypt or internal CA"
 
 [dependencies]
 shim-core = { path = "../shim-core" }
@@ -12,3 +12,7 @@ anyhow.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+prometheus.workspace = true
