@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "FailoverShimShim for EvergreenShims"
+description = "Automatic failover for HA databases"
 
 [dependencies]
 shim-core = { path = "../shim-core" }
@@ -12,3 +12,8 @@ anyhow.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+prometheus.workspace = true

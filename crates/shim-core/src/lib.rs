@@ -9,7 +9,10 @@ pub mod metrics;
 pub mod process;
 pub mod signal;
 
-pub use config::{Config, ProcessConfig};
+pub use config::{
+    AuditConfig, BackupConfig, Config, FailoverConfig, HealthConfig, MigrationConfig,
+    ProcessConfig, TlsConfig, VaultConfig,
+};
 pub use error::{Error, Result};
 pub use health::{CommandHealthCheck, HealthCheck, HealthStatus};
 pub use metrics::Metric;
