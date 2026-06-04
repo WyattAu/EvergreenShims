@@ -1,11 +1,10 @@
 //! Failover integration tests.
 
-use std::time::Duration;
-
 /// Test that failover-shim can detect a healthy primary.
 #[tokio::test]
 async fn test_failover_detects_healthy_primary() {
     use std::net::TcpStream;
+    use std::time::Duration;
 
     let addr: std::net::SocketAddr = "127.0.0.1:3306".parse().unwrap();
     let result = TcpStream::connect_timeout(&addr, Duration::from_secs(2));
