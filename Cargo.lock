@@ -497,6 +497,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "evergreen-shims-integration"
+version = "0.1.0"
+dependencies = [
+ "audit-shim",
+ "backup-shim",
+ "chrono",
+ "failover-shim",
+ "health-shim",
+ "migration-shim",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "shim-core",
+ "tokio",
+ "vault-shim",
+]
+
+[[package]]
 name = "failover-shim"
 version = "0.1.0"
 dependencies = [

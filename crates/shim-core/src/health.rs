@@ -79,23 +79,31 @@ async fn execute_health_cmd(cmd: &str, timeout_secs: u64) -> HealthStatus {
             Err(_) => HealthStatus::Unhealthy,
         }
     }
-    // Handle HTTP checks
+    // Handle HTTP checks (requires "http" feature)
     else if cmd.starts_with("http:") {
-        let url = &cmd[5..];
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .build()
-            .unwrap_or_default();
+        #[cfg(feature = "http")]
+        {
+            let url = &cmd[5..];
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(timeout_secs))
+                .build()
+                .unwrap_or_default();
 
-        match client.get(url).send().await {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    HealthStatus::Healthy
-                } else {
-                    HealthStatus::Unhealthy
+            match client.get(url).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        HealthStatus::Healthy
+                    } else {
+                        HealthStatus::Unhealthy
+                    }
                 }
+                Err(_) => HealthStatus::Unhealthy,
             }
-            Err(_) => HealthStatus::Unhealthy,
+        }
+        #[cfg(not(feature = "http"))]
+        {
+            tracing::warn!("HTTP health check requires 'http' feature");
+            HealthStatus::Unknown
         }
     }
     // Handle exec commands

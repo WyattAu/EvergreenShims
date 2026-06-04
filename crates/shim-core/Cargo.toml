@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 description = "Core types and traits for EvergreenShims"
 
+[features]
+default = ["http"]
+http = ["dep:reqwest"]
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
@@ -20,7 +24,7 @@ chrono.workspace = true
 uuid.workspace = true
 dirs.workspace = true
 nix.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

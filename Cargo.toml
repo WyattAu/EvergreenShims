@@ -24,6 +24,7 @@ members = [
     "crates/chaos-shim",
     "crates/cost-shim",
     "crates/evergreen-shim",
+    "crates/integration-tests",
 ]
 resolver = "2"
 

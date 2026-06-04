@@ -1,0 +1,21 @@
+[package]
+name = "evergreen-shims-integration"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+shim-core = { path = "../shim-core" }
+health-shim = { path = "../health-shim" }
+vault-shim = { path = "../vault-shim" }
+backup-shim = { path = "../backup-shim" }
+failover-shim = { path = "../failover-shim" }
+migration-shim = { path = "../migration-shim" }
+audit-shim = { path = "../audit-shim" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
