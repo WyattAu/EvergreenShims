@@ -50,11 +50,11 @@ jobs:
         run: |
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
             cargo build --release --target ${{ matrix.target }} \
-              -p evergreen-shim --features ${{ matrix.features }} \
+              -p evergreen-shim --no-default-features --features ${{ matrix.features }} \
               --config "target.aarch64-unknown-linux-musl.linker='aarch64-linux-gnu-gcc'"
           else
             cargo build --release --target ${{ matrix.target }} \
-              -p evergreen-shim --features ${{ matrix.features }}
+              -p evergreen-shim --no-default-features --features ${{ matrix.features }}
           fi
 
       - name: Package
