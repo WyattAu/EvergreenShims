@@ -12,17 +12,20 @@ use std::path::PathBuf;
 #[command(name = "shim")]
 #[command(about = "EvergreenShim - Self-managing container shim")]
 #[command(version)]
+#[command(
+    after_help = "EXAMPLES:\n  shim -c postgres -- postgres -D /var/lib/postgresql/data\n  shim --command redis-server -- --bind 0.0.0.0\n  shim -f /etc/shim/config.toml"
+)]
 struct Args {
     /// Path to configuration file.
-    #[arg(short, long, default_value = "/etc/shim/config.toml")]
+    #[arg(short = 'f', long, default_value = "/etc/shim/config.toml")]
     config: PathBuf,
 
     /// Command to run as child process.
     #[arg(short, long)]
     command: Option<String>,
 
-    /// Arguments for the child process.
-    #[arg(short, long, num_args = 0)]
+    /// Arguments for the child process (after --).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
 
     /// Enable debug logging.
@@ -204,15 +207,23 @@ async fn main() -> Result<()> {
         cap.start().await?;
     }
 
-    tracing::info!("All capabilities started, waiting for shutdown signal");
+    // Spawn child process
+    let mut child = shim_core::ChildProcess::new(config.process.clone());
+    child.start().await?;
 
-    // Wait for shutdown signal
+    tracing::info!("All capabilities started, child process running, waiting for shutdown signal");
+
+    // Wait for shutdown signal or child exit
     let signal_handler = shim_core::SignalHandler::new();
     let mut shutdown_rx = signal_handler.subscribe();
 
-    // Wait for SIGTERM/SIGINT
+    // Wait for SIGTERM/SIGINT or child exit
     loop {
         if signal_handler.is_shutdown() {
+            break;
+        }
+        if !child.is_running() {
+            tracing::info!("Child process exited, initiating shutdown");
             break;
         }
         tokio::select! {
@@ -226,8 +237,14 @@ async fn main() -> Result<()> {
                     break;
                 }
             }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                // Periodically check child process
+            }
         }
     }
+
+    // Stop child process
+    child.stop().await?;
 
     // Stop capabilities in reverse order
     for cap in capabilities.iter_mut().rev() {

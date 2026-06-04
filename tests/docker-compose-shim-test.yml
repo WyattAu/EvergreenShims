@@ -1,0 +1,45 @@
+# =============================================================================
+# TEST: Health-shim integration with Postgres and Redis
+# =============================================================================
+services:
+  postgres-shim:
+    build:
+      context: /home/wyatt/dev/src/github.com/WyattAu/EvergreenShims
+      dockerfile: tests/Dockerfile.postgres-shim
+    container_name: evergreen-postgres-shim
+    environment:
+      POSTGRES_PASSWORD: testpass123
+      POSTGRES_DB: testdb
+      # Health shim config via env vars
+      HEALTH_LISTEN: "0.0.0.0:9101"
+      HEALTH_CMD: "exec:pg_isready -U postgres"
+      HEALTH_READY_CMD: "tcp:127.0.0.1:5432"
+    ports:
+      - "15433:5432"
+      - "9101:9101"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9101/livez"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  redis-shim:
+    build:
+      context: /home/wyatt/dev/src/github.com/WyattAu/EvergreenShims
+      dockerfile: tests/Dockerfile.redis-shim
+    container_name: evergreen-redis-shim
+    environment:
+      REDIS_PASSWORD: testpass123
+      HEALTH_LISTEN: "0.0.0.0:9101"
+      HEALTH_CMD: "exec:redis-cli ping"
+      HEALTH_READY_CMD: "tcp:127.0.0.1:6379"
+    ports:
+      - "6381:6379"
+      - "9102:9101"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9101/livez"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -44,7 +44,7 @@ ha-shim = ["health", "failover", "replication"]
 full = ["health", "vault", "backup", "migration", "audit", "proxy", "tls", "config", "failover", "replication", "cache", "cdc", "sharding", "archival", "auth", "encryption", "compliance", "scheduler", "queue", "alerting", "chaos", "cost"]
 
 [dependencies]
-shim-core = { path = "../shim-core" }
+shim-core = { path = "../shim-core", default-features = false }
 health-shim = { path = "../health-shim", optional = true }
 vault-shim = { path = "../vault-shim", optional = true }
 backup-shim = { path = "../backup-shim", optional = true }

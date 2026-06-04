@@ -7,7 +7,7 @@ license.workspace = true
 description = "Health probes, metrics, and process management for EvergreenShims"
 
 [dependencies]
-shim-core = { path = "../shim-core" }
+shim-core = { path = "../shim-core", default-features = false }
 anyhow.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
