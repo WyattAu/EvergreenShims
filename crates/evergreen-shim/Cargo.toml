@@ -1,0 +1,74 @@
+[package]
+name = "evergreen-shim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Unified shim binary for EvergreenShims"
+
+[[bin]]
+name = "shim"
+path = "src/main.rs"
+
+[features]
+default = ["health"]
+
+# Core features
+health = ["dep:health-shim"]
+vault = ["dep:vault-shim"]
+backup = ["dep:backup-shim"]
+migration = ["dep:migration-shim"]
+audit = ["dep:audit-shim"]
+proxy = ["dep:proxy-shim"]
+tls = ["dep:tls-shim"]
+config = ["dep:config-shim"]
+failover = ["dep:failover-shim"]
+replication = ["dep:replication-shim"]
+cache = ["dep:cache-shim"]
+cdc = ["dep:cdc-shim"]
+sharding = ["dep:sharding-shim"]
+archival = ["dep:archival-shim"]
+auth = ["dep:auth-shim"]
+encryption = ["dep:encryption-shim"]
+compliance = ["dep:compliance-shim"]
+scheduler = ["dep:scheduler-shim"]
+queue = ["dep:queue-shim"]
+alerting = ["dep:alerting-shim"]
+chaos = ["dep:chaos-shim"]
+cost = ["dep:cost-shim"]
+
+# Pre-built combos
+db-shim = ["health", "vault", "backup", "migration", "audit"]
+proxy-combo = ["health", "audit", "tls"]
+ha-shim = ["health", "failover", "replication"]
+full = ["health", "vault", "backup", "migration", "audit", "proxy", "tls", "config", "failover", "replication", "cache", "cdc", "sharding", "archival", "auth", "encryption", "compliance", "scheduler", "queue", "alerting", "chaos", "cost"]
+
+[dependencies]
+shim-core = { path = "../shim-core" }
+health-shim = { path = "../health-shim", optional = true }
+vault-shim = { path = "../vault-shim", optional = true }
+backup-shim = { path = "../backup-shim", optional = true }
+migration-shim = { path = "../migration-shim", optional = true }
+audit-shim = { path = "../audit-shim", optional = true }
+proxy-shim = { path = "../proxy-shim", optional = true }
+tls-shim = { path = "../tls-shim", optional = true }
+config-shim = { path = "../config-shim", optional = true }
+failover-shim = { path = "../failover-shim", optional = true }
+replication-shim = { path = "../replication-shim", optional = true }
+cache-shim = { path = "../cache-shim", optional = true }
+cdc-shim = { path = "../cdc-shim", optional = true }
+sharding-shim = { path = "../sharding-shim", optional = true }
+archival-shim = { path = "../archival-shim", optional = true }
+auth-shim = { path = "../auth-shim", optional = true }
+encryption-shim = { path = "../encryption-shim", optional = true }
+compliance-shim = { path = "../compliance-shim", optional = true }
+scheduler-shim = { path = "../scheduler-shim", optional = true }
+queue-shim = { path = "../queue-shim", optional = true }
+alerting-shim = { path = "../alerting-shim", optional = true }
+chaos-shim = { path = "../chaos-shim", optional = true }
+cost-shim = { path = "../cost-shim", optional = true }
+anyhow.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,103 @@
+[workspace]
+members = [
+    "crates/shim-core",
+    "crates/health-shim",
+    "crates/vault-shim",
+    "crates/backup-shim",
+    "crates/migration-shim",
+    "crates/audit-shim",
+    "crates/proxy-shim",
+    "crates/failover-shim",
+    "crates/replication-shim",
+    "crates/cache-shim",
+    "crates/cdc-shim",
+    "crates/sharding-shim",
+    "crates/archival-shim",
+    "crates/tls-shim",
+    "crates/auth-shim",
+    "crates/encryption-shim",
+    "crates/compliance-shim",
+    "crates/config-shim",
+    "crates/scheduler-shim",
+    "crates/queue-shim",
+    "crates/alerting-shim",
+    "crates/chaos-shim",
+    "crates/cost-shim",
+    "crates/evergreen-shim",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["WyattAu"]
+license = "Apache-2.0"
+repository = "https://github.com/WyattAu/EvergreenShims"
+description = "Rust-native shims for building self-managing container images"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# HTTP/Networking
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+axum = "0.7"
+tower = "0.5"
+hyper = { version = "1", features = ["full"] }
+
+# Metrics
+prometheus = "0.13"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls"] }
+deadpool-postgres = "0.14"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+
+# AWS/Cloud
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
+aws-sdk-secretsmanager = "1"
+
+# TLS
+rustls = "0.23"
+rustls-pemfile = "2"
+acme-micro = "0.13"
+
+# Process management
+nix = { version = "0.29", features = ["signal", "process"] }
+
+# Scheduling
+cron = "0.13"
+
+# Cryptography
+sha2 = "0.10"
+aes-gcm = "0.10"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+bytes = "1"
+futures = "0.3"
+pin-project = "0.4"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+regex = "1"
+
+# Testing (used by individual crates)
+tempfile = "3"
+pretty_assertions = "1"
+tokio-test = "0.4"

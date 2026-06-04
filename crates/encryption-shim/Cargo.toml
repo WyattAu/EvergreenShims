@@ -1,0 +1,14 @@
+[package]
+name = "encryption-shim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "EncryptionShimShim for EvergreenShims"
+
+[dependencies]
+shim-core = { path = "../shim-core" }
+anyhow.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
