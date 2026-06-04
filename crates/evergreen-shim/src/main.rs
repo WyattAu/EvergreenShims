@@ -13,24 +13,47 @@ use std::path::PathBuf;
 #[command(about = "EvergreenShim - Self-managing container shim")]
 #[command(version)]
 #[command(
-    after_help = "EXAMPLES:\n  shim -c postgres -- postgres -D /var/lib/postgresql/data\n  shim --command redis-server -- --bind 0.0.0.0\n  shim -f /etc/shim/config.toml"
+    after_help = "EXAMPLES:\n  shim -c postgres -- postgres -D /var/lib/postgresql/data\n  shim --command redis-server -- --bind 0.0.0.0\n  shim -f /etc/shim/config.toml\n  shim healthcheck --tcp 127.0.0.1:5432\n  shim healthcheck --http 127.0.0.1:9101/livez"
 )]
 struct Args {
-    /// Path to configuration file.
-    #[arg(short = 'f', long, default_value = "/etc/shim/config.toml")]
-    config: PathBuf,
-
-    /// Command to run as child process.
-    #[arg(short, long)]
-    command: Option<String>,
-
-    /// Arguments for the child process (after --).
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    args: Vec<String>,
+    #[command(subcommand)]
+    command: Option<Subcommand>,
 
     /// Enable debug logging.
-    #[arg(long)]
+    #[arg(long, global = true)]
     debug: bool,
+}
+
+#[derive(clap::Subcommand)]
+enum Subcommand {
+    /// Run as PID 1 shim (manage child process + health probes)
+    Run {
+        /// Path to configuration file.
+        #[arg(short = 'f', long, default_value = "/etc/shim/config.toml")]
+        config: PathBuf,
+
+        /// Command to run as child process.
+        #[arg(short, long)]
+        command: Option<String>,
+
+        /// Arguments for the child process (after --).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// One-shot health check (exits 0=healthy, 1=unhealthy). For Docker HEALTHCHECK.
+    Healthcheck {
+        /// TCP host:port to check (e.g., 127.0.0.1:5432)
+        #[arg(long)]
+        tcp: Option<String>,
+
+        /// HTTP URL to check (e.g., http://127.0.0.1:9101/livez)
+        #[arg(long)]
+        http: Option<String>,
+
+        /// Timeout in seconds (default: 3)
+        #[arg(short, long, default_value = "3")]
+        timeout: u64,
+    },
 }
 
 #[tokio::main]
@@ -38,7 +61,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Initialize logging
-    let log_level = if args.debug { "debug" } else { "info" };
+    let log_level = if args.debug { "debug" } else { "error" };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -46,11 +69,65 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    match args.command {
+        Some(Subcommand::Run {
+            config,
+            command,
+            args,
+        }) => run_shim(config, command, args).await,
+        Some(Subcommand::Healthcheck { tcp, http, timeout }) => {
+            run_healthcheck(tcp, http, timeout).await
+        }
+        None => {
+            // Default: run mode with no args (backward compat)
+            run_shim(PathBuf::from("/etc/shim/config.toml"), None, vec![]).await
+        }
+    }
+}
+
+async fn run_healthcheck(
+    tcp: Option<String>,
+    http: Option<String>,
+    timeout_secs: u64,
+) -> Result<()> {
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let timeout = Duration::from_secs(timeout_secs);
+
+    if let Some(addr) = tcp {
+        match TcpStream::connect_timeout(&addr.parse()?, timeout) {
+            Ok(_) => std::process::exit(0),
+            Err(_) => std::process::exit(1),
+        }
+    }
+
+    if let Some(url) = http {
+        // Parse host:port from URL
+        let url_parts: Vec<&str> = url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .split('/')
+            .collect();
+        if let Some(host_port) = url_parts.first() {
+            match TcpStream::connect_timeout(&host_port.parse()?, timeout) {
+                Ok(_) => std::process::exit(0),
+                Err(_) => std::process::exit(1),
+            }
+        }
+    }
+
+    // Nothing to check
+    eprintln!("healthcheck: specify --tcp or --http");
+    std::process::exit(2)
+}
+
+async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<String>) -> Result<()> {
     tracing::info!("EvergreenShim starting");
 
     // Load configuration
-    let mut config = if args.config.exists() {
-        Config::from_file(args.config.to_str().unwrap())?
+    let mut config = if config_path.exists() {
+        Config::from_file(config_path.to_str().unwrap())?
     } else {
         tracing::info!("No config file found, using defaults");
         Config::default()
@@ -61,11 +138,11 @@ async fn main() -> Result<()> {
     config.merge(env_config);
 
     // Override with CLI args
-    if let Some(cmd) = args.command {
+    if let Some(cmd) = command {
         config.process.command = cmd;
     }
-    if !args.args.is_empty() {
-        config.process.args = args.args;
+    if !args.is_empty() {
+        config.process.args = args;
     }
 
     // Create capabilities

@@ -10,6 +10,10 @@ RUN chmod +x /usr/local/bin/shim
 
 EXPOSE 6379 9101
 
+# Health check via shim binary (TCP to redis)
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["/usr/local/bin/shim", "healthcheck", "--tcp", "127.0.0.1:6379"]
+
 STOPSIGNAL SIGTERM
-ENTRYPOINT ["/usr/local/bin/shim"]
-CMD ["--debug", "-c", "redis-server", "--", "--bind", "0.0.0.0", "--protected-mode", "no"]
+ENTRYPOINT ["/usr/local/bin/shim", "run", "--debug"]
+CMD ["-c", "redis-server", "--", "--bind", "0.0.0.0", "--protected-mode", "no"]
