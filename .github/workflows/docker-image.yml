@@ -12,7 +12,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/evergreenshim/health-shim
+  # GHCR requires lowercase; github.repository_owner may have uppercase
+  IMAGE_NAME: wyattau/evergreenshim/health-shim
 
 jobs:
   build:
