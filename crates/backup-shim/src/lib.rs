@@ -152,6 +152,10 @@ pub struct BackupShim {
     output_dir: String,
     redis_url: String,
     redis_password: String,
+    // Retry configuration
+    retry_max_attempts: u32,
+    retry_base_delay_ms: u64,
+    retry_max_delay_ms: u64,
     // S3 configuration
     s3_bucket: String,
     s3_region: String,
@@ -195,6 +199,18 @@ impl BackupShim {
             redis_url: std::env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://localhost:6379".to_string()),
             redis_password: std::env::var("REDIS_PASSWORD").unwrap_or_default(),
+            retry_max_attempts: std::env::var("BACKUP_RETRY_MAX_ATTEMPTS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
+            retry_base_delay_ms: std::env::var("BACKUP_RETRY_BASE_DELAY_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1000),
+            retry_max_delay_ms: std::env::var("BACKUP_RETRY_MAX_DELAY_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30000),
             s3_bucket: std::env::var("BACKUP_S3_BUCKET").unwrap_or_default(),
             s3_region: std::env::var("BACKUP_S3_REGION")
                 .unwrap_or_else(|_| "us-east-1".to_string()),
@@ -570,72 +586,96 @@ impl BackupShim {
 
         fs::create_dir_all(&self.output_dir).await?;
 
-        let result = match self.db_type.as_str() {
-            "postgres" => self.dump_postgres(&output_path).await,
-            "mariadb" | "mysql" => self.dump_mariadb(&output_path).await,
-            "redis" => self.backup_redis(&output_path).await,
-            "mongo" => {
-                Command::new("mongodump")
-                    .args(["--uri", &format!("mongodb://{}", self.db_host)])
-                    .args(["--out", &output_path])
-                    .output()
-                    .await?;
-                Ok(())
-            }
-            _ => anyhow::bail!("Unsupported database type: {}", self.db_type),
-        };
-
-        match result {
-            Ok(()) => {
-                let data = fs::read(&output_path).await.map_err(|e| {
-                    anyhow::anyhow!("Failed to read backup file {}: {}", output_path, e)
-                })?;
-                let size = data.len() as u64;
-                let checksum = Self::compute_checksum(&data);
-
-                tracing::info!(
-                    "Backup {} verified: {} bytes, sha256:{}",
-                    filename,
-                    size,
-                    &checksum[..16]
+        let mut last_error = None;
+        for attempt in 0..=self.retry_max_attempts {
+            if attempt > 0 {
+                let delay_ms = std::cmp::min(
+                    self.retry_base_delay_ms * 2u64.pow(attempt - 1),
+                    self.retry_max_delay_ms,
                 );
+                tracing::warn!(
+                    "Backup attempt {}/{} failed, retrying in {}ms",
+                    attempt,
+                    self.retry_max_attempts,
+                    delay_ms
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
 
-                // Upload to S3 if configured
-                if self.storage == "s3" && !self.s3_bucket.is_empty() {
-                    match self.upload_to_s3(&output_path, &filename).await {
-                        Ok(s3_uri) => {
-                            tracing::info!("Backup uploaded to S3: {}", s3_uri);
-                            // Optionally remove local file after successful S3 upload
-                            if std::env::var("BACKUP_S3_REMOVE_LOCAL")
-                                .map(|v| v == "true" || v == "1")
-                                .unwrap_or(false)
-                            {
-                                if let Err(e) = fs::remove_file(&output_path).await {
-                                    tracing::warn!(
-                                        "Failed to remove local backup after S3 upload: {}",
-                                        e
-                                    );
+            let result = match self.db_type.as_str() {
+                "postgres" => self.dump_postgres(&output_path).await,
+                "mariadb" | "mysql" => self.dump_mariadb(&output_path).await,
+                "redis" => self.backup_redis(&output_path).await,
+                "mongo" => {
+                    Command::new("mongodump")
+                        .args(["--uri", &format!("mongodb://{}", self.db_host)])
+                        .args(["--out", &output_path])
+                        .output()
+                        .await?;
+                    Ok(())
+                }
+                _ => anyhow::bail!("Unsupported database type: {}", self.db_type),
+            };
+
+            match result {
+                Ok(()) => {
+                    let data = fs::read(&output_path).await.map_err(|e| {
+                        anyhow::anyhow!("Failed to read backup file {}: {}", output_path, e)
+                    })?;
+                    let size = data.len() as u64;
+                    let checksum = Self::compute_checksum(&data);
+
+                    tracing::info!(
+                        "Backup {} verified: {} bytes, sha256:{}",
+                        filename,
+                        size,
+                        &checksum[..16]
+                    );
+
+                    // Upload to S3 if configured
+                    if self.storage == "s3" && !self.s3_bucket.is_empty() {
+                        match self.upload_to_s3(&output_path, &filename).await {
+                            Ok(s3_uri) => {
+                                tracing::info!("Backup uploaded to S3: {}", s3_uri);
+                                if std::env::var("BACKUP_S3_REMOVE_LOCAL")
+                                    .map(|v| v == "true" || v == "1")
+                                    .unwrap_or(false)
+                                {
+                                    if let Err(e) = fs::remove_file(&output_path).await {
+                                        tracing::warn!(
+                                            "Failed to remove local backup after S3 upload: {}",
+                                            e
+                                        );
+                                    }
                                 }
                             }
-                        }
-                        Err(e) => {
-                            tracing::error!("S3 upload failed, backup retained locally: {}", e);
+                            Err(e) => {
+                                tracing::error!("S3 upload failed, backup retained locally: {}", e);
+                            }
                         }
                     }
-                }
 
-                let mut state = self.state.lock().unwrap();
-                state.record_backup(filename.clone(), size, checksum);
-                tracing::info!("Backup completed: {} ({} bytes)", filename, size);
-            }
-            Err(e) => {
-                let mut state = self.state.lock().unwrap();
-                state.record_failure();
-                tracing::error!("Backup failed: {}", e);
+                    let mut state = self.state.lock().unwrap();
+                    state.record_backup(filename.clone(), size, checksum);
+                    tracing::info!("Backup completed: {} ({} bytes)", filename, size);
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                }
             }
         }
 
-        Ok(())
+        // All retries exhausted
+        let err = last_error.unwrap_or_else(|| anyhow::anyhow!("Backup failed after all retries"));
+        let mut state = self.state.lock().unwrap();
+        state.record_failure();
+        tracing::error!(
+            "Backup failed after {} attempts: {}",
+            self.retry_max_attempts + 1,
+            err
+        );
+        Err(err)
     }
 }
 
@@ -697,6 +737,9 @@ impl Capability for BackupShim {
         let s3_prefix = self.s3_prefix.clone();
         let s3_force_path_style = self.s3_force_path_style;
         let s3_server_side_encryption = self.s3_server_side_encryption;
+        let retry_max_attempts = self.retry_max_attempts;
+        let retry_base_delay_ms = self.retry_base_delay_ms;
+        let retry_max_delay_ms = self.retry_max_delay_ms;
 
         let schedule = cron::Schedule::from_str(&schedule_str)
             .unwrap_or_else(|_| cron::Schedule::from_str("0 2 * * *").unwrap());
@@ -736,6 +779,9 @@ impl Capability for BackupShim {
                     output_dir: output_dir.clone(),
                     redis_url: redis_url.clone(),
                     redis_password: redis_password.clone(),
+                    retry_max_attempts,
+                    retry_base_delay_ms,
+                    retry_max_delay_ms,
                     s3_bucket: s3_bucket.clone(),
                     s3_region: s3_region.clone(),
                     s3_endpoint: s3_endpoint.clone(),

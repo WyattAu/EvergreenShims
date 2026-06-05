@@ -55,6 +55,18 @@ pub struct Migration {
     pub checksum: String,
 }
 
+/// Result of a migration dry-run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DryRunResult {
+    pub version: u32,
+    pub name: String,
+    pub would_apply: bool,
+    pub reason: String,
+    pub checksum_valid: bool,
+    pub sql_size_bytes: u64,
+    pub has_down_migration: bool,
+}
+
 /// Migration error types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MigrationError {
@@ -494,6 +506,75 @@ impl MigrationShim {
         self.last_migration = Some(chrono::Utc::now());
 
         Ok(())
+    }
+
+    /// Dry-run a migration: validates the migration would succeed without executing it.
+    ///
+    /// Returns a DryRunResult describing what would happen.
+    pub fn dry_run_migration(
+        &self,
+        migration: &Migration,
+    ) -> std::result::Result<DryRunResult, MigrationError> {
+        let mut result = DryRunResult {
+            version: migration.version,
+            name: migration.name.clone(),
+            would_apply: true,
+            reason: String::new(),
+            checksum_valid: false,
+            sql_size_bytes: migration.up_sql.len() as u64,
+            has_down_migration: migration.down_sql.is_some(),
+        };
+
+        // Check if already applied
+        if self.applied_records.contains_key(&migration.version) {
+            result.would_apply = false;
+            result.reason = format!(
+                "Migration v{} already applied at {}",
+                migration.version, self.applied_records[&migration.version].applied_at
+            );
+            return Ok(result);
+        }
+
+        // Check version ordering
+        let expected_version = self.current_version + 1;
+        if migration.version != expected_version && self.current_version > 0 {
+            result.would_apply = false;
+            result.reason = format!(
+                "Out of order: expected v{}, got v{}",
+                expected_version, migration.version
+            );
+            return Ok(result);
+        }
+
+        // Validate checksum
+        match self.verify_checksum(migration.version, &migration.checksum) {
+            Ok(()) => {
+                result.checksum_valid = true;
+            }
+            Err(e) => {
+                result.would_apply = false;
+                result.reason = format!("Checksum validation failed: {}", e);
+                return Ok(result);
+            }
+        }
+
+        // Validate SQL is not empty
+        if migration.up_sql.trim().is_empty() {
+            result.would_apply = false;
+            result.reason = "Migration SQL is empty".to_string();
+            return Ok(result);
+        }
+
+        result.reason = "Migration would be applied successfully".to_string();
+        Ok(result)
+    }
+
+    /// Dry-run all pending migrations.
+    pub fn dry_run_all_pending(&self) -> Vec<DryRunResult> {
+        self.pending_migrations
+            .iter()
+            .filter_map(|m| self.dry_run_migration(m).ok())
+            .collect()
     }
 
     /// Roll back the last applied migration. If a DB is configured, executes
