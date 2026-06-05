@@ -41,6 +41,7 @@ cost = ["dep:cost-shim"]
 db-shim = ["health", "vault", "backup", "migration", "audit"]
 proxy-combo = ["health", "audit", "tls"]
 ha-shim = ["health", "failover", "replication"]
+cache-shim-combo = ["health", "cache"]
 infra = ["health", "vault", "backup", "migration", "audit", "config", "failover", "replication", "tls", "auth", "scheduler"]
 full = ["health", "vault", "backup", "migration", "audit", "proxy", "tls", "config", "failover", "replication", "cache", "cdc", "sharding", "archival", "auth", "encryption", "compliance", "scheduler", "queue", "alerting", "chaos", "cost"]
 

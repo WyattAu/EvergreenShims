@@ -32,6 +32,10 @@ jobs:
             arch: x86_64-db
             features: db-shim
             artifact: shim-db
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64-cache
+            features: cache-shim-combo
+            artifact: shim-cache
           # aarch64 presets (musl static, all stripped)
           - target: aarch64-unknown-linux-musl
             arch: aarch64
