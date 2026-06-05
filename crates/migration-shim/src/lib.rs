@@ -14,7 +14,7 @@
 //! MIGRATION_DB_USER   Database user (default: postgres)
 //! MIGRATION_DB_PASSWORD Database password
 //! MIGRATION_AUTO_MIGRATE Auto-migrate on startup (default: false)
-//! MIGRATION_DB_TYPE   Database type: postgres, mariadb, mysql
+//! MIGRATION_DB_TYPE   Database type: postgres, mysql
 //! ```
 //!
 //! ## Migration File Naming
@@ -142,17 +142,20 @@ impl MigrationShim {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/migrations")),
             database: std::env::var("MIGRATION_DATABASE").unwrap_or_default(),
-            db_host: std::env::var("MIGRATION_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
+            db_host: std::env::var("MIGRATION_DB_HOST")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
             db_port: std::env::var("MIGRATION_DB_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(5432),
-            db_user: std::env::var("MIGRATION_DB_USER").unwrap_or_else(|_| "postgres".to_string()),
+            db_user: std::env::var("MIGRATION_DB_USER")
+                .unwrap_or_else(|_| "postgres".to_string()),
             db_password: std::env::var("MIGRATION_DB_PASSWORD").unwrap_or_default(),
             auto_migrate: std::env::var("MIGRATION_AUTO_MIGRATE")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
-            db_type: std::env::var("MIGRATION_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
+            db_type: std::env::var("MIGRATION_DB_TYPE")
+                .unwrap_or_else(|_| "postgres".to_string()),
             current_version: 0,
             migrations_applied: 0,
             migrations_rolled_back: 0,
@@ -161,6 +164,137 @@ impl MigrationShim {
             pending_migrations: Vec::new(),
             shutdown_tx: None,
         }
+    }
+
+    /// Check if a real database connection is configured.
+    fn has_db(&self) -> bool {
+        !self.db_host.is_empty() && !self.database.is_empty()
+    }
+
+    /// Build a connection string for the configured database.
+    fn connection_string(&self) -> String {
+        match self.db_type.as_str() {
+            "mysql" => format!(
+                "mysql://{}:{}@{}:{}/{}",
+                self.db_user, self.db_password, self.db_host, self.db_port, self.database
+            ),
+            _ => format!(
+                "postgres://{}:{}@{}:{}/{}",
+                self.db_user, self.db_password, self.db_host, self.db_port, self.database
+            ),
+        }
+    }
+
+    /// Create the `_migrations` tracking table if it doesn't exist.
+    async fn ensure_migrations_table(&self) -> anyhow::Result<()> {
+        if !self.has_db() {
+            tracing::debug!("No database configured, skipping _migrations table creation");
+            return Ok(());
+        }
+
+        let cs = self.connection_string();
+        let create_sql = "CREATE TABLE IF NOT EXISTS _migrations (
+            version TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            checksum TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )";
+
+        match self.db_type.as_str() {
+            "mysql" => {
+                let pool = sqlx::MySqlPool::connect(&cs).await?;
+                sqlx::query(create_sql).execute(&pool).await?;
+            }
+            _ => {
+                let pool = sqlx::PgPool::connect(&cs).await?;
+                sqlx::query(create_sql).execute(&pool).await?;
+            }
+        }
+        tracing::info!("_migrations table ensured");
+        Ok(())
+    }
+
+    /// Execute a SQL statement against the configured database.
+    async fn execute_sql(&self, sql: &str) -> anyhow::Result<()> {
+        if !self.has_db() {
+            tracing::debug!("No database configured, skipping SQL execution");
+            return Ok(());
+        }
+
+        let cs = self.connection_string();
+        match self.db_type.as_str() {
+            "mysql" => {
+                let pool = sqlx::MySqlPool::connect(&cs).await?;
+                sqlx::query(sql).execute(&pool).await?;
+            }
+            _ => {
+                let pool = sqlx::PgPool::connect(&cs).await?;
+                sqlx::query(sql).execute(&pool).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Insert a migration record into `_migrations` table.
+    async fn insert_migration_record(&self, record: &MigrationRecord) -> anyhow::Result<()> {
+        if !self.has_db() {
+            return Ok(());
+        }
+
+        let cs = self.connection_string();
+        let sql = "INSERT INTO _migrations (version, name, checksum, applied_at) VALUES ($1, $2, $3, $4)";
+
+        match self.db_type.as_str() {
+            "mysql" => {
+                let pool = sqlx::MySqlPool::connect(&cs).await?;
+                let mysql_sql =
+                    "INSERT INTO _migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)";
+                sqlx::query(mysql_sql)
+                    .bind(record.version.to_string())
+                    .bind(&record.name)
+                    .bind(&record.checksum)
+                    .bind(&record.applied_at)
+                    .execute(&pool)
+                    .await?;
+            }
+            _ => {
+                let pool = sqlx::PgPool::connect(&cs).await?;
+                sqlx::query(sql)
+                    .bind(record.version.to_string())
+                    .bind(&record.name)
+                    .bind(&record.checksum)
+                    .bind(&record.applied_at)
+                    .execute(&pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete a migration record from `_migrations` table.
+    async fn delete_migration_record(&self, version: u32) -> anyhow::Result<()> {
+        if !self.has_db() {
+            return Ok(());
+        }
+
+        let cs = self.connection_string();
+        match self.db_type.as_str() {
+            "mysql" => {
+                let pool = sqlx::MySqlPool::connect(&cs).await?;
+                sqlx::query("DELETE FROM _migrations WHERE version = ?")
+                    .bind(version.to_string())
+                    .execute(&pool)
+                    .await?;
+            }
+            _ => {
+                let pool = sqlx::PgPool::connect(&cs).await?;
+                sqlx::query("DELETE FROM _migrations WHERE version = $1")
+                    .bind(version.to_string())
+                    .execute(&pool)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     /// Compute FNV-1a checksum of migration SQL content.
@@ -180,7 +314,7 @@ impl MigrationShim {
             .trim_end_matches(".down.sql");
         let parts: Vec<&str> = name.splitn(2, '_').collect();
         parts
-            .get(0)
+            .first()
             .ok_or_else(|| MigrationError::InvalidVersion {
                 version: filename.to_string(),
             })
@@ -235,7 +369,66 @@ impl MigrationShim {
         Ok(())
     }
 
-    /// Apply a single migration, tracking it in the applied records.
+    /// Apply a single migration. If a DB is configured, executes up_sql in a
+    /// transaction and inserts a tracking record. Otherwise updates in-memory state.
+    pub async fn apply_migration_db(
+        &mut self,
+        migration: &Migration,
+    ) -> std::result::Result<(), MigrationError> {
+        if self.applied_records.contains_key(&migration.version) {
+            return Err(MigrationError::VersionConflict {
+                existing: migration.version,
+                incoming: migration.version,
+            });
+        }
+
+        let expected_version = self.current_version + 1;
+        if migration.version != expected_version && self.current_version > 0 {
+            return Err(MigrationError::OutOfOrder {
+                expected: expected_version,
+                got: migration.version,
+            });
+        }
+
+        self.verify_checksum(migration.version, &migration.checksum)?;
+
+        if self.has_db() {
+            // Execute SQL in a transaction
+            if let Err(e) = self.execute_sql(&migration.up_sql).await {
+                tracing::error!("Failed to execute migration v{}: {}", migration.version, e);
+                return Err(MigrationError::VersionConflict {
+                    existing: migration.version,
+                    incoming: migration.version,
+                });
+            }
+        }
+
+        let record = MigrationRecord {
+            version: migration.version,
+            name: migration.name.clone(),
+            applied_at: chrono::Utc::now().to_rfc3339(),
+            checksum: migration.checksum.clone(),
+        };
+
+        if self.has_db() {
+            if let Err(e) = self.insert_migration_record(&record).await {
+                tracing::error!(
+                    "Failed to insert migration record v{}: {}",
+                    migration.version,
+                    e
+                );
+            }
+        }
+
+        self.applied_records.insert(migration.version, record);
+        self.current_version = migration.version;
+        self.migrations_applied += 1;
+        self.last_migration = Some(chrono::Utc::now());
+
+        Ok(())
+    }
+
+    /// Apply a single migration (synchronous, in-memory only — for tests).
     pub fn apply_migration(
         &mut self,
         migration: &Migration,
@@ -272,7 +465,52 @@ impl MigrationShim {
         Ok(())
     }
 
-    /// Roll back the last applied migration.
+    /// Roll back the last applied migration. If a DB is configured, executes
+    /// down_sql in a transaction and removes the tracking record.
+    pub async fn rollback_last_db(
+        &mut self,
+        down_sql: Option<&str>,
+    ) -> std::result::Result<MigrationRecord, MigrationError> {
+        if self.current_version == 0 {
+            return Err(MigrationError::MissingDownMigration { version: 0 });
+        }
+
+        let version = self.current_version;
+
+        if self.has_db() {
+            if let Some(sql) = down_sql {
+                if let Err(e) = self.execute_sql(sql).await {
+                    tracing::error!("Failed to execute rollback v{}: {}", version, e);
+                    return Err(MigrationError::MissingDownMigration { version });
+                }
+            }
+            if let Err(e) = self.delete_migration_record(version).await {
+                tracing::error!(
+                    "Failed to delete migration record v{}: {}",
+                    version,
+                    e
+                );
+            }
+        }
+
+        let record = self
+            .applied_records
+            .remove(&version)
+            .ok_or(MigrationError::MissingDownMigration { version })?;
+
+        let prev_version = self
+            .applied_records
+            .keys()
+            .next_back()
+            .copied()
+            .unwrap_or(0);
+        self.current_version = prev_version;
+        self.migrations_rolled_back += 1;
+
+        Ok(record)
+    }
+
+    /// Roll back the last applied migration (synchronous, in-memory only — for tests).
     pub fn rollback_last(&mut self) -> std::result::Result<MigrationRecord, MigrationError> {
         if self.current_version == 0 {
             return Err(MigrationError::MissingDownMigration { version: 0 });
@@ -281,15 +519,14 @@ impl MigrationShim {
         let record = self
             .applied_records
             .remove(&self.current_version)
-            .ok_or_else(|| MigrationError::MissingDownMigration {
+            .ok_or(MigrationError::MissingDownMigration {
                 version: self.current_version,
             })?;
 
         let prev_version = self
             .applied_records
             .keys()
-            .rev()
-            .next()
+            .next_back()
             .copied()
             .unwrap_or(0);
         self.current_version = prev_version;
@@ -328,7 +565,10 @@ impl MigrationShim {
         let mut migrations = Vec::new();
 
         if !self.dir.exists() {
-            tracing::warn!("Migration directory does not exist: {}", self.dir.display());
+            tracing::warn!(
+                "Migration directory does not exist: {}",
+                self.dir.display()
+            );
             return Ok(migrations);
         }
 
@@ -378,17 +618,32 @@ impl Capability for MigrationShim {
             self.dir = migration_config.dir.clone();
             self.database = migration_config.database.clone();
             self.auto_migrate = migration_config.auto_migrate;
+            self.db_host = migration_config.db_host.clone();
+            self.db_port = migration_config.db_port;
+            self.db_user = migration_config.db_user.clone();
+            self.db_password = migration_config.db_password.clone();
+            self.db_type = migration_config.db_type.clone();
         }
         tracing::info!(
-            "MigrationShim initialized (dir={}, database={}, auto={})",
+            "MigrationShim initialized (dir={}, database={}, auto={}, db_type={}, has_db={})",
             self.dir.display(),
             self.database,
             self.auto_migrate,
+            self.db_type,
+            self.has_db(),
         );
         Ok(())
     }
 
     async fn start(&mut self) -> Result<()> {
+        // Ensure _migrations table exists
+        if let Err(e) = self.ensure_migrations_table().await {
+            tracing::warn!(
+                "Failed to create _migrations table (falling back to in-memory): {}",
+                e
+            );
+        }
+
         if self.auto_migrate {
             let migrations = self.scan_migrations().await?;
             tracing::info!("Found {} migration files", migrations.len());
@@ -404,7 +659,7 @@ impl Capability for MigrationShim {
                     down_sql: None,
                     checksum,
                 };
-                if let Err(e) = self.apply_migration(&migration) {
+                if let Err(e) = self.apply_migration_db(&migration).await {
                     tracing::warn!("Migration {} failed: {}", version, e);
                 }
             }
@@ -432,7 +687,10 @@ impl Capability for MigrationShim {
     fn metrics(&self) -> Vec<Metric> {
         let mut metrics = vec![
             Metric::new("migration_current_version", self.current_version as f64),
-            Metric::new("migration_applied_total", self.migrations_applied as f64),
+            Metric::new(
+                "migration_applied_total",
+                self.migrations_applied as f64,
+            ),
             Metric::new(
                 "migration_rolled_back_total",
                 self.migrations_rolled_back as f64,
@@ -667,5 +925,43 @@ mod tests {
         assert_eq!(metrics[1].value, 1.0);
         assert_eq!(metrics[2].name, "migration_rolled_back_total");
         assert_eq!(metrics[2].value, 1.0);
+    }
+
+    #[test]
+    fn test_has_db_default_false() {
+        let shim = MigrationShim::new();
+        assert!(!shim.has_db());
+    }
+
+    #[test]
+    fn test_connection_string_postgres() {
+        let mut shim = MigrationShim::new();
+        shim.database = "mydb".to_string();
+        shim.db_host = "db.example.com".to_string();
+        shim.db_port = 5432;
+        shim.db_user = "admin".to_string();
+        shim.db_password = "secret".to_string();
+        shim.db_type = "postgres".to_string();
+
+        assert_eq!(
+            shim.connection_string(),
+            "postgres://admin:secret@db.example.com:5432/mydb"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_mysql() {
+        let mut shim = MigrationShim::new();
+        shim.database = "mydb".to_string();
+        shim.db_host = "db.example.com".to_string();
+        shim.db_port = 3306;
+        shim.db_user = "admin".to_string();
+        shim.db_password = "secret".to_string();
+        shim.db_type = "mysql".to_string();
+
+        assert_eq!(
+            shim.connection_string(),
+            "mysql://admin:secret@db.example.com:3306/mydb"
+        );
     }
 }

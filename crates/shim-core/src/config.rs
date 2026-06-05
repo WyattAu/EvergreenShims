@@ -35,6 +35,10 @@ pub struct Config {
     #[serde(default)]
     pub failover: Option<FailoverConfig>,
 
+    /// Replication configuration.
+    #[serde(default)]
+    pub replication: Option<ReplicationConfig>,
+
     /// Process configuration.
     #[serde(default)]
     pub process: ProcessConfig,
@@ -156,6 +160,42 @@ pub struct MigrationConfig {
     /// Auto-migrate on startup.
     #[serde(default)]
     pub auto_migrate: bool,
+
+    /// Database host (for SQL execution).
+    #[serde(default = "default_migration_db_host")]
+    pub db_host: String,
+
+    /// Database port (for SQL execution).
+    #[serde(default = "default_migration_db_port")]
+    pub db_port: u16,
+
+    /// Database user (for SQL execution).
+    #[serde(default = "default_migration_db_user")]
+    pub db_user: String,
+
+    /// Database password (for SQL execution).
+    #[serde(default)]
+    pub db_password: String,
+
+    /// Database type: postgres, mysql.
+    #[serde(default = "default_migration_db_type")]
+    pub db_type: String,
+}
+
+fn default_migration_db_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_migration_db_port() -> u16 {
+    5432
+}
+
+fn default_migration_db_user() -> String {
+    "postgres".to_string()
+}
+
+fn default_migration_db_type() -> String {
+    "postgres".to_string()
 }
 
 /// Audit configuration.
@@ -215,6 +255,18 @@ pub struct FailoverConfig {
     /// Timeout for failover checks in seconds.
     #[serde(default = "default_failover_timeout")]
     pub timeout_secs: u64,
+
+    /// Consecutive failures before failover.
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+
+    /// Webhook URL for notifications.
+    #[serde(default)]
+    pub webhook: Option<String>,
+
+    /// Database type: postgres, mysql.
+    #[serde(default = "default_failover_db_type")]
+    pub db_type: String,
 }
 
 fn default_failover_interval() -> u64 {
@@ -225,10 +277,58 @@ fn default_failover_timeout() -> u64 {
     10
 }
 
+fn default_failure_threshold() -> u32 {
+    3
+}
+
+fn default_failover_db_type() -> String {
+    "postgres".to_string()
+}
+
+/// Replication configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicationConfig {
+    /// Primary database address.
+    pub primary: String,
+
+    /// Replica addresses (comma-separated or array).
+    #[serde(default)]
+    pub replicas: Vec<String>,
+
+    /// Replication mode: synchronous, asynchronous.
+    #[serde(default = "default_replication_mode")]
+    pub mode: String,
+
+    /// Health check interval in seconds.
+    #[serde(default = "default_replication_check_secs")]
+    pub check_interval_secs: u64,
+
+    /// Database type: postgres, mysql.
+    #[serde(default = "default_replication_db_type")]
+    pub db_type: String,
+
+    /// Replication slot name (PostgreSQL).
+    #[serde(default)]
+    pub slot_name: Option<String>,
+}
+
+fn default_replication_mode() -> String {
+    "asynchronous".to_string()
+}
+
+fn default_replication_check_secs() -> u64 {
+    10
+}
+
+fn default_replication_db_type() -> String {
+    "postgres".to_string()
+}
+
 /// Process configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessConfig {
     /// Command to run as child process.
+    #[serde(default)]
     pub command: String,
 
     /// Arguments for the command.
@@ -247,7 +347,7 @@ pub struct ProcessConfig {
 impl Default for ProcessConfig {
     fn default() -> Self {
         Self {
-            command: "exec:true".to_string(),
+            command: String::new(),
             args: vec![],
             working_dir: None,
             shutdown_timeout_secs: default_shutdown_timeout(),
@@ -308,6 +408,7 @@ impl Config {
             audit: None,
             tls: None,
             failover: None,
+            replication: None,
             process: ProcessConfig::default(),
         };
 
@@ -320,8 +421,9 @@ impl Config {
             config.health.listen = addr;
         }
         if let Ok(interval) = std::env::var("HEALTH_INTERVAL_SECS") {
-            if let Ok(v) = interval.parse() {
-                config.health.interval_secs = v;
+            match interval.parse() {
+                Ok(v) => config.health.interval_secs = v,
+                Err(e) => tracing::warn!("invalid HEALTH_INTERVAL_SECS value: {}", e),
             }
         }
         if let Ok(cmd) = std::env::var("PROCESS_COMMAND") {
@@ -335,35 +437,36 @@ impl Config {
     }
 
     /// Merge another config into this one (env overrides file).
+    ///
+    /// Uses `std::env::var().is_ok()` to check whether an env var is present,
+    /// so that explicitly-set-to-same-as-default values still override.
     pub fn merge(&mut self, other: Config) {
-        // Health
-        if other.health.liveness_cmd != default_liveness_cmd() {
+        // Health — override if the env var is actually set
+        if std::env::var("HEALTH_CMD").is_ok() {
             self.health.liveness_cmd = other.health.liveness_cmd;
-        }
-        if other.health.readiness_cmd != default_readiness_cmd() {
             self.health.readiness_cmd = other.health.readiness_cmd;
         }
-        if other.health.listen != default_health_listen() {
+        if std::env::var("HEALTH_LISTEN").is_ok() {
             self.health.listen = other.health.listen;
         }
-        if other.health.interval_secs != default_check_interval() {
+        if std::env::var("HEALTH_INTERVAL_SECS").is_ok() {
             self.health.interval_secs = other.health.interval_secs;
         }
-        if other.health.timeout_secs != default_check_timeout() {
+        if std::env::var("HEALTH_TIMEOUT_SECS").is_ok() {
             self.health.timeout_secs = other.health.timeout_secs;
         }
 
-        // Process
-        if other.process.command != "exec:true" {
+        // Process — override if the env var is actually set
+        if std::env::var("PROCESS_COMMAND").is_ok() {
             self.process.command = other.process.command;
         }
-        if !other.process.args.is_empty() {
+        if std::env::var("PROCESS_ARGS").is_ok() {
             self.process.args = other.process.args;
         }
         if other.process.working_dir.is_some() {
             self.process.working_dir = other.process.working_dir;
         }
-        if other.process.shutdown_timeout_secs != default_shutdown_timeout() {
+        if std::env::var("SHUTDOWN_TIMEOUT_SECS").is_ok() {
             self.process.shutdown_timeout_secs = other.process.shutdown_timeout_secs;
         }
 
@@ -386,5 +489,31 @@ impl Config {
         if other.failover.is_some() {
             self.failover = other.failover;
         }
+        if other.replication.is_some() {
+            self.replication = other.replication;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_config_default_command_is_empty() {
+        let config = ProcessConfig::default();
+        assert_eq!(config.command, "");
+    }
+
+    #[test]
+    fn test_config_from_file_invalid() {
+        let result = Config::from_file("/nonexistent/path.toml");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_default_has_empty_process_command() {
+        let config = Config::default();
+        assert_eq!(config.process.command, "");
     }
 }

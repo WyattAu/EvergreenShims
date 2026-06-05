@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Chaos shim — fault injection for resilience testing.
 //!
 //! Injects faults (latency, errors, partitions) to test application resilience.
@@ -18,11 +17,11 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::watch;
 
-/// Types of faults that can be injected.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FaultType {
     Latency,
@@ -44,7 +43,6 @@ impl std::fmt::Display for FaultType {
     }
 }
 
-/// A chaos experiment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChaosExperiment {
     pub id: String,
@@ -59,7 +57,6 @@ pub struct ChaosExperiment {
     pub faults_injected: u64,
 }
 
-/// A fault injection result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InjectionResult {
     pub injected: bool,
@@ -68,17 +65,14 @@ pub struct InjectionResult {
     pub delay_ms: u64,
 }
 
-/// Chaos shim.
 pub struct ChaosShim {
     enabled: bool,
     latency_ms: u64,
     error_rate: f64,
     partition: bool,
     kill_probability: f64,
-    duration_secs: u64,
     target: String,
     blast_radius: f64,
-    packet_loss_rate: f64,
     faults_injected: u64,
     faults_suppressed: u64,
     experiments: HashMap<String, ChaosExperiment>,
@@ -107,16 +101,11 @@ impl ChaosShim {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
-            duration_secs: std::env::var("CHAOS_DURATION_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(60),
             target: std::env::var("CHAOS_TARGET").unwrap_or_else(|_| "all".to_string()),
             blast_radius: std::env::var("CHAOS_BLAST_RADIUS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1.0),
-            packet_loss_rate: 0.0,
             faults_injected: 0,
             faults_suppressed: 0,
             experiments: HashMap::new(),
@@ -125,7 +114,6 @@ impl ChaosShim {
         }
     }
 
-    /// Start a new chaos experiment.
     pub fn start_experiment(
         &mut self,
         name: &str,
@@ -143,7 +131,7 @@ impl ChaosShim {
             target: target.to_string(),
             blast_radius: blast_radius.clamp(0.0, 1.0),
             duration_secs,
-            started_at: Some(chrono::Utc::now().to_rfc3339()),
+            started_at: Some(Utc::now().to_rfc3339()),
             ended_at: None,
             faults_injected: 0,
         };
@@ -153,18 +141,16 @@ impl ChaosShim {
             .unwrap()
     }
 
-    /// Stop an experiment by ID.
     pub fn stop_experiment(&mut self, id: &str) -> bool {
         if let Some(exp) = self.experiments.get_mut(id) {
             exp.enabled = false;
-            exp.ended_at = Some(chrono::Utc::now().to_rfc3339());
+            exp.ended_at = Some(Utc::now().to_rfc3339());
             true
         } else {
             false
         }
     }
 
-    /// Evaluate whether to inject a fault for a given request target.
     pub fn evaluate(&mut self, request_target: &str) -> InjectionResult {
         if !self.enabled {
             self.faults_suppressed += 1;
@@ -175,6 +161,9 @@ impl ChaosShim {
                 delay_ms: 0,
             };
         }
+
+        // Auto-stop expired experiments
+        self.stop_expired_experiments();
 
         if !self.target_matches(request_target) {
             self.faults_suppressed += 1;
@@ -187,7 +176,7 @@ impl ChaosShim {
         }
 
         if self.blast_radius < 1.0 {
-            let roll = (self.faults_injected as f64 * 7.13).fract();
+            let roll = fastrand::f64();
             if roll > self.blast_radius {
                 self.faults_suppressed += 1;
                 return InjectionResult {
@@ -207,7 +196,7 @@ impl ChaosShim {
         };
 
         if fault_type == FaultType::Error {
-            let roll = ((self.faults_injected as f64 * 3.7).fract());
+            let roll = fastrand::f64();
             if roll > self.error_rate && self.error_rate < 1.0 {
                 self.faults_suppressed += 1;
                 return InjectionResult {
@@ -229,6 +218,23 @@ impl ChaosShim {
         }
     }
 
+    fn stop_expired_experiments(&mut self) {
+        let now = Utc::now();
+        for exp in self.experiments.values_mut() {
+            if exp.enabled {
+                if let Some(ref started_str) = exp.started_at {
+                    if let Ok(started) = DateTime::parse_from_rfc3339(started_str) {
+                        let elapsed = now.signed_duration_since(started.with_timezone(&Utc));
+                        if elapsed >= Duration::seconds(exp.duration_secs as i64) {
+                            exp.enabled = false;
+                            exp.ended_at = Some(now.to_rfc3339());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn target_matches(&self, request_target: &str) -> bool {
         self.target == "all" || self.target.eq_ignore_ascii_case(request_target)
     }
@@ -247,32 +253,26 @@ impl ChaosShim {
         }
     }
 
-    /// Enable or disable chaos globally.
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
 
-    /// Set the error rate (clamped to 0.0-1.0).
     pub fn set_error_rate(&mut self, rate: f64) {
         self.error_rate = rate.clamp(0.0, 1.0);
     }
 
-    /// Set latency in ms.
     pub fn set_latency(&mut self, ms: u64) {
         self.latency_ms = ms;
     }
 
-    /// Get experiment by ID.
     pub fn get_experiment(&self, id: &str) -> Option<&ChaosExperiment> {
         self.experiments.get(id)
     }
 
-    /// Get all active experiments.
     pub fn active_experiments(&self) -> Vec<&ChaosExperiment> {
         self.experiments.values().filter(|e| e.enabled).collect()
     }
 
-    /// Get injection stats.
     pub fn injection_rate(&self) -> f64 {
         let total = self.faults_injected + self.faults_suppressed;
         if total == 0 {
@@ -282,9 +282,23 @@ impl ChaosShim {
         }
     }
 
-    /// Check if chaos is globally enabled and active.
     pub fn is_active(&self) -> bool {
-        self.enabled && self.active_experiments().iter().any(|_| true)
+        self.enabled && !self.active_experiments().is_empty()
+    }
+
+    /// Apply artificial latency based on the injection result.
+    pub async fn apply_latency(result: &InjectionResult) {
+        if result.injected && result.delay_ms > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(result.delay_ms)).await;
+        }
+    }
+
+    /// Inject an error based on the injection result, returning an error if applicable.
+    pub fn inject_error(result: &InjectionResult) -> anyhow::Result<()> {
+        if result.injected && result.fault_type == FaultType::Error {
+            anyhow::bail!("Chaos-injected error");
+        }
+        Ok(())
     }
 }
 
@@ -321,7 +335,7 @@ impl Capability for ChaosShim {
         for exp in self.experiments.values_mut() {
             if exp.enabled {
                 exp.enabled = false;
-                exp.ended_at = Some(chrono::Utc::now().to_rfc3339());
+                exp.ended_at = Some(Utc::now().to_rfc3339());
             }
         }
         if let Some(tx) = self.shutdown_tx.take() {
@@ -504,5 +518,76 @@ mod tests {
         assert_eq!(metrics[1].value, 10.0);
         assert_eq!(metrics[3].value, 1.0);
         assert_eq!(metrics[5].value, 0.5);
+    }
+
+    #[test]
+    fn test_experiment_expiry() {
+        let mut shim = ChaosShim {
+            enabled: true,
+            ..ChaosShim::new()
+        };
+        // Start experiment with 0-second duration (already expired)
+        let exp = shim.start_experiment("expired", FaultType::Latency, "all", 1.0, 0);
+        let id = exp.id.clone();
+
+        // First evaluate should auto-stop the expired experiment
+        shim.evaluate("all");
+        assert!(!shim.get_experiment(&id).unwrap().enabled);
+        assert!(shim.get_experiment(&id).unwrap().ended_at.is_some());
+    }
+
+    #[test]
+    fn test_blast_radius_with_random() {
+        let mut shim = ChaosShim {
+            enabled: true,
+            latency_ms: 100,
+            target: "all".to_string(),
+            blast_radius: 0.0, // No requests should be injected
+            ..ChaosShim::new()
+        };
+        let result = shim.evaluate("service-a");
+        assert!(!result.injected);
+        assert_eq!(result.reason.as_deref(), Some("Blast radius exclusion"));
+    }
+
+    #[tokio::test]
+    async fn test_apply_latency() {
+        let result = InjectionResult {
+            injected: true,
+            fault_type: FaultType::Latency,
+            reason: None,
+            delay_ms: 10,
+        };
+        let start = tokio::time::Instant::now();
+        ChaosShim::apply_latency(&result).await;
+        assert!(start.elapsed() >= tokio::time::Duration::from_millis(10));
+    }
+
+    #[test]
+    fn test_inject_error() {
+        let result = InjectionResult {
+            injected: true,
+            fault_type: FaultType::Error,
+            reason: None,
+            delay_ms: 0,
+        };
+        assert!(ChaosShim::inject_error(&result).is_err());
+
+        let no_error = InjectionResult {
+            injected: false,
+            fault_type: FaultType::Error,
+            reason: None,
+            delay_ms: 0,
+        };
+        assert!(ChaosShim::inject_error(&no_error).is_ok());
+    }
+
+    #[test]
+    fn test_is_active_no_experiments() {
+        let shim = ChaosShim {
+            enabled: true,
+            ..ChaosShim::new()
+        };
+        assert!(!shim.is_active());
     }
 }

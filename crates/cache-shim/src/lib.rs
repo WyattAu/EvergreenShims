@@ -1,21 +1,23 @@
-#![allow(dead_code)]
-//! Cache shim — query result caching with Redis/Memcached.
+//! Cache shim — query result caching with in-process LRU/LFU/FIFO eviction.
 //!
 //! Intercepts database queries and caches results for faster repeated access.
+//! Runs in-process (single-node deployments); not backed by Redis/Memcached.
 //!
 //! ## Environment Variables
 //!
 //! ```text
-//! CACHE_BACKEND         Backend: redis, memcached (required)
-//! CACHE_URL             Backend URL (default: redis://127.0.0.1:6379)
 //! CACHE_TTL             Time-to-live in seconds (default: 300)
+//! CACHE_MAX_ENTRIES     Max cache entries (default: 10000)
 //! CACHE_MAX_SIZE        Max cache size in bytes (default: 1GB)
 //! CACHE_STRATEGY        Eviction: lru, lfu, fifo (default: lru)
 //! CACHE_PREFIX          Key prefix (default: "shim:")
+//! CACHE_SWEEP_INTERVAL  Background sweep interval in seconds (default: 60)
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::watch;
@@ -62,19 +64,42 @@ impl std::str::FromStr for EvictionStrategy {
     }
 }
 
-/// Cache shim with in-process LRU/LFU/FIFO eviction.
-pub struct CacheShim {
-    backend: String,
-    url: String,
-    ttl_secs: u64,
-    max_size: u64,
-    strategy: EvictionStrategy,
-    prefix: String,
+/// Inner cache state protected by RwLock.
+struct CacheInner {
     entries: HashMap<String, CacheEntry>,
+    /// Access order for LRU: keys in order of most-recently-used (back) to least (front).
+    access_order: VecDeque<String>,
+    /// Insertion order for FIFO.
+    insert_order: VecDeque<String>,
     hits: u64,
     misses: u64,
     evictions: u64,
     size_bytes: u64,
+}
+
+impl CacheInner {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            access_order: VecDeque::new(),
+            insert_order: VecDeque::new(),
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            size_bytes: 0,
+        }
+    }
+}
+
+/// Cache shim with in-process LRU/LFU/FIFO eviction.
+pub struct CacheShim {
+    ttl_secs: u64,
+    max_size: u64,
+    max_entries: usize,
+    strategy: EvictionStrategy,
+    prefix: String,
+    sweep_interval_secs: u64,
+    inner: Arc<RwLock<CacheInner>>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
 
@@ -84,24 +109,25 @@ impl CacheShim {
         let strategy = strategy_str.parse().unwrap_or(EvictionStrategy::Lru);
 
         Self {
-            backend: std::env::var("CACHE_BACKEND").unwrap_or_else(|_| "redis".to_string()),
-            url: std::env::var("CACHE_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
             ttl_secs: std::env::var("CACHE_TTL")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(300),
+            max_entries: std::env::var("CACHE_MAX_ENTRIES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10_000),
             max_size: std::env::var("CACHE_MAX_SIZE")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1_073_741_824),
             strategy,
             prefix: std::env::var("CACHE_PREFIX").unwrap_or_else(|_| "shim:".to_string()),
-            entries: HashMap::new(),
-            hits: 0,
-            misses: 0,
-            evictions: 0,
-            size_bytes: 0,
+            sweep_interval_secs: std::env::var("CACHE_SWEEP_INTERVAL")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(60),
+            inner: Arc::new(RwLock::new(CacheInner::new())),
             shutdown_tx: None,
         }
     }
@@ -112,32 +138,47 @@ impl CacheShim {
     }
 
     /// Get a value from cache. Returns None on miss or expired.
-    pub fn get(&mut self, key: &str) -> Option<Vec<u8>> {
+    pub fn get(&self, key: &str) -> Option<Vec<u8>> {
         let full_key = self.full_key(key);
-        let entry = match self.entries.get_mut(&full_key) {
-            Some(e) => e,
+        let mut inner = self.inner.write();
+
+        // Check existence and expiry first
+        let is_expired = match inner.entries.get(&full_key) {
+            Some(e) => chrono::Utc::now() > e.expires_at,
             None => {
-                self.misses += 1;
+                inner.misses += 1;
                 return None;
             }
         };
 
-        if chrono::Utc::now() > entry.expires_at {
-            let entry_size = entry.size_bytes as u64;
-            self.entries.remove(&full_key);
-            self.size_bytes -= entry_size;
-            self.misses += 1;
+        if is_expired {
+            if let Some(entry) = inner.entries.remove(&full_key) {
+                inner.size_bytes -= entry.size_bytes as u64;
+            }
+            inner.access_order.retain(|k| k != &full_key);
+            inner.insert_order.retain(|k| k != &full_key);
+            inner.misses += 1;
             return None;
         }
 
-        entry.last_accessed = chrono::Utc::now();
-        entry.access_count += 1;
-        self.hits += 1;
-        Some(entry.value.clone())
+        // Extract the value, then update metadata
+        let value = inner.entries.get(&full_key).map(|e| e.value.clone())?;
+
+        // Update entry metadata
+        if let Some(entry) = inner.entries.get_mut(&full_key) {
+            entry.last_accessed = chrono::Utc::now();
+            entry.access_count += 1;
+        }
+
+        // Update access order: move to back (most recently used)
+        inner.access_order.retain(|k| k != &full_key);
+        inner.access_order.push_back(full_key);
+        inner.hits += 1;
+        Some(value)
     }
 
-    /// Set a value in the cache. Evicts if over max_size.
-    pub fn set(&mut self, key: &str, value: &[u8]) -> bool {
+    /// Set a value in the cache. Evicts if over max_size or max_entries.
+    pub fn set(&self, key: &str, value: &[u8]) -> bool {
         let full_key = self.full_key(key);
         let value_size = value.len() as u64;
 
@@ -145,20 +186,31 @@ impl CacheShim {
             return false;
         }
 
-        if let Some(existing) = self.entries.remove(&full_key) {
-            self.size_bytes -= existing.size_bytes as u64;
+        let mut inner = self.inner.write();
+
+        if let Some(existing) = inner.entries.remove(&full_key) {
+            inner.size_bytes -= existing.size_bytes as u64;
+            inner.access_order.retain(|k| k != &full_key);
+            inner.insert_order.retain(|k| k != &full_key);
         }
 
-        self.size_bytes += value_size;
-        while self.size_bytes > self.max_size {
-            if !self.evict_one() {
+        inner.size_bytes += value_size;
+        // Evict by size
+        while inner.size_bytes > self.max_size {
+            if !self.evict_one_inner(&mut inner) {
+                break;
+            }
+        }
+        // Evict by count
+        while inner.entries.len() >= self.max_entries {
+            if !self.evict_one_inner(&mut inner) {
                 break;
             }
         }
 
         let now = chrono::Utc::now();
-        self.entries.insert(
-            full_key,
+        inner.entries.insert(
+            full_key.clone(),
             CacheEntry {
                 key: key.to_string(),
                 value: value.to_vec(),
@@ -169,15 +221,20 @@ impl CacheShim {
                 access_count: 0,
             },
         );
+        inner.access_order.push_back(full_key.clone());
+        inner.insert_order.push_back(full_key);
 
         true
     }
 
     /// Invalidate a specific key.
-    pub fn invalidate(&mut self, key: &str) -> bool {
+    pub fn invalidate(&self, key: &str) -> bool {
         let full_key = self.full_key(key);
-        if let Some(entry) = self.entries.remove(&full_key) {
-            self.size_bytes -= entry.size_bytes as u64;
+        let mut inner = self.inner.write();
+        if let Some(entry) = inner.entries.remove(&full_key) {
+            inner.size_bytes -= entry.size_bytes as u64;
+            inner.access_order.retain(|k| k != &full_key);
+            inner.insert_order.retain(|k| k != &full_key);
             true
         } else {
             false
@@ -185,31 +242,38 @@ impl CacheShim {
     }
 
     /// Invalidate all entries matching a prefix pattern.
-    pub fn invalidate_prefix(&mut self, prefix: &str) -> u64 {
+    pub fn invalidate_prefix(&self, prefix: &str) -> u64 {
         let full_prefix = format!("{}{}", self.prefix, prefix);
-        let before = self.entries.len();
-        let keys_to_remove: Vec<String> = self
+        let mut inner = self.inner.write();
+        let before = inner.entries.len();
+        let keys_to_remove: Vec<String> = inner
             .entries
             .keys()
             .filter(|k| k.starts_with(&full_prefix))
             .cloned()
             .collect();
 
+        let count = keys_to_remove.len() as u64;
         for key in keys_to_remove {
-            if let Some(entry) = self.entries.remove(&key) {
-                self.size_bytes -= entry.size_bytes as u64;
+            if let Some(entry) = inner.entries.remove(&key) {
+                inner.size_bytes -= entry.size_bytes as u64;
+                inner.access_order.retain(|k| k != &key);
+                inner.insert_order.retain(|k| k != &key);
             }
         }
 
-        (before - self.entries.len()) as u64
+        let removed = (before - inner.entries.len()) as u64;
+        debug_assert_eq!(removed, count);
+        count
     }
 
     /// Invalidate all expired entries.
-    pub fn purge_expired(&mut self) -> u64 {
+    pub fn purge_expired(&self) -> u64 {
         let now = chrono::Utc::now();
-        let before = self.entries.len();
+        let mut inner = self.inner.write();
+        let before = inner.entries.len();
 
-        let expired_keys: Vec<String> = self
+        let expired_keys: Vec<String> = inner
             .entries
             .iter()
             .filter(|(_, e)| e.expires_at < now)
@@ -217,72 +281,73 @@ impl CacheShim {
             .collect();
 
         for key in expired_keys {
-            if let Some(entry) = self.entries.remove(&key) {
-                self.size_bytes -= entry.size_bytes as u64;
+            if let Some(entry) = inner.entries.remove(&key) {
+                inner.size_bytes -= entry.size_bytes as u64;
+                inner.access_order.retain(|k| k != &key);
+                inner.insert_order.retain(|k| k != &key);
             }
         }
 
-        (before - self.entries.len()) as u64
+        (before - inner.entries.len()) as u64
     }
 
     /// Clear all entries.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.size_bytes = 0;
+    pub fn clear(&self) {
+        let mut inner = self.inner.write();
+        inner.entries.clear();
+        inner.access_order.clear();
+        inner.insert_order.clear();
+        inner.size_bytes = 0;
     }
 
     /// Get hit/miss ratio (0.0 to 1.0).
     pub fn hit_rate(&self) -> f64 {
-        let total = self.hits + self.misses;
+        let inner = self.inner.read();
+        let total = inner.hits + inner.misses;
         if total == 0 {
             0.0
         } else {
-            self.hits as f64 / total as f64
+            inner.hits as f64 / total as f64
         }
     }
 
     /// Get number of entries.
     pub fn entry_count(&self) -> usize {
-        self.entries.len()
+        self.inner.read().entries.len()
     }
 
     /// Check if a key exists and is not expired.
     pub fn exists(&self, key: &str) -> bool {
         let full_key = self.full_key(key);
-        if let Some(entry) = self.entries.get(&full_key) {
+        let inner = self.inner.read();
+        if let Some(entry) = inner.entries.get(&full_key) {
             chrono::Utc::now() <= entry.expires_at
         } else {
             false
         }
     }
 
-    fn evict_one(&mut self) -> bool {
-        if self.entries.is_empty() {
+    fn evict_one_inner(&self, inner: &mut CacheInner) -> bool {
+        if inner.entries.is_empty() {
             return false;
         }
 
         let victim_key = match self.strategy {
-            EvictionStrategy::Lru => self
-                .entries
-                .iter()
-                .min_by_key(|(_, e)| e.last_accessed)
-                .map(|(k, _)| k.clone()),
-            EvictionStrategy::Lfu => self
+            EvictionStrategy::Lru => inner.access_order.front().cloned(),
+            EvictionStrategy::Fifo => inner.insert_order.front().cloned(),
+            EvictionStrategy::Lfu => inner
                 .entries
                 .iter()
                 .min_by_key(|(_, e)| e.access_count)
                 .map(|(k, _)| k.clone()),
-            EvictionStrategy::Fifo => self
-                .entries
-                .iter()
-                .min_by_key(|(_, e)| e.created_at)
-                .map(|(k, _)| k.clone()),
         };
 
         if let Some(key) = victim_key {
-            if let Some(entry) = self.entries.remove(&key) {
-                self.size_bytes -= entry.size_bytes as u64;
-                self.evictions += 1;
+            if let Some(entry) = inner.entries.remove(&key) {
+                inner.size_bytes -= entry.size_bytes as u64;
+                inner.evictions += 1;
+                inner.access_order.retain(|k| k != &key);
+                inner.insert_order.retain(|k| k != &key);
             }
             true
         } else {
@@ -305,18 +370,41 @@ impl Capability for CacheShim {
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
         tracing::info!(
-            "CacheShim initialized (backend={}, url={}, ttl={}s)",
-            self.backend,
-            self.url,
-            self.ttl_secs
+            "CacheShim initialized (ttl={}s, max_entries={}, max_size={}, strategy={})",
+            self.ttl_secs,
+            self.max_entries,
+            self.max_size,
+            self.strategy
         );
         Ok(())
     }
 
     async fn start(&mut self) -> Result<()> {
-        let (shutdown_tx, _) = watch::channel(false);
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
-        tracing::info!("CacheShim started (strategy={})", self.strategy);
+
+        // Spawn background sweep task
+        let inner = Arc::clone(&self.inner);
+        let interval = std::time::Duration::from_secs(self.sweep_interval_secs);
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {
+                        Self::sweep_expired(&inner);
+                    }
+                    _ = shutdown_rx.changed() => {
+                        tracing::debug!("CacheShim sweep task shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        tracing::info!(
+            "CacheShim started (strategy={}, sweep_interval={}s)",
+            self.strategy,
+            self.sweep_interval_secs
+        );
         Ok(())
     }
 
@@ -329,14 +417,42 @@ impl Capability for CacheShim {
     }
 
     fn metrics(&self) -> Vec<Metric> {
+        let inner = self.inner.read();
         vec![
-            Metric::new("cache_hits_total", self.hits as f64),
-            Metric::new("cache_misses_total", self.misses as f64),
-            Metric::new("cache_evictions_total", self.evictions as f64),
-            Metric::new("cache_size_bytes", self.size_bytes as f64),
-            Metric::new("cache_entries", self.entries.len() as f64),
+            Metric::new("cache_hits_total", inner.hits as f64),
+            Metric::new("cache_misses_total", inner.misses as f64),
+            Metric::new("cache_evictions_total", inner.evictions as f64),
+            Metric::new("cache_size_bytes", inner.size_bytes as f64),
+            Metric::new("cache_entries", inner.entries.len() as f64),
             Metric::new("cache_hit_rate", self.hit_rate()),
         ]
+    }
+}
+
+impl CacheShim {
+    /// Background sweep: remove expired entries.
+    fn sweep_expired(inner: &RwLock<CacheInner>) {
+        let now = chrono::Utc::now();
+        let mut inner = inner.write();
+        let expired_keys: Vec<String> = inner
+            .entries
+            .iter()
+            .filter(|(_, e)| e.expires_at < now)
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        let count = expired_keys.len();
+        for key in expired_keys {
+            if let Some(entry) = inner.entries.remove(&key) {
+                inner.size_bytes -= entry.size_bytes as u64;
+                inner.access_order.retain(|k| k != &key);
+                inner.insert_order.retain(|k| k != &key);
+            }
+        }
+
+        if count > 0 {
+            tracing::debug!("Background sweep removed {} expired entries", count);
+        }
     }
 }
 
@@ -378,27 +494,31 @@ mod tests {
 
     #[test]
     fn test_set_and_get() {
-        let mut shim = CacheShim {
+        let shim = CacheShim {
             ttl_secs: 3600,
             max_size: 1_000_000,
             ..CacheShim::new()
         };
         shim.set("key1", b"value1");
         assert_eq!(shim.get("key1"), Some(b"value1".to_vec()));
-        assert_eq!(shim.hits, 1);
-        assert_eq!(shim.misses, 0);
+        {
+            let inner = shim.inner.read();
+            assert_eq!(inner.hits, 1);
+            assert_eq!(inner.misses, 0);
+        }
     }
 
     #[test]
     fn test_get_miss() {
-        let mut shim = CacheShim::new();
+        let shim = CacheShim::new();
         assert_eq!(shim.get("nonexistent"), None);
-        assert_eq!(shim.misses, 1);
+        let inner = shim.inner.read();
+        assert_eq!(inner.misses, 1);
     }
 
     #[test]
     fn test_set_overwrite() {
-        let mut shim = CacheShim {
+        let shim = CacheShim {
             ttl_secs: 3600,
             max_size: 1_000_000,
             ..CacheShim::new()
@@ -411,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_set_too_large() {
-        let mut shim = CacheShim {
+        let shim = CacheShim {
             max_size: 10,
             ..CacheShim::new()
         };
@@ -420,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_invalidate() {
-        let mut shim = CacheShim {
+        let shim = CacheShim {
             ttl_secs: 3600,
             max_size: 1_000_000,
             ..CacheShim::new()
@@ -432,13 +552,13 @@ mod tests {
 
     #[test]
     fn test_invalidate_miss() {
-        let mut shim = CacheShim::new();
+        let shim = CacheShim::new();
         assert!(!shim.invalidate("nonexistent"));
     }
 
     #[test]
     fn test_invalidate_prefix() {
-        let mut shim = CacheShim {
+        let shim = CacheShim {
             ttl_secs: 3600,
             max_size: 1_000_000,
             ..CacheShim::new()
@@ -455,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut shim = CacheShim {
+        let shim = CacheShim {
             ttl_secs: 3600,
             max_size: 1_000_000,
             ..CacheShim::new()
@@ -466,12 +586,13 @@ mod tests {
 
         shim.clear();
         assert_eq!(shim.entry_count(), 0);
-        assert_eq!(shim.size_bytes, 0);
+        let inner = shim.inner.read();
+        assert_eq!(inner.size_bytes, 0);
     }
 
     #[test]
     fn test_exists() {
-        let mut shim = CacheShim {
+        let shim = CacheShim {
             ttl_secs: 3600,
             max_size: 1_000_000,
             ..CacheShim::new()
@@ -483,23 +604,27 @@ mod tests {
 
     #[test]
     fn test_hit_rate() {
-        let mut shim = CacheShim::new();
+        let shim = CacheShim::new();
         assert_eq!(shim.hit_rate(), 0.0);
 
-        shim.hits = 3;
-        shim.misses = 1;
+        {
+            let mut inner = shim.inner.write();
+            inner.hits = 3;
+            inner.misses = 1;
+        }
         assert!((shim.hit_rate() - 0.75).abs() < 0.01);
     }
 
     #[tokio::test]
     async fn test_metrics() {
-        let mut shim = CacheShim {
-            hits: 10,
-            misses: 2,
-            evictions: 1,
-            size_bytes: 5000,
-            ..CacheShim::new()
-        };
+        let shim = CacheShim::new();
+        {
+            let mut inner = shim.inner.write();
+            inner.hits = 10;
+            inner.misses = 2;
+            inner.evictions = 1;
+            inner.size_bytes = 5000;
+        }
         shim.set("a", b"1");
 
         let metrics = shim.metrics();
@@ -507,5 +632,51 @@ mod tests {
         assert_eq!(metrics[0].name, "cache_hits_total");
         assert_eq!(metrics[0].value, 10.0);
         assert_eq!(metrics[5].name, "cache_hit_rate");
+    }
+
+    #[test]
+    fn test_lru_eviction_order() {
+        let shim = CacheShim {
+            ttl_secs: 3600,
+            max_size: 1_000_000,
+            max_entries: 3,
+            strategy: EvictionStrategy::Lru,
+            ..CacheShim::new()
+        };
+        shim.set("a", b"1");
+        shim.set("b", b"2");
+        shim.set("c", b"3");
+        // Access "a" to make it recently used
+        shim.get("a");
+        // Insert "d" should evict "b" (least recently used)
+        shim.set("d", b"4");
+
+        assert!(!shim.exists("b"));
+        assert!(shim.exists("a"));
+        assert!(shim.exists("c"));
+        assert!(shim.exists("d"));
+    }
+
+    #[test]
+    fn test_fifo_eviction_order() {
+        let shim = CacheShim {
+            ttl_secs: 3600,
+            max_size: 1_000_000,
+            max_entries: 3,
+            strategy: EvictionStrategy::Fifo,
+            ..CacheShim::new()
+        };
+        shim.set("a", b"1");
+        shim.set("b", b"2");
+        shim.set("c", b"3");
+        // Access "a" but FIFO ignores access recency
+        shim.get("a");
+        // Insert "d" should evict "a" (first in)
+        shim.set("d", b"4");
+
+        assert!(!shim.exists("a"));
+        assert!(shim.exists("b"));
+        assert!(shim.exists("c"));
+        assert!(shim.exists("d"));
     }
 }

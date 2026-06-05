@@ -16,17 +16,14 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{ensure, Context};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::{watch, Mutex};
 
-/// Maximum jitter delay in seconds.
 const MAX_JITTER_SECS: u64 = 60;
 
-/// Task execution states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskState {
     Pending,
@@ -35,7 +32,6 @@ pub enum TaskState {
     Failed,
 }
 
-/// Task retry configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryConfig {
     pub max_retries: u32,
@@ -53,24 +49,17 @@ impl Default for RetryConfig {
     }
 }
 
-/// Scheduled task definition with retry and timeout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
     pub name: String,
-    /// Cron expression (e.g., "0 */5 * * * *").
     pub schedule: String,
-    /// Shell command to execute.
     pub command: String,
-    /// Task-specific arguments.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Whether this task is enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Execution timeout in seconds (default: 300).
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
-    /// Retry configuration.
     #[serde(default)]
     pub retry: RetryConfig,
 }
@@ -83,7 +72,6 @@ fn default_timeout() -> u64 {
     300
 }
 
-/// Per-task runtime state.
 #[derive(Debug, Clone)]
 struct TaskRuntime {
     state: TaskState,
@@ -94,7 +82,16 @@ struct TaskRuntime {
     next_run: Option<DateTime<Utc>>,
 }
 
-/// Scheduler shim with real cron parsing and task execution.
+type TaskHandler = Arc<
+    dyn Fn(
+            String,
+            Vec<String>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
+        > + Send
+        + Sync,
+>;
+
 pub struct SchedulerShim {
     tasks: Vec<ScheduledTask>,
     schedules: HashMap<String, Schedule>,
@@ -105,9 +102,9 @@ pub struct SchedulerShim {
     tasks_retried: u64,
     shutdown_tx: Option<watch::Sender<bool>>,
     inner: Arc<Mutex<SchedulerInner>>,
+    handler: Option<TaskHandler>,
 }
 
-/// Inner state for async operations.
 struct SchedulerInner {
     running: bool,
 }
@@ -144,10 +141,20 @@ impl SchedulerShim {
             tasks_retried: 0,
             shutdown_tx: None,
             inner: Arc::new(Mutex::new(SchedulerInner { running: false })),
+            handler: None,
         }
     }
 
-    /// Load tasks from env var or return empty.
+    pub fn set_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(String, Vec<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.handler = Some(Arc::new(handler));
+    }
+
     fn load_tasks() -> Vec<ScheduledTask> {
         std::env::var("SCHEDULER_TASKS")
             .ok()
@@ -158,44 +165,39 @@ impl SchedulerShim {
             .collect()
     }
 
-    /// Parse cron expressions into Schedule objects.
     fn parse_schedules(tasks: &[ScheduledTask]) -> HashMap<String, Schedule> {
         tasks
             .iter()
-            .filter_map(|t| {
-                Schedule::from_str(&t.schedule)
-                    .ok()
-                    .map(|s| (t.name.clone(), s))
+            .filter_map(|t| match Schedule::from_str(&t.schedule) {
+                Ok(s) => Some((t.name.clone(), s)),
+                Err(e) => {
+                    tracing::warn!(task = %t.name, schedule = %t.schedule, "Invalid cron expression: {}", e);
+                    None
+                }
             })
             .collect()
     }
 
-    /// Calculate exponential backoff with jitter for retry delay.
     pub fn retry_delay(attempt: u32, config: &RetryConfig) -> Duration {
         let base = config.base_delay_secs;
         let delay_secs = base * 2u32.saturating_pow(attempt.min(31)) as u64;
         let capped = delay_secs.min(config.max_delay_secs);
-        // Add jitter: 0-50% of the calculated delay
         let jitter = (capped as f64 * 0.5 * fastrand::f32() as f64) as u64;
         Duration::from_secs(capped + jitter)
     }
 
-    /// Calculate jitter offset to prevent thundering herd.
     pub fn jitter_offset() -> Duration {
         Duration::from_secs(fastrand::u64(0..MAX_JITTER_SECS))
     }
 
-    /// Get a task's current state.
     pub fn task_state(&self, name: &str) -> Option<TaskState> {
         self.runtime.get(name).map(|r| r.state)
     }
 
-    /// Get next scheduled run time for a task.
     pub fn next_run(&self, name: &str) -> Option<DateTime<Utc>> {
         self.runtime.get(name).and_then(|r| r.next_run)
     }
 
-    /// Update a task's state after execution.
     pub fn update_task_state(&mut self, name: &str, state: TaskState) {
         if let Some(rt) = self.runtime.get_mut(name) {
             rt.state = state;
@@ -226,7 +228,6 @@ impl SchedulerShim {
         }
     }
 
-    /// Validate all cron schedules.
     pub fn validate_schedules(&self) -> Vec<(String, String)> {
         self.tasks
             .iter()
@@ -238,7 +239,6 @@ impl SchedulerShim {
             .collect()
     }
 
-    /// List all tasks with their runtime info.
     pub fn list_tasks(&self) -> Vec<TaskInfo> {
         self.tasks
             .iter()
@@ -257,9 +257,150 @@ impl SchedulerShim {
             })
             .collect()
     }
+
+    fn spawn_scheduler_loop(&self, mut shutdown_rx: watch::Receiver<bool>) {
+        let handler = match self.handler.clone() {
+            Some(h) => h,
+            None => return,
+        };
+
+        let tasks: Vec<ScheduledTask> = self.tasks.clone();
+        let schedules: HashMap<String, Schedule> = self.schedules.clone();
+        let runtime = Arc::new(Mutex::new(self.runtime.clone()));
+        let tasks_executed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let tasks_failed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let tasks_retried = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        // Pre-validate tasks with valid schedules
+        let valid_tasks: Vec<ScheduledTask> = tasks
+            .iter()
+            .filter(|t| schedules.contains_key(&t.name))
+            .cloned()
+            .collect();
+
+        if valid_tasks.is_empty() {
+            return;
+        }
+
+        tokio::spawn(async move {
+            loop {
+                // Find the next task to fire
+                let mut earliest: Option<(DateTime<Utc>, String)> = None;
+                for task in &valid_tasks {
+                    if let Some(schedule) = schedules.get(&task.name) {
+                        if let Some(time) = schedule.upcoming(Utc).next() {
+                            if let Some((ref earliest_time, _)) = earliest {
+                                if time < *earliest_time {
+                                    earliest = Some((time, task.name.clone()));
+                                }
+                            } else {
+                                earliest = Some((time, task.name.clone()));
+                            }
+                        }
+                    }
+                }
+
+                let (fire_time, task_name) = match earliest {
+                    Some(ft) => ft,
+                    None => {
+                        tokio::select! {
+                            _ = shutdown_rx.changed() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(60)) => continue,
+                        }
+                    }
+                };
+
+                // Sleep until fire time, or shutdown
+                let now = Utc::now();
+                if fire_time > now {
+                    let sleep_duration = (fire_time - now)
+                        .to_std()
+                        .unwrap_or(Duration::from_secs(1));
+                    let jitter = Duration::from_secs(fastrand::u64(0..=MAX_JITTER_SECS.min(
+                        sleep_duration.as_secs() / 4,
+                    )));
+                    tokio::select! {
+                        _ = shutdown_rx.changed() => break,
+                        _ = tokio::time::sleep(sleep_duration + jitter) => {}
+                    }
+                }
+
+                // Find task config
+                let task_config = match valid_tasks.iter().find(|t| t.name == task_name) {
+                    Some(t) => t.clone(),
+                    None => continue,
+                };
+
+                // Update state to Running
+                {
+                    let mut rt = runtime.lock().await;
+                    if let Some(r) = rt.get_mut(&task_name) {
+                        r.state = TaskState::Running;
+                        r.last_run = Some(Utc::now());
+                    }
+                }
+
+                // Execute with retry
+                let mut last_error = None;
+                let max_attempts = task_config.retry.max_retries + 1;
+                for attempt in 0..max_attempts {
+                    if attempt > 0 {
+                        let delay = Self::retry_delay(attempt - 1, &task_config.retry);
+                        tasks_retried.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tokio::select! {
+                            _ = shutdown_rx.changed() => return,
+                            _ = tokio::time::sleep(delay) => {}
+                        }
+                    }
+
+                    match handler(task_config.name.clone(), task_config.args.clone()).await {
+                        Ok(()) => {
+                            last_error = None;
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                task = %task_name,
+                                attempt = attempt + 1,
+                                error = %e,
+                                "Task execution failed"
+                            );
+                            last_error = Some(e);
+                        }
+                    }
+                }
+
+                // Update final state
+                {
+                    let mut rt = runtime.lock().await;
+                    if let Some(r) = rt.get_mut(&task_name) {
+                        match last_error {
+                            None => {
+                                r.state = TaskState::Success;
+                                r.last_success = Some(Utc::now());
+                                r.consecutive_failures = 0;
+                                r.next_run = schedules
+                                    .get(&task_name)
+                                    .and_then(|s| s.upcoming(Utc).next());
+                                tasks_executed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            Some(_e) => {
+                                r.state = TaskState::Failed;
+                                r.last_failure = Some(Utc::now());
+                                r.consecutive_failures += 1;
+                                r.next_run = schedules
+                                    .get(&task_name)
+                                    .and_then(|s| s.upcoming(Utc).next());
+                                tasks_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
 }
 
-/// Public task info for introspection.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskInfo {
     pub name: String,
@@ -301,12 +442,13 @@ impl Capability for SchedulerShim {
     }
 
     async fn start(&mut self) -> Result<()> {
-        let (shutdown_tx, _) = watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
         {
             let mut inner = self.inner.lock().await;
             inner.running = true;
         }
+        self.spawn_scheduler_loop(shutdown_rx);
         tracing::info!(tasks = self.tasks.len(), "SchedulerShim started");
         Ok(())
     }
@@ -373,8 +515,7 @@ mod tests {
 
     #[test]
     fn test_validate_schedules() {
-        let mut shim = SchedulerShim::new();
-        // Default shim has no tasks so no invalid schedules
+        let shim = SchedulerShim::new();
         let invalid = shim.validate_schedules();
         assert!(invalid.is_empty());
     }
@@ -386,12 +527,10 @@ mod tests {
             base_delay_secs: 2,
             max_delay_secs: 100,
         };
-        let d0 = SchedulerShim::retry_delay(0, &config);
+        let _d0 = SchedulerShim::retry_delay(0, &config);
         let d1 = SchedulerShim::retry_delay(1, &config);
         let d2 = SchedulerShim::retry_delay(2, &config);
-        // Exponential growth (with jitter, so just check d2 > d1 > d0 roughly)
-        // d0 ≈ 2s + jitter, d1 ≈ 4s + jitter, d2 ≈ 8s + jitter
-        assert!(d2.as_secs() >= 4); // At least 8 - 4 (max jitter) = 4
+        assert!(d2.as_secs() >= 4);
         assert!(d1.as_secs() >= 2);
     }
 
@@ -403,8 +542,7 @@ mod tests {
             max_delay_secs: 20,
         };
         let delay = SchedulerShim::retry_delay(5, &config);
-        // 10 * 2^5 = 320, capped to 20 + jitter
-        assert!(delay.as_secs() <= 30); // 20 + 10 (max jitter)
+        assert!(delay.as_secs() <= 30);
     }
 
     #[test]
@@ -536,7 +674,6 @@ mod tests {
 
     #[test]
     fn test_disabled_tasks_filtered() {
-        // Ensure clean state first
         std::env::remove_var("SCHEDULER_TASKS");
         std::env::set_var(
             "SCHEDULER_TASKS",
@@ -546,5 +683,63 @@ mod tests {
         assert_eq!(shim.tasks.len(), 1);
         assert_eq!(shim.tasks[0].name, "active");
         std::env::remove_var("SCHEDULER_TASKS");
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_executes_task() {
+        use std::sync::atomic::AtomicU64;
+
+        let mut shim = SchedulerShim::new();
+        let executed = Arc::new(AtomicU64::new(0));
+        let executed_clone = Arc::clone(&executed);
+
+        shim.set_handler(move |_cmd, _args| {
+            let e = Arc::clone(&executed_clone);
+            Box::pin(async move {
+                e.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            })
+        });
+
+        // Add a task with "every second" schedule
+        shim.tasks = vec![ScheduledTask {
+            name: "tick".into(),
+            schedule: "*/1 * * * * *".into(),
+            command: "tick".into(),
+            args: vec![],
+            enabled: true,
+            timeout_secs: 60,
+            retry: RetryConfig::default(),
+        }];
+        shim.schedules = SchedulerShim::parse_schedules(&shim.tasks);
+        let next = shim
+            .schedules
+            .get("tick")
+            .and_then(|s| s.upcoming(Utc).next());
+        shim.runtime.insert(
+            "tick".into(),
+            TaskRuntime {
+                state: TaskState::Pending,
+                last_run: None,
+                last_success: None,
+                last_failure: None,
+                consecutive_failures: 0,
+                next_run: next,
+            },
+        );
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        shim.shutdown_tx = Some(shutdown_tx);
+        {
+            let mut inner = shim.inner.lock().await;
+            inner.running = true;
+        }
+        shim.spawn_scheduler_loop(shutdown_rx);
+
+        // Wait for at least one execution
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        assert!(executed.load(std::sync::atomic::Ordering::Relaxed) >= 1);
+        let _ = shim.shutdown_tx.as_ref().unwrap().send(true);
     }
 }

@@ -15,21 +15,21 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::{ensure, Context};
+use anyhow::Context;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::{watch, Mutex};
 
-/// Default dedup window in seconds.
 const DEFAULT_DEDUP_WINDOW_SECS: u64 = 300;
-/// Default backoff base in seconds.
 const DEFAULT_BACKOFF_BASE_SECS: u64 = 30;
-/// Default max backoff in seconds.
 const DEFAULT_BACKOFF_MAX_SECS: u64 = 3600;
+const WEBHOOK_RETRY_COUNT: u32 = 2;
+const WEBHOOK_RETRY_DELAY_MS: u64 = 1000;
+const DEDUP_CLEANUP_INTERVAL_SECS: u64 = 60;
 
-/// Alert severity levels (ordered low→high).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
@@ -39,7 +39,6 @@ pub enum Severity {
 }
 
 impl Severity {
-    /// Parse severity from string (case-insensitive).
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         match s.to_lowercase().as_str() {
             "info" => Ok(Severity::Info),
@@ -60,7 +59,6 @@ impl std::fmt::Display for Severity {
     }
 }
 
-/// Webhook configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookConfig {
     pub name: String,
@@ -71,14 +69,12 @@ pub struct WebhookConfig {
 }
 
 impl WebhookConfig {
-    /// Check if this webhook handles the given severity.
     pub fn accepts(&self, severity: Severity) -> bool {
         let min = Severity::parse(&self.min_severity).unwrap_or(Severity::Info);
         severity >= min
     }
 }
 
-/// An alert to be sent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Alert {
     pub id: String,
@@ -87,24 +83,20 @@ pub struct Alert {
     pub severity: Severity,
     pub source: String,
     pub labels: HashMap<String, String>,
-    #[serde(with = "serde_millis")]
-    pub timestamp: Instant,
+    pub timestamp: DateTime<Utc>,
 }
 
-/// Per-endpoint delivery state for backoff tracking.
 #[derive(Debug, Clone)]
 struct EndpointState {
     consecutive_failures: u32,
-    last_attempt: Option<Instant>,
-    backoff_until: Option<Instant>,
+    last_attempt: Option<std::time::Instant>,
+    backoff_until: Option<std::time::Instant>,
 }
 
-/// Deduplication key for an alert.
 fn dedup_key(alert: &Alert) -> String {
     format!("{}:{}:{}", alert.source, alert.title, alert.severity)
 }
 
-/// Alerting shim with routing, dedup, and backoff.
 pub struct AlertingShim {
     webhooks: Vec<WebhookConfig>,
     dedup_window: Duration,
@@ -114,8 +106,9 @@ pub struct AlertingShim {
     alerts_failed: u64,
     alerts_deduplicated: u64,
     shutdown_tx: Option<watch::Sender<bool>>,
-    dedup_cache: Arc<Mutex<HashMap<String, Instant>>>,
+    dedup_cache: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     endpoint_states: Arc<Mutex<HashMap<String, EndpointState>>>,
+    http_client: Option<reqwest::Client>,
 }
 
 impl AlertingShim {
@@ -155,10 +148,10 @@ impl AlertingShim {
             shutdown_tx: None,
             dedup_cache: Arc::new(Mutex::new(HashMap::new())),
             endpoint_states: Arc::new(Mutex::new(HashMap::new())),
+            http_client: None,
         }
     }
 
-    /// Check if an alert is a duplicate within the dedup window.
     pub async fn is_duplicate(&self, alert: &Alert) -> bool {
         let key = dedup_key(alert);
         let cache = self.dedup_cache.lock().await;
@@ -170,48 +163,40 @@ impl AlertingShim {
         false
     }
 
-    /// Record an alert in the dedup cache.
     pub async fn record_alert(&self, alert: &Alert) {
         let key = dedup_key(alert);
         let mut cache = self.dedup_cache.lock().await;
-        cache.insert(key, Instant::now());
-
-        // Prune expired entries
-        cache.retain(|_, ts| ts.elapsed() < self.dedup_window);
+        cache.insert(key, std::time::Instant::now());
     }
 
-    /// Calculate backoff delay for a failing endpoint.
     pub fn calculate_backoff(&self, consecutive_failures: u32) -> Duration {
         let delay_secs =
             self.backoff_base.as_secs() * 2u64.saturating_pow(consecutive_failures.min(10));
         Duration::from_secs(delay_secs.min(self.backoff_max.as_secs()))
     }
 
-    /// Check if an endpoint is in backoff.
     pub async fn is_in_backoff(&self, webhook_name: &str) -> bool {
         let states = self.endpoint_states.lock().await;
         if let Some(state) = states.get(webhook_name) {
             if let Some(until) = state.backoff_until {
-                return Instant::now() < until;
+                return std::time::Instant::now() < until;
             }
         }
         false
     }
 
-    /// Record a successful delivery (reset backoff).
     pub async fn record_success(&self, webhook_name: &str) {
         let mut states = self.endpoint_states.lock().await;
         states.insert(
             webhook_name.to_string(),
             EndpointState {
                 consecutive_failures: 0,
-                last_attempt: Some(Instant::now()),
+                last_attempt: Some(std::time::Instant::now()),
                 backoff_until: None,
             },
         );
     }
 
-    /// Record a failed delivery (increment backoff).
     pub async fn record_failure(&self, webhook_name: &str) {
         let mut states = self.endpoint_states.lock().await;
         let state = states
@@ -222,12 +207,11 @@ impl AlertingShim {
                 backoff_until: None,
             });
         state.consecutive_failures += 1;
-        state.last_attempt = Some(Instant::now());
+        state.last_attempt = Some(std::time::Instant::now());
         let delay = self.calculate_backoff(state.consecutive_failures);
-        state.backoff_until = Some(Instant::now() + delay);
+        state.backoff_until = Some(std::time::Instant::now() + delay);
     }
 
-    /// Route an alert to matching webhooks (for testing/routing logic).
     pub fn route(&self, alert: &Alert) -> Vec<&WebhookConfig> {
         self.webhooks
             .iter()
@@ -235,8 +219,41 @@ impl AlertingShim {
             .collect()
     }
 
-    /// Process an alert: dedup check → route → (in production: send).
-    /// Returns number of webhooks that would receive the alert.
+    async fn send_webhook(
+        &self,
+        webhook: &WebhookConfig,
+        alert: &Alert,
+    ) -> anyhow::Result<()> {
+        let client = self
+            .http_client
+            .as_ref()
+            .context("HTTP client not initialized")?;
+
+        let payload = serde_json::json!({
+            "id": alert.id,
+            "title": alert.title,
+            "message": alert.message,
+            "severity": alert.severity.to_string(),
+            "source": alert.source,
+            "labels": alert.labels,
+            "timestamp": alert.timestamp.to_rfc3339(),
+            "channel": webhook.channel,
+        });
+
+        let mut req = client.post(&webhook.url).json(&payload);
+        for (key, value) in &webhook.headers {
+            req = req.header(key.as_str(), value.as_str());
+        }
+
+        req.send()
+            .await
+            .context("Failed to send webhook request")?
+            .error_for_status()
+            .context("Webhook returned error status")?;
+
+        Ok(())
+    }
+
     pub async fn process_alert(&mut self, alert: Alert) -> anyhow::Result<u32> {
         if self.is_duplicate(&alert).await {
             self.alerts_deduplicated += 1;
@@ -245,18 +262,70 @@ impl AlertingShim {
         self.record_alert(&alert).await;
         let target_names: Vec<String> = self.route(&alert).iter().map(|w| w.name.clone()).collect();
         let count = target_names.len() as u32;
-        // In production, we'd send HTTP POST to each webhook here.
-        // For now, record success for routing verification.
-        for name in &target_names {
-            self.alerts_sent += 1;
-            self.record_success(name).await;
+
+        if self.http_client.is_some() {
+            for name in &target_names {
+                let webhook = self.webhooks.iter().find(|w| w.name == *name).unwrap();
+                let mut success = false;
+                for attempt in 0..=WEBHOOK_RETRY_COUNT {
+                    if attempt > 0 {
+                        tokio::time::sleep(Duration::from_millis(WEBHOOK_RETRY_DELAY_MS)).await;
+                    }
+                    match self.send_webhook(webhook, &alert).await {
+                        Ok(()) => {
+                            self.alerts_sent += 1;
+                            self.record_success(name).await;
+                            success = true;
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                webhook = %name,
+                                attempt = attempt + 1,
+                                error = %e,
+                                "Webhook delivery failed"
+                            );
+                        }
+                    }
+                }
+                if !success {
+                    self.alerts_failed += 1;
+                    self.record_failure(name).await;
+                }
+            }
+        } else {
+            for name in &target_names {
+                self.alerts_sent += 1;
+                self.record_success(name).await;
+            }
         }
+
         Ok(count)
     }
 
-    /// Clear the dedup cache.
     pub async fn clear_dedup_cache(&self) {
         self.dedup_cache.lock().await.clear();
+    }
+
+    fn spawn_dedup_cleaner(&self, mut shutdown_rx: watch::Receiver<bool>) {
+        let cache = Arc::clone(&self.dedup_cache);
+        let dedup_window = self.dedup_window;
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(DEDUP_CLEANUP_INTERVAL_SECS)) => {
+                        let mut cache = cache.lock().await;
+                        cache.retain(|_, ts| ts.elapsed() < dedup_window);
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -273,6 +342,12 @@ impl Capability for AlertingShim {
     }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
+        self.http_client = Some(
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .context("Failed to build HTTP client")?,
+        );
         tracing::info!(
             webhooks = self.webhooks.len(),
             dedup_window_secs = self.dedup_window.as_secs(),
@@ -282,8 +357,9 @@ impl Capability for AlertingShim {
     }
 
     async fn start(&mut self) -> Result<()> {
-        let (shutdown_tx, _) = watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
+        self.spawn_dedup_cleaner(shutdown_rx);
         tracing::info!(webhooks = self.webhooks.len(), "AlertingShim started");
         Ok(())
     }
@@ -313,19 +389,6 @@ impl Capability for AlertingShim {
     }
 }
 
-mod serde_millis {
-    use serde::{Deserialize, Deserializer, Serializer};
-    use std::time::Instant;
-
-    pub fn serialize<S: Serializer>(instant: &Instant, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_u64(instant.elapsed().as_millis() as u64)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(_d: D) -> Result<Instant, D::Error> {
-        Ok(Instant::now())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,7 +401,7 @@ mod tests {
             severity,
             source: "test".to_string(),
             labels: HashMap::new(),
-            timestamp: Instant::now(),
+            timestamp: Utc::now(),
         }
     }
 
@@ -386,7 +449,6 @@ mod tests {
         shim.record_alert(&alert).await;
         assert!(shim.is_duplicate(&alert).await);
 
-        // Different severity → not duplicate
         let alert2 = make_alert("dup-test", Severity::Critical);
         assert!(!shim.is_duplicate(&alert2).await);
     }
@@ -410,7 +472,7 @@ mod tests {
         let mut shim = AlertingShim::new();
         let alert = make_alert("route-test", Severity::Info);
         let count = shim.process_alert(alert).await.unwrap();
-        assert_eq!(count, 1); // Only w1 (min_severity=info), not w2 (min_severity=critical)
+        assert_eq!(count, 1);
         std::env::remove_var("ALERTING_WEBHOOKS");
     }
 
@@ -422,7 +484,6 @@ mod tests {
         let d5 = shim.calculate_backoff(5);
         assert!(d1 > d0);
         assert!(d5 > d1);
-        // Should be capped
         let d20 = shim.calculate_backoff(20);
         assert!(d20 <= shim.backoff_max);
     }
@@ -450,7 +511,6 @@ mod tests {
         let state2 = shim.endpoint_states.lock().await.get("w1").cloned();
         let backoff2 = state2.as_ref().and_then(|s| s.backoff_until);
 
-        // Second failure should have later backoff_until
         assert!(backoff2 > backoff1);
     }
 
@@ -469,7 +529,7 @@ mod tests {
             severity: Severity::Info,
             source: "s".into(),
             labels: HashMap::new(),
-            timestamp: Instant::now(),
+            timestamp: Utc::now(),
         };
         let info_routes = shim.route(&info_alert);
         assert_eq!(info_routes.len(), 1);
@@ -482,7 +542,7 @@ mod tests {
             severity: Severity::Critical,
             source: "s".into(),
             labels: HashMap::new(),
-            timestamp: Instant::now(),
+            timestamp: Utc::now(),
         };
         let crit_routes = shim.route(&crit_alert);
         assert_eq!(crit_routes.len(), 2);
@@ -508,5 +568,14 @@ mod tests {
         shim.alerts_deduplicated = 5;
         let m = shim.metrics();
         assert_eq!(m.len(), 3);
+    }
+
+    #[test]
+    fn test_alert_timestamp_is_datetime() {
+        let alert = make_alert("ts-test", Severity::Info);
+        let serialized = serde_json::to_string(&alert).unwrap();
+        assert!(serialized.contains("timestamp"));
+        let deserialized: Alert = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.timestamp, alert.timestamp);
     }
 }

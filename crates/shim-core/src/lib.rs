@@ -20,7 +20,7 @@ pub mod redis_bridge;
 pub use bus::ShimBus;
 pub use config::{
     AuditConfig, BackupConfig, Config, FailoverConfig, HealthConfig, MigrationConfig,
-    ProcessConfig, TlsConfig, VaultConfig,
+    ProcessConfig, ReplicationConfig, TlsConfig, VaultConfig,
 };
 pub use error::{Error, Result};
 pub use event::{EventHandler, EventType, Severity, ShimEvent};

@@ -17,3 +17,8 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 prometheus.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+rustls.workspace = true

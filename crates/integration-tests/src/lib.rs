@@ -220,7 +220,6 @@ async fn test_scheduler_state_lifecycle() {
 async fn test_alerting_routing_and_dedup() {
     use alerting_shim::{AlertingShim, Severity};
     use std::collections::HashMap;
-    use std::time::Instant;
 
     std::env::set_var(
         "ALERTING_WEBHOOKS",
@@ -238,7 +237,7 @@ async fn test_alerting_routing_and_dedup() {
         severity: Severity::Info,
         source: "monitoring".into(),
         labels: HashMap::new(),
-        timestamp: Instant::now(),
+        timestamp: chrono::Utc::now(),
     };
     let targets = shim.route(&info_alert);
     assert_eq!(targets.len(), 1);
@@ -252,7 +251,7 @@ async fn test_alerting_routing_and_dedup() {
         severity: Severity::Warning,
         source: "monitoring".into(),
         labels: HashMap::new(),
-        timestamp: Instant::now(),
+        timestamp: chrono::Utc::now(),
     };
     let targets = shim.route(&warn_alert);
     assert_eq!(targets.len(), 2);
@@ -265,7 +264,7 @@ async fn test_alerting_routing_and_dedup() {
         severity: Severity::Critical,
         source: "health".into(),
         labels: HashMap::new(),
-        timestamp: Instant::now(),
+        timestamp: chrono::Utc::now(),
     };
     let targets = shim.route(&crit_alert);
     assert_eq!(targets.len(), 2);
@@ -353,17 +352,16 @@ async fn test_auth_token_lifecycle() {
     let mut shim = AuthShim::new();
 
     // Create token
-    let token = shim.create_token(
+    let token_value = shim.create_token(
         "user123",
         Role::ReadWrite,
         None,
     );
 
-    assert_eq!(token.user, "user123");
-    assert!(!token.token_id.is_empty());
+    assert!(!token_value.is_empty());
 
     // Validate token
-    let result = shim.validate_token(&token.token_id);
+    let result = shim.validate_token(&token_value);
     assert!(result.authenticated);
 
     // Token is stored internally
@@ -378,10 +376,12 @@ async fn test_auth_api_keys() {
     let mut shim = AuthShim::new();
 
     // Register API key
+    let raw_key = "my-secret-api-key";
+    let key_hash = shim.hash_api_key(raw_key);
     let key = ApiKey {
         key_id: "key-1".to_string(),
         name: "service-a".to_string(),
-        key_hash: "hash123".to_string(),
+        key_hash,
         role: Role::ReadOnly,
         created_at: chrono::Utc::now().to_rfc3339(),
         last_used: None,
@@ -390,12 +390,12 @@ async fn test_auth_api_keys() {
     shim.register_api_key(key);
 
     // Validate key
-    let result = shim.validate_api_key("key-1");
+    let result = shim.validate_api_key("key-1", raw_key);
     assert!(result.authenticated);
 
     // Revoke
     assert!(shim.revoke_api_key("key-1"));
-    let result = shim.validate_api_key("key-1");
+    let result = shim.validate_api_key("key-1", raw_key);
     assert!(!result.authenticated);
 }
 
@@ -609,6 +609,8 @@ async fn test_cost_budget_tracking() {
 async fn test_archival_lifecycle() {
     use archival_shim::ArchivalShim;
 
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_var("ARCHIVAL_ARCHIVE_PATH", dir.path().to_str().unwrap());
     let mut shim = ArchivalShim::new();
 
     // Add retention rule
@@ -620,13 +622,17 @@ async fn test_archival_lifecycle() {
     });
 
     // Archive a batch
-    let archived = shim.archive_batch("logs", 3, 3000);
+    let archived = shim.archive_batch("logs", 3, 3000, None).await;
 
+    assert!(archived.is_some());
+    let archived = archived.unwrap();
     assert_eq!(archived.table, "logs");
 
     // Summary
     let summary = shim.summary();
     assert!(summary.total_records > 0);
+
+    std::env::remove_var("ARCHIVAL_ARCHIVE_PATH");
 }
 
 // ============================================================================

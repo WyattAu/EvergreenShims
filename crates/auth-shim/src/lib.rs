@@ -15,13 +15,33 @@
 //! AUTH_TOKEN_EXPIRY_SECS Token expiry in seconds (default: 3600)
 //! AUTH_MAX_FAILED_LOGINS Max failed login attempts before lockout (default: 5)
 //! AUTH_LOCKOUT_SECS      Lockout duration in seconds (default: 300)
+//! AUTH_HMAC_KEY          HMAC signing key (hex-encoded). If unset, a random key is generated.
 //! ```
 
 use std::collections::HashMap;
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::watch;
+use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn hex_encode(data: &[u8]) -> String {
+    data.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
+}
 
 /// User roles for role-based access control.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,6 +108,17 @@ pub struct AuthResult {
     pub reason: Option<String>,
 }
 
+/// Internal storage for a token with its HMAC verification hash.
+#[derive(Debug, Clone)]
+struct StoredToken {
+    token_hash: String,
+    user: String,
+    role: Role,
+    issued_at: String,
+    expires_at: String,
+    source_ip: Option<String>,
+}
+
 /// Auth shim.
 pub struct AuthShim {
     method: String,
@@ -100,16 +131,20 @@ pub struct AuthShim {
     lockout_secs: u64,
     auth_success: u64,
     auth_failure: u64,
-    tokens: HashMap<String, AuthToken>,
+    tokens: HashMap<String, StoredToken>,
     api_keys: HashMap<String, ApiKey>,
     failed_attempts: HashMap<String, u32>,
     locked_users: HashMap<String, chrono::DateTime<chrono::Utc>>,
-    token_counter: u64,
+    hmac_key: Vec<u8>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
 
 impl AuthShim {
     pub fn new() -> Self {
+        let hmac_key = std::env::var("AUTH_HMAC_KEY")
+            .ok()
+            .and_then(|k| hex_decode(&k))
+            .unwrap_or_else(|| Uuid::new_v4().as_bytes().to_vec());
         Self {
             method: std::env::var("AUTH_METHOD").unwrap_or_else(|_| "password".to_string()),
             ldap_url: std::env::var("AUTH_LDAP_URL").ok(),
@@ -134,17 +169,27 @@ impl AuthShim {
             api_keys: HashMap::new(),
             failed_attempts: HashMap::new(),
             locked_users: HashMap::new(),
-            token_counter: 0,
+            hmac_key,
             shutdown_tx: None,
         }
     }
 
-    /// Generate a new token for a user.
-    pub fn create_token(&mut self, user: &str, role: Role, source_ip: Option<&str>) -> AuthToken {
-        self.token_counter += 1;
+    fn hmac_hash(&self, data: &[u8]) -> String {
+        let mut mac =
+            HmacSha256::new_from_slice(&self.hmac_key).expect("HMAC can take key of any size");
+        mac.update(data);
+        hex_encode(&mac.finalize().into_bytes())
+    }
+
+    /// Generate a new token for a user. Returns the token value (`{id}.{secret}`).
+    pub fn create_token(&mut self, user: &str, role: Role, source_ip: Option<&str>) -> String {
+        let id = Uuid::new_v4().to_string();
+        let secret = Uuid::new_v4().to_string();
+        let token_value = format!("{}.{}", id, secret);
         let now = chrono::Utc::now();
-        let token = AuthToken {
-            token_id: format!("tok-{}", self.token_counter),
+        let token_hash = self.hmac_hash(token_value.as_bytes());
+        let stored = StoredToken {
+            token_hash,
             user: user.to_string(),
             role,
             issued_at: now.to_rfc3339(),
@@ -152,13 +197,26 @@ impl AuthShim {
                 .to_rfc3339(),
             source_ip: source_ip.map(|s| s.to_string()),
         };
-        self.tokens.insert(token.token_id.clone(), token.clone());
-        token
+        self.tokens.insert(id, stored);
+        token_value
     }
 
     /// Validate a token. Returns AuthResult with the outcome.
-    pub fn validate_token(&mut self, token_id: &str) -> AuthResult {
-        let token = match self.tokens.get(token_id) {
+    pub fn validate_token(&mut self, token: &str) -> AuthResult {
+        let (id, _rest) = match token.split_once('.') {
+            Some(parts) => parts,
+            None => {
+                self.auth_failure += 1;
+                return AuthResult {
+                    authenticated: false,
+                    user: None,
+                    role: None,
+                    reason: Some("Invalid token format".to_string()),
+                };
+            }
+        };
+
+        let stored = match self.tokens.get(id) {
             Some(t) => t.clone(),
             None => {
                 self.auth_failure += 1;
@@ -171,8 +229,43 @@ impl AuthShim {
             }
         };
 
+        let expected_hash = match hex_decode(&stored.token_hash) {
+            Some(h) => h,
+            None => {
+                self.auth_failure += 1;
+                return AuthResult {
+                    authenticated: false,
+                    user: None,
+                    role: None,
+                    reason: Some("Internal error".to_string()),
+                };
+            }
+        };
+        let mut mac = match HmacSha256::new_from_slice(&self.hmac_key) {
+            Ok(m) => m,
+            Err(_) => {
+                self.auth_failure += 1;
+                return AuthResult {
+                    authenticated: false,
+                    user: None,
+                    role: None,
+                    reason: Some("Internal error".to_string()),
+                };
+            }
+        };
+        mac.update(token.as_bytes());
+        if mac.verify_slice(&expected_hash).is_err() {
+            self.auth_failure += 1;
+            return AuthResult {
+                authenticated: false,
+                user: None,
+                role: None,
+                reason: Some("Token verification failed".to_string()),
+            };
+        }
+
         let now = chrono::Utc::now();
-        let expires = token
+        let expires = stored
             .expires_at
             .parse::<chrono::DateTime<chrono::Utc>>()
             .unwrap_or(now);
@@ -180,17 +273,17 @@ impl AuthShim {
             self.auth_failure += 1;
             return AuthResult {
                 authenticated: false,
-                user: Some(token.user.clone()),
+                user: Some(stored.user.clone()),
                 role: None,
                 reason: Some("Token expired".to_string()),
             };
         }
 
-        if token.role == Role::Denied {
+        if stored.role == Role::Denied {
             self.auth_failure += 1;
             return AuthResult {
                 authenticated: false,
-                user: Some(token.user),
+                user: Some(stored.user),
                 role: Some(Role::Denied),
                 reason: Some("User role is denied".to_string()),
             };
@@ -199,13 +292,13 @@ impl AuthShim {
         self.auth_success += 1;
         AuthResult {
             authenticated: true,
-            user: Some(token.user),
-            role: Some(token.role),
+            user: Some(stored.user),
+            role: Some(stored.role),
             reason: None,
         }
     }
 
-    /// Revoke a token.
+    /// Revoke a token by its ID prefix.
     pub fn revoke_token(&mut self, token_id: &str) -> bool {
         self.tokens.remove(token_id).is_some()
     }
@@ -215,8 +308,13 @@ impl AuthShim {
         self.api_keys.insert(key.key_id.clone(), key);
     }
 
-    /// Validate an API key by ID.
-    pub fn validate_api_key(&mut self, key_id: &str) -> AuthResult {
+    /// Hash an API key for storage using HMAC-SHA256.
+    pub fn hash_api_key(&self, key: &str) -> String {
+        self.hmac_hash(key.as_bytes())
+    }
+
+    /// Validate an API key by ID and provided key value using constant-time HMAC comparison.
+    pub fn validate_api_key(&mut self, key_id: &str, provided_key: &str) -> AuthResult {
         let key = match self.api_keys.get(key_id) {
             Some(k) => k.clone(),
             None => {
@@ -240,6 +338,41 @@ impl AuthShim {
             };
         }
 
+        let expected_hash = match hex_decode(&key.key_hash) {
+            Some(h) => h,
+            None => {
+                self.auth_failure += 1;
+                return AuthResult {
+                    authenticated: false,
+                    user: None,
+                    role: None,
+                    reason: Some("Invalid key hash".to_string()),
+                };
+            }
+        };
+        let mut mac = match HmacSha256::new_from_slice(&self.hmac_key) {
+            Ok(m) => m,
+            Err(_) => {
+                self.auth_failure += 1;
+                return AuthResult {
+                    authenticated: false,
+                    user: None,
+                    role: None,
+                    reason: Some("Internal error".to_string()),
+                };
+            }
+        };
+        mac.update(provided_key.as_bytes());
+        if mac.verify_slice(&expected_hash).is_err() {
+            self.auth_failure += 1;
+            return AuthResult {
+                authenticated: false,
+                user: None,
+                role: None,
+                reason: Some("API key verification failed".to_string()),
+            };
+        }
+
         self.auth_success += 1;
         AuthResult {
             authenticated: true,
@@ -257,6 +390,39 @@ impl AuthShim {
         } else {
             false
         }
+    }
+
+    /// Hash a password with a random salt using HMAC-SHA256.
+    /// Returns `{salt_hex}:{hash_hex}`.
+    pub fn hash_password(password: &str) -> String {
+        let salt = Uuid::new_v4().as_bytes().to_vec();
+        let mut mac =
+            HmacSha256::new_from_slice(&salt).expect("HMAC can take key of any size");
+        mac.update(password.as_bytes());
+        let result = mac.finalize();
+        format!("{}:{}", hex_encode(&salt), hex_encode(&result.into_bytes()))
+    }
+
+    /// Verify a password against a stored hash using constant-time comparison.
+    pub fn verify_password(password: &str, stored: &str) -> bool {
+        let parts: Vec<&str> = stored.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let salt = match hex_decode(parts[0]) {
+            Some(s) => s,
+            None => return false,
+        };
+        let expected_bytes = match hex_decode(parts[1]) {
+            Some(h) => h,
+            None => return false,
+        };
+        let mut mac = match HmacSha256::new_from_slice(&salt) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        mac.update(password.as_bytes());
+        mac.verify_slice(&expected_bytes).is_ok()
     }
 
     /// Record a failed login attempt for a user. Returns true if user is now locked out.
@@ -290,12 +456,12 @@ impl AuthShim {
 
     /// Check role permissions.
     pub fn check_permission(&self, role: &Role, required: &Role) -> bool {
-        match (role, required) {
-            (Role::Admin, _) => true,
-            (Role::ReadWrite, Role::ReadWrite | Role::ReadOnly) => true,
-            (Role::ReadOnly, Role::ReadOnly) => true,
-            _ => false,
-        }
+        matches!(
+            (role, required),
+            (Role::Admin, _)
+                | (Role::ReadWrite, Role::ReadWrite | Role::ReadOnly)
+                | (Role::ReadOnly, Role::ReadOnly)
+        )
     }
 
     /// Get failed attempt count for a user.
@@ -371,9 +537,9 @@ mod tests {
     #[test]
     fn test_create_and_validate_token() {
         let mut shim = AuthShim::new();
-        let token = shim.create_token("alice", Role::Admin, Some("10.0.0.1"));
+        let token_value = shim.create_token("alice", Role::Admin, Some("10.0.0.1"));
 
-        let result = shim.validate_token(&token.token_id);
+        let result = shim.validate_token(&token_value);
         assert!(result.authenticated);
         assert_eq!(result.user.as_deref(), Some("alice"));
         assert_eq!(result.role, Some(Role::Admin));
@@ -389,14 +555,35 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_token_wrong_id() {
+        let mut shim = AuthShim::new();
+        let fake_token = format!("{}.{}", Uuid::new_v4(), Uuid::new_v4());
+        let result = shim.validate_token(&fake_token);
+        assert!(!result.authenticated);
+        assert_eq!(shim.auth_failure, 1);
+    }
+
+    #[test]
+    fn test_validate_token_tampered() {
+        let mut shim = AuthShim::new();
+        let token_value = shim.create_token("alice", Role::Admin, None);
+        let parts: Vec<&str> = token_value.split('.').collect();
+        let tampered = format!("{}.tampered_{}", parts[0], parts[1]);
+        let result = shim.validate_token(&tampered);
+        assert!(!result.authenticated);
+        assert!(result.reason.as_deref().unwrap().contains("verification failed"));
+    }
+
+    #[test]
     fn test_validate_expired_token() {
         let mut shim = AuthShim::new();
-        let mut token = shim.create_token("bob", Role::ReadWrite, None);
-        token.expires_at = "2020-01-01T00:00:00Z".to_string();
-        let token_id = token.token_id.clone();
-        shim.tokens.insert(token_id.clone(), token);
+        let token_value = shim.create_token("bob", Role::ReadWrite, None);
+        let token_id = token_value.split('.').next().unwrap().to_string();
+        if let Some(stored) = shim.tokens.get_mut(&token_id) {
+            stored.expires_at = "2020-01-01T00:00:00Z".to_string();
+        }
 
-        let result = shim.validate_token(&token_id);
+        let result = shim.validate_token(&token_value);
         assert!(!result.authenticated);
         assert!(result.reason.as_ref().unwrap().contains("expired"));
     }
@@ -404,9 +591,9 @@ mod tests {
     #[test]
     fn test_validate_denied_role() {
         let mut shim = AuthShim::new();
-        let token = shim.create_token("charlie", Role::Denied, None);
+        let token_value = shim.create_token("charlie", Role::Denied, None);
 
-        let result = shim.validate_token(&token.token_id);
+        let result = shim.validate_token(&token_value);
         assert!(!result.authenticated);
         assert!(result.reason.as_ref().unwrap().contains("denied"));
     }
@@ -414,20 +601,23 @@ mod tests {
     #[test]
     fn test_revoke_token() {
         let mut shim = AuthShim::new();
-        let token = shim.create_token("alice", Role::Admin, None);
-        assert!(shim.revoke_token(&token.token_id));
+        let token_value = shim.create_token("alice", Role::Admin, None);
+        let token_id = token_value.split('.').next().unwrap().to_string();
+        assert!(shim.revoke_token(&token_id));
 
-        let result = shim.validate_token(&token.token_id);
+        let result = shim.validate_token(&token_value);
         assert!(!result.authenticated);
     }
 
     #[test]
     fn test_register_and_validate_api_key() {
         let mut shim = AuthShim::new();
+        let raw_key = "my-secret-api-key";
+        let key_hash = shim.hash_api_key(raw_key);
         let key = ApiKey {
             key_id: "key-1".to_string(),
             name: "service-a".to_string(),
-            key_hash: "hash123".to_string(),
+            key_hash,
             role: Role::ReadWrite,
             created_at: chrono::Utc::now().to_rfc3339(),
             last_used: None,
@@ -435,18 +625,40 @@ mod tests {
         };
         shim.register_api_key(key);
 
-        let result = shim.validate_api_key("key-1");
+        let result = shim.validate_api_key("key-1", raw_key);
         assert!(result.authenticated);
         assert_eq!(result.role, Some(Role::ReadWrite));
     }
 
     #[test]
+    fn test_validate_api_key_wrong_key() {
+        let mut shim = AuthShim::new();
+        let key_hash = shim.hash_api_key("correct-key");
+        let key = ApiKey {
+            key_id: "key-wrong".to_string(),
+            name: "service-a".to_string(),
+            key_hash,
+            role: Role::ReadWrite,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            last_used: None,
+            revoked: false,
+        };
+        shim.register_api_key(key);
+
+        let result = shim.validate_api_key("key-wrong", "wrong-key");
+        assert!(!result.authenticated);
+        assert!(result.reason.as_ref().unwrap().contains("verification failed"));
+    }
+
+    #[test]
     fn test_revoked_api_key() {
         let mut shim = AuthShim::new();
+        let raw_key = "my-secret-api-key";
+        let key_hash = shim.hash_api_key(raw_key);
         let key = ApiKey {
             key_id: "key-2".to_string(),
             name: "service-b".to_string(),
-            key_hash: "hash456".to_string(),
+            key_hash,
             role: Role::Admin,
             created_at: chrono::Utc::now().to_rfc3339(),
             last_used: None,
@@ -455,7 +667,7 @@ mod tests {
         shim.register_api_key(key);
         shim.revoke_api_key("key-2");
 
-        let result = shim.validate_api_key("key-2");
+        let result = shim.validate_api_key("key-2", raw_key);
         assert!(!result.authenticated);
     }
 
@@ -509,6 +721,36 @@ mod tests {
         assert!(!shim.check_permission(&Role::ReadOnly, &Role::Admin));
         assert!(!shim.check_permission(&Role::ReadOnly, &Role::ReadWrite));
         assert!(shim.check_permission(&Role::ReadOnly, &Role::ReadOnly));
+    }
+
+    #[test]
+    fn test_hash_and_verify_password() {
+        let password = "super_secret_123";
+        let stored = AuthShim::hash_password(password);
+        assert!(AuthShim::verify_password(password, &stored));
+        assert!(!AuthShim::verify_password("wrong_password", &stored));
+    }
+
+    #[test]
+    fn test_password_hash_format() {
+        let stored = AuthShim::hash_password("test");
+        let parts: Vec<&str> = stored.split(':').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].len(), 32);
+        assert_eq!(parts[1].len(), 64);
+    }
+
+    #[test]
+    fn test_password_hash_different_each_time() {
+        let h1 = AuthShim::hash_password("same_password");
+        let h2 = AuthShim::hash_password("same_password");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_verify_password_invalid_format() {
+        assert!(!AuthShim::verify_password("pw", "invalid"));
+        assert!(!AuthShim::verify_password("pw", "zz:zz"));
     }
 
     #[tokio::test]

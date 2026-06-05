@@ -22,7 +22,11 @@
 //! BACKUP_TIMEOUT_SECS  Timeout for dump command (default: 3600)
 //! ```
 
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::fs;
 use tokio::process::Command;
@@ -51,6 +55,79 @@ pub struct BackupEntry {
     pub checksum: String,
 }
 
+/// Shared backup state between parent and spawned task.
+pub struct BackupState {
+    pub backup_success: u64,
+    pub backup_failure: u64,
+    pub backups_retained: u64,
+    pub backups_expired: u64,
+    pub last_backup: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_backup_size: u64,
+    pub backup_history: Vec<BackupEntry>,
+}
+
+impl BackupState {
+    fn new() -> Self {
+        Self {
+            backup_success: 0,
+            backup_failure: 0,
+            backups_retained: 0,
+            backups_expired: 0,
+            last_backup: None,
+            last_backup_size: 0,
+            backup_history: Vec::new(),
+        }
+    }
+
+    fn record_backup(&mut self, filename: String, size_bytes: u64, checksum: String) {
+        let entry = BackupEntry {
+            filename,
+            created_at: chrono::Utc::now(),
+            size_bytes,
+            checksum,
+        };
+        self.backup_history.push(entry);
+        self.backup_success += 1;
+        self.last_backup = Some(chrono::Utc::now());
+        self.last_backup_size = size_bytes;
+        self.backups_retained = self.backup_history.len() as u64;
+    }
+
+    fn record_failure(&mut self) {
+        self.backup_failure += 1;
+    }
+
+    fn cleanup_retention(&mut self, retention_days: u32) -> Vec<String> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+        let before = self.backup_history.len();
+
+        let expired: Vec<String> = self
+            .backup_history
+            .iter()
+            .filter(|e| e.created_at < cutoff)
+            .map(|e| e.filename.clone())
+            .collect();
+
+        self.backup_history.retain(|e| e.created_at >= cutoff);
+        self.backups_expired += before as u64 - self.backup_history.len() as u64;
+        self.backups_retained = self.backup_history.len() as u64;
+
+        expired
+    }
+
+    fn history_summary(&self) -> (usize, u64, u64) {
+        let count = self.backup_history.len();
+        let total_bytes: u64 = self.backup_history.iter().map(|e| e.size_bytes).sum();
+        let oldest = self
+            .backup_history
+            .first()
+            .map(|e| e.created_at)
+            .map(|t| (chrono::Utc::now() - t).num_days() as u64)
+            .unwrap_or(0);
+        (count, total_bytes, oldest)
+    }
+}
+
 /// Backup shim for automated database backups.
 pub struct BackupShim {
     schedule: String,
@@ -66,13 +143,7 @@ pub struct BackupShim {
     db_password: String,
     compression: String,
     timeout_secs: u64,
-    backup_success: u64,
-    backup_failure: u64,
-    backups_retained: u64,
-    backups_expired: u64,
-    last_backup: Option<chrono::DateTime<chrono::Utc>>,
-    last_backup_size: u64,
-    backup_history: Vec<BackupEntry>,
+    state: Arc<Mutex<BackupState>>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
 
@@ -102,13 +173,7 @@ impl BackupShim {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3600),
-            backup_success: 0,
-            backup_failure: 0,
-            backups_retained: 0,
-            backups_expired: 0,
-            last_backup: None,
-            last_backup_size: 0,
-            backup_history: Vec::new(),
+            state: Arc::new(Mutex::new(BackupState::new())),
             shutdown_tx: None,
         }
     }
@@ -123,58 +188,45 @@ impl BackupShim {
         format!("{}_{}.{}", self.database, timestamp, ext)
     }
 
-    /// Compute FNV-1a checksum of data bytes.
+    /// Compute SHA-256 checksum of data bytes.
     pub fn compute_checksum(data: &[u8]) -> String {
-        let mut hash: u64 = 0xcbf29ce484222325;
-        for &byte in data {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        format!("{:016x}", hash)
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let result = hasher.finalize();
+        result.iter().map(|b| format!("{:02x}", b)).collect()
     }
 
-    /// Validate a backup entry: checks that checksum matches content.
-    pub fn validate_backup(&self, entry: &BackupEntry) -> bool {
-        entry.size_bytes > 0 && !entry.checksum.is_empty() && entry.checksum.len() >= 16
+    /// Validate a backup entry: checks size, checksum format, and verifies checksum against data.
+    pub fn validate_backup(&self, entry: &BackupEntry, data: &[u8]) -> bool {
+        if entry.size_bytes == 0 || entry.checksum.is_empty() || entry.checksum.len() < 16 {
+            return false;
+        }
+        let computed = Self::compute_checksum(data);
+        computed == entry.checksum && data.len() as u64 == entry.size_bytes
     }
 
     /// Clean up expired backups based on retention policy.
-    pub fn cleanup_retention(&mut self) -> Vec<String> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(self.retention_days as i64);
-        let before = self.backup_history.len();
-
-        let expired: Vec<String> = self
-            .backup_history
-            .iter()
-            .filter(|e| e.created_at < cutoff)
-            .map(|e| e.filename.clone())
-            .collect();
-
-        self.backup_history.retain(|e| e.created_at >= cutoff);
-        self.backups_expired += before as u64 - self.backup_history.len() as u64;
-        self.backups_retained = self.backup_history.len() as u64;
-
-        expired
+    pub fn cleanup_retention(&self) -> Vec<String> {
+        let mut state = self.state.lock().unwrap();
+        state.cleanup_retention(self.retention_days)
     }
 
     /// Record a successful backup in history.
-    pub fn record_backup(&mut self, filename: String, size_bytes: u64, checksum: String) {
-        let entry = BackupEntry {
-            filename,
-            created_at: chrono::Utc::now(),
-            size_bytes,
-            checksum,
-        };
-        self.backup_history.push(entry);
-        self.backup_success += 1;
-        self.last_backup = Some(chrono::Utc::now());
-        self.last_backup_size = size_bytes;
-        self.backups_retained = self.backup_history.len() as u64;
+    pub fn record_backup(&self, filename: String, size_bytes: u64, checksum: String) {
+        let mut state = self.state.lock().unwrap();
+        state.record_backup(filename, size_bytes, checksum);
     }
 
     /// Record a failed backup attempt.
-    pub fn record_failure(&mut self) {
-        self.backup_failure += 1;
+    pub fn record_failure(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.record_failure();
+    }
+
+    /// Get summary of backup history.
+    pub fn history_summary(&self) -> (usize, u64, u64) {
+        let state = self.state.lock().unwrap();
+        state.history_summary()
     }
 
     async fn dump_postgres(&self, output: &str) -> anyhow::Result<()> {
@@ -232,8 +284,7 @@ impl BackupShim {
         Ok(())
     }
 
-    async fn backup(&mut self) -> anyhow::Result<()> {
-        let _started_at = chrono::Utc::now();
+    async fn backup(&self) -> anyhow::Result<()> {
         let filename = self.backup_filename();
         let output_path = format!("{}/{}", self.backup_path, filename);
 
@@ -244,7 +295,26 @@ impl BackupShim {
             "mariadb" | "mysql" => self.dump_mariadb(&output_path).await,
             "redis" => {
                 Command::new("redis-cli").args(["BGSAVE"]).output().await?;
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+                let deadline = tokio::time::Instant::now()
+                    + tokio::time::Duration::from_secs(self.timeout_secs);
+                loop {
+                    let output = Command::new("redis-cli")
+                        .args(["INFO", "persistence"])
+                        .output()
+                        .await?;
+                    let info = String::from_utf8_lossy(&output.stdout);
+                    if info.contains("rdb_bgsave_in_progress:0") {
+                        break;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        anyhow::bail!(
+                            "Redis BGSAVE timed out after {} seconds",
+                            self.timeout_secs
+                        );
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
                 fs::copy("/data/dump.rdb", &output_path).await?;
                 Ok(())
             }
@@ -261,32 +331,23 @@ impl BackupShim {
 
         match result {
             Ok(()) => {
-                let data = fs::read(&output_path).await.unwrap_or_default();
+                let data = fs::read(&output_path).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to read backup file {}: {}", output_path, e)
+                })?;
                 let size = data.len() as u64;
                 let checksum = Self::compute_checksum(&data);
-                self.record_backup(filename.clone(), size, checksum);
+                let mut state = self.state.lock().unwrap();
+                state.record_backup(filename.clone(), size, checksum);
                 tracing::info!("Backup completed: {} ({} bytes)", filename, size);
             }
             Err(e) => {
-                self.record_failure();
+                let mut state = self.state.lock().unwrap();
+                state.record_failure();
                 tracing::error!("Backup failed: {}", e);
             }
         }
 
         Ok(())
-    }
-
-    /// Get summary of backup history.
-    pub fn history_summary(&self) -> (usize, u64, u64) {
-        let count = self.backup_history.len();
-        let total_bytes: u64 = self.backup_history.iter().map(|e| e.size_bytes).sum();
-        let oldest = self
-            .backup_history
-            .first()
-            .map(|e| e.created_at)
-            .map(|t| (chrono::Utc::now() - t).num_days() as u64)
-            .unwrap_or(0);
-        (count, total_bytes, oldest)
     }
 }
 
@@ -327,6 +388,7 @@ impl Capability for BackupShim {
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
+        let state = Arc::clone(&self.state);
         let db_type = self.db_type.clone();
         let database = self.database.clone();
         let db_host = self.db_host.clone();
@@ -335,45 +397,49 @@ impl Capability for BackupShim {
         let db_password = self.db_password.clone();
         let backup_path = self.backup_path.clone();
         let compression = self.compression.clone();
+        let timeout_secs = self.timeout_secs;
+        let schedule_str = self.schedule.clone();
+
+        let schedule = cron::Schedule::from_str(&schedule_str)
+            .unwrap_or_else(|_| cron::Schedule::from_str("0 2 * * *").unwrap());
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-
-            let mut shim = BackupShim {
-                schedule: String::new(),
-                storage: String::new(),
-                backup_path,
-                prefix: String::new(),
-                retention_days: 30,
-                database,
-                db_type,
-                db_host,
-                db_port,
-                db_user,
-                db_password,
-                compression,
-                timeout_secs: 3600,
-                backup_success: 0,
-                backup_failure: 0,
-                backups_retained: 0,
-                backups_expired: 0,
-                last_backup: None,
-                last_backup_size: 0,
-                backup_history: Vec::new(),
-                shutdown_tx: None,
-            };
-
             loop {
+                let next_wake = schedule
+                    .upcoming(chrono::Utc)
+                    .next()
+                    .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::hours(1));
+                let now = chrono::Utc::now();
+                let sleep_secs = (next_wake - now).num_seconds().max(0) as u64;
+
                 tokio::select! {
-                    _ = interval.tick() => {
-                        if let Err(e) = shim.backup().await {
-                            tracing::error!("Backup failed: {}", e);
-                        }
-                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)) => {}
                     _ = shutdown_rx.changed() => {
                         tracing::info!("Backup shim loop shutting down");
-                        break;
+                        return;
                     }
+                }
+
+                let shim = BackupShim {
+                    schedule: schedule_str.clone(),
+                    storage: String::new(),
+                    backup_path: backup_path.clone(),
+                    prefix: String::new(),
+                    retention_days: 30,
+                    database: database.clone(),
+                    db_type: db_type.clone(),
+                    db_host: db_host.clone(),
+                    db_port,
+                    db_user: db_user.clone(),
+                    db_password: db_password.clone(),
+                    compression: compression.clone(),
+                    timeout_secs,
+                    state: Arc::clone(&state),
+                    shutdown_tx: None,
+                };
+
+                if let Err(e) = shim.backup().await {
+                    tracing::error!("Backup failed: {}", e);
                 }
             }
         });
@@ -391,15 +457,16 @@ impl Capability for BackupShim {
     }
 
     fn metrics(&self) -> Vec<Metric> {
+        let state = self.state.lock().unwrap();
         let mut metrics = vec![
-            Metric::new("backup_success_total", self.backup_success as f64),
-            Metric::new("backup_failure_total", self.backup_failure as f64),
-            Metric::new("backup_size_bytes", self.last_backup_size as f64),
-            Metric::new("backup_retained_total", self.backups_retained as f64),
-            Metric::new("backup_expired_total", self.backups_expired as f64),
+            Metric::new("backup_success_total", state.backup_success as f64),
+            Metric::new("backup_failure_total", state.backup_failure as f64),
+            Metric::new("backup_size_bytes", state.last_backup_size as f64),
+            Metric::new("backup_retained_total", state.backups_retained as f64),
+            Metric::new("backup_expired_total", state.backups_expired as f64),
         ];
 
-        if let Some(last) = &self.last_backup {
+        if let Some(last) = &state.last_backup {
             metrics.push(Metric::new(
                 "backup_last_success_timestamp",
                 last.timestamp() as f64,
@@ -454,8 +521,7 @@ mod tests {
         let h1 = BackupShim::compute_checksum(data);
         let h2 = BackupShim::compute_checksum(data);
         assert_eq!(h1, h2);
-        assert!(!h1.is_empty());
-        assert!(h1.len() >= 16);
+        assert_eq!(h1.len(), 64);
     }
 
     #[test]
@@ -466,15 +532,52 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_checksum_sha256() {
+        let data = b"";
+        let hash = BackupShim::compute_checksum(data);
+        assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
     fn test_validate_backup_valid() {
         let shim = BackupShim::new();
+        let data = b"test backup content here";
+        let checksum = BackupShim::compute_checksum(data);
         let entry = BackupEntry {
             filename: "test.sql.gz".to_string(),
             created_at: chrono::Utc::now(),
-            size_bytes: 1024,
-            checksum: "abc123def4567890".to_string(),
+            size_bytes: data.len() as u64,
+            checksum,
         };
-        assert!(shim.validate_backup(&entry));
+        assert!(shim.validate_backup(&entry, data));
+    }
+
+    #[test]
+    fn test_validate_backup_wrong_checksum() {
+        let shim = BackupShim::new();
+        let data = b"test backup content";
+        let entry = BackupEntry {
+            filename: "test.sql.gz".to_string(),
+            created_at: chrono::Utc::now(),
+            size_bytes: data.len() as u64,
+            checksum: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+        };
+        assert!(!shim.validate_backup(&entry, data));
+    }
+
+    #[test]
+    fn test_validate_backup_wrong_size() {
+        let shim = BackupShim::new();
+        let data = b"test";
+        let checksum = BackupShim::compute_checksum(data);
+        let entry = BackupEntry {
+            filename: "test.sql.gz".to_string(),
+            created_at: chrono::Utc::now(),
+            size_bytes: 999,
+            checksum,
+        };
+        assert!(!shim.validate_backup(&entry, data));
     }
 
     #[test]
@@ -484,9 +587,9 @@ mod tests {
             filename: "test.sql.gz".to_string(),
             created_at: chrono::Utc::now(),
             size_bytes: 0,
-            checksum: "abc123def456".to_string(),
+            checksum: "abc123def4567890".to_string(),
         };
-        assert!(!shim.validate_backup(&entry));
+        assert!(!shim.validate_backup(&entry, b""));
     }
 
     #[test]
@@ -498,34 +601,37 @@ mod tests {
             size_bytes: 1024,
             checksum: String::new(),
         };
-        assert!(!shim.validate_backup(&entry));
+        assert!(!shim.validate_backup(&entry, b"data"));
     }
 
     #[test]
     fn test_record_backup_and_history() {
-        let mut shim = BackupShim::new();
+        let shim = BackupShim::new();
         shim.record_backup("backup1.sql.gz".to_string(), 500, "checksum1".to_string());
         shim.record_backup("backup2.sql.gz".to_string(), 750, "checksum2".to_string());
 
-        assert_eq!(shim.backup_success, 2);
-        assert_eq!(shim.backup_history.len(), 2);
-        assert_eq!(shim.last_backup_size, 750);
-        assert_eq!(shim.backups_retained, 2);
-        assert!(shim.last_backup.is_some());
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.backup_success, 2);
+        assert_eq!(state.backup_history.len(), 2);
+        assert_eq!(state.last_backup_size, 750);
+        assert_eq!(state.backups_retained, 2);
+        assert!(state.last_backup.is_some());
     }
 
     #[test]
     fn test_record_failure() {
-        let mut shim = BackupShim::new();
+        let shim = BackupShim::new();
         shim.record_failure();
         shim.record_failure();
         shim.record_failure();
-        assert_eq!(shim.backup_failure, 3);
+
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.backup_failure, 3);
     }
 
     #[test]
     fn test_cleanup_retention_no_expired() {
-        let mut shim = BackupShim {
+        let shim = BackupShim {
             retention_days: 30,
             ..BackupShim::new()
         };
@@ -533,44 +639,50 @@ mod tests {
 
         let expired = shim.cleanup_retention();
         assert!(expired.is_empty());
-        assert_eq!(shim.backups_retained, 1);
-        assert_eq!(shim.backups_expired, 0);
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.backups_retained, 1);
+        assert_eq!(state.backups_expired, 0);
     }
 
     #[test]
     fn test_cleanup_retention_removes_old() {
-        let mut shim = BackupShim {
+        let shim = BackupShim {
             retention_days: 7,
             ..BackupShim::new()
         };
 
-        let old_entry = BackupEntry {
-            filename: "old.sql.gz".to_string(),
-            created_at: chrono::Utc::now() - chrono::Duration::days(30),
-            size_bytes: 100,
-            checksum: "old_ck".to_string(),
-        };
-        let new_entry = BackupEntry {
-            filename: "new.sql.gz".to_string(),
-            created_at: chrono::Utc::now() - chrono::Duration::days(1),
-            size_bytes: 200,
-            checksum: "new_ck".to_string(),
-        };
-        shim.backup_history.push(old_entry);
-        shim.backup_history.push(new_entry);
-        shim.backups_retained = 2;
+        {
+            let mut state = shim.state.lock().unwrap();
+            let old_entry = BackupEntry {
+                filename: "old.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::days(30),
+                size_bytes: 100,
+                checksum: "old_ck".to_string(),
+            };
+            let new_entry = BackupEntry {
+                filename: "new.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::days(1),
+                size_bytes: 200,
+                checksum: "new_ck".to_string(),
+            };
+            state.backup_history.push(old_entry);
+            state.backup_history.push(new_entry);
+            state.backups_retained = 2;
+        }
 
         let expired = shim.cleanup_retention();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0], "old.sql.gz");
-        assert_eq!(shim.backup_history.len(), 1);
-        assert_eq!(shim.backups_expired, 1);
-        assert_eq!(shim.backups_retained, 1);
+
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.backup_history.len(), 1);
+        assert_eq!(state.backups_expired, 1);
+        assert_eq!(state.backups_retained, 1);
     }
 
     #[test]
     fn test_history_summary() {
-        let mut shim = BackupShim::new();
+        let shim = BackupShim::new();
         shim.record_backup("a.sql.gz".to_string(), 100, "a".to_string());
         shim.record_backup("b.sql.gz".to_string(), 200, "b".to_string());
 
@@ -582,15 +694,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics() {
-        let shim = BackupShim {
-            backup_success: 10,
-            backup_failure: 2,
-            backups_retained: 8,
-            backups_expired: 3,
-            last_backup_size: 5_000_000,
-            last_backup: Some(chrono::Utc::now()),
-            ..BackupShim::new()
-        };
+        let shim = BackupShim::new();
+        {
+            let mut state = shim.state.lock().unwrap();
+            state.backup_success = 10;
+            state.backup_failure = 2;
+            state.backups_retained = 8;
+            state.backups_expired = 3;
+            state.last_backup_size = 5_000_000;
+            state.last_backup = Some(chrono::Utc::now());
+        }
         let metrics = shim.metrics();
         assert_eq!(metrics.len(), 6);
         assert_eq!(metrics[0].name, "backup_success_total");

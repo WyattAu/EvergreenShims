@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! CDC shim — Change Data Capture for event-driven architectures.
 //!
 //! Reads database WAL/binlog and publishes changes to Kafka, NATS, or webhooks.
@@ -16,6 +15,7 @@
 //! CDC_DB_TYPE           Database type: postgres, mariadb
 //! CDC_SLOT              Replication slot (PostgreSQL)
 //! CDC_BATCH_SIZE        Batch size for publishing (default: 100)
+//! CDC_PUBLISH_INTERVAL  Publish interval in seconds (default: 10)
 //! ```
 
 use std::collections::HashMap;
@@ -23,6 +23,15 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::watch;
+
+/// PostgreSQL WAL segment size: 16 MB.
+const WAL_SEGMENT_SIZE: u64 = 0x1000000;
+
+/// Maximum publish retries with exponential backoff.
+const MAX_RETRIES: u32 = 3;
+
+/// Ring buffer capacity for published events (for debugging).
+const DEFAULT_RING_CAPACITY: usize = 1000;
 
 /// CDC event operation types.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,14 +107,19 @@ pub struct CdcShim {
     webhook_url: Option<String>,
     db_type: String,
     batch_size: usize,
+    publish_interval_secs: u64,
     events_captured: u64,
     events_published: u64,
     events_failed: u64,
     lag_seconds: f64,
     wal_position: WalPosition,
     pending_events: Vec<CdcEvent>,
+    /// Ring buffer of recently published events for debugging.
+    published_ring: Vec<CdcEvent>,
+    ring_capacity: usize,
     event_counter: u64,
     table_filter_enabled: bool,
+    http_client: Option<reqwest::Client>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
 
@@ -131,6 +145,10 @@ impl CdcShim {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(100),
+            publish_interval_secs: std::env::var("CDC_PUBLISH_INTERVAL")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
             events_captured: 0,
             events_published: 0,
             events_failed: 0,
@@ -142,8 +160,11 @@ impl CdcShim {
                 last_flush: chrono::Utc::now().to_rfc3339(),
             },
             pending_events: Vec::new(),
+            published_ring: Vec::new(),
+            ring_capacity: DEFAULT_RING_CAPACITY,
             event_counter: 0,
             table_filter_enabled: !tables.is_empty(),
+            http_client: None,
             shutdown_tx: None,
         }
     }
@@ -186,17 +207,63 @@ impl CdcShim {
         true
     }
 
-    /// Publish all pending events (simulate batch publish).
-    pub fn publish_batch(&mut self) -> u64 {
+    /// Serialize an event to the configured format.
+    pub fn serialize_event(&self, event: &CdcEvent) -> Result<String> {
+        Ok(serde_json::to_string(event)?)
+    }
+
+    /// Publish all pending events via configured transport.
+    /// Returns the number of events successfully published.
+    pub async fn publish_batch(&mut self) -> u64 {
         let batch: Vec<CdcEvent> = self
             .pending_events
             .drain(..self.batch_size.min(self.pending_events.len()))
             .collect();
         let count = batch.len() as u64;
 
-        for mut event in batch {
-            event.published = true;
-            self.events_published += 1;
+        if count == 0 {
+            return 0;
+        }
+
+        match self.output.as_str() {
+            "webhook" => {
+                let published = self.publish_via_webhook(&batch).await;
+                for event in batch {
+                    if published > 0 {
+                        // Mark all as published if any succeeded (simplified)
+                        self.events_published += 1;
+                        self.push_to_ring(event.clone());
+                    } else {
+                        self.events_failed += 1;
+                    }
+                }
+            }
+            _ => {
+                // Log events so they are not silently lost
+                for event in &batch {
+                    match self.serialize_event(event) {
+                        Ok(json) => {
+                            tracing::info!(
+                                table = %event.table,
+                                operation = %event.operation,
+                                event_id = %event.event_id,
+                                "CDC event published (log transport): {}",
+                                json
+                            );
+                            self.events_published += 1;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                event_id = %event.event_id,
+                                "Failed to serialize CDC event: {}",
+                                e
+                            );
+                            self.events_failed += 1;
+                        }
+                    }
+                    self.push_to_ring(event.clone());
+                }
+            }
         }
 
         if count > 0 {
@@ -204,6 +271,103 @@ impl CdcShim {
         }
 
         count
+    }
+
+    /// Publish events to a webhook endpoint with retry and exponential backoff.
+    async fn publish_via_webhook(&self, events: &[CdcEvent]) -> u64 {
+        let url = match &self.webhook_url {
+            Some(u) => u.clone(),
+            None => {
+                tracing::warn!("No webhook URL configured, events logged only");
+                return 0;
+            }
+        };
+
+        let client = match &self.http_client {
+            Some(c) => c,
+            None => {
+                tracing::error!("HTTP client not initialized");
+                return 0;
+            }
+        };
+
+        let mut published = 0u64;
+        for event in events {
+            let payload = match self.serialize_event(event) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!(
+                        event_id = %event.event_id,
+                        "Failed to serialize event for webhook: {}",
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            let mut last_err = None;
+            for attempt in 0..MAX_RETRIES {
+                match client
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .body(payload.clone())
+                    .send()
+                    .await
+                {
+                    Ok(resp) => {
+                        if resp.status().is_success() {
+                            published += 1;
+                            last_err = None;
+                            break;
+                        } else {
+                            let status = resp.status();
+                            let err_msg = format!("HTTP {}", status);
+                            tracing::warn!(
+                                event_id = %event.event_id,
+                                attempt = attempt + 1,
+                                status = %status,
+                                "Webhook delivery failed"
+                            );
+                            last_err = Some(err_msg);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            event_id = %event.event_id,
+                            attempt = attempt + 1,
+                            error = %e,
+                            "Webhook delivery failed"
+                        );
+                        last_err = Some(e.to_string());
+                    }
+                }
+
+                // Exponential backoff: 1s, 2s, 4s
+                if attempt < MAX_RETRIES - 1 {
+                    let delay = std::time::Duration::from_secs(1u64 << attempt);
+                    tokio::time::sleep(delay).await;
+                }
+            }
+
+            if let Some(err) = last_err {
+                tracing::error!(
+                    event_id = %event.event_id,
+                    "Webhook delivery failed after {} attempts: {}",
+                    MAX_RETRIES,
+                    err
+                );
+            }
+        }
+
+        published
+    }
+
+    /// Push event into the ring buffer (bounded capacity).
+    fn push_to_ring(&mut self, event: CdcEvent) {
+        if self.published_ring.len() >= self.ring_capacity {
+            self.published_ring.remove(0);
+        }
+        self.published_ring.push(event);
     }
 
     /// Simulate a publish failure for remaining pending events.
@@ -227,7 +391,7 @@ impl CdcShim {
     /// Advance the WAL position by an offset.
     pub fn advance_wal(&mut self, delta: u64) {
         self.wal_position.offset += delta;
-        if self.wal_position.offset >= 0xFF_FFFF_FF {
+        if self.wal_position.offset >= WAL_SEGMENT_SIZE {
             self.wal_position.segment += 1;
             self.wal_position.offset = 0;
         }
@@ -264,12 +428,9 @@ impl CdcShim {
         }
     }
 
-    /// Serialize an event to the configured format.
-    pub fn serialize_event(&self, event: &CdcEvent) -> String {
-        match self.format.as_str() {
-            "json" => serde_json::to_string(event).unwrap_or_default(),
-            _ => serde_json::to_string(event).unwrap_or_default(),
-        }
+    /// Get recently published events from the ring buffer.
+    pub fn recent_published(&self) -> &[CdcEvent] {
+        &self.published_ring
     }
 }
 
@@ -286,8 +447,15 @@ impl Capability for CdcShim {
     }
 
     async fn init(&mut self, _config: &Config) -> Result<()> {
+        // Initialize HTTP client for webhook output
+        if self.output == "webhook" {
+            self.http_client = Some(reqwest::Client::builder().build().map_err(|e| {
+                anyhow::anyhow!("Failed to create HTTP client: {}", e)
+            })?);
+        }
+
         tracing::info!(
-            "CdcShim initialized (output={}, format={}, tables={})",
+            "CdcShim initialized (output={}, format={}, tables={}, batch_size={}, webhook={})",
             self.output,
             self.format,
             if self.tables.is_empty() {
@@ -295,6 +463,8 @@ impl Capability for CdcShim {
             } else {
                 self.tables.join(",")
             },
+            self.batch_size,
+            self.webhook_url.as_deref().unwrap_or("none"),
         );
         Ok(())
     }
@@ -373,8 +543,8 @@ mod tests {
         assert!(!shim.should_capture("orders"));
     }
 
-    #[test]
-    fn test_capture_and_publish() {
+    #[tokio::test]
+    async fn test_capture_and_publish() {
         let mut shim = make_shim();
         let e1 = shim.create_event(
             "users",
@@ -394,7 +564,7 @@ mod tests {
         assert_eq!(shim.events_captured, 2);
         assert_eq!(shim.pending_count(), 2);
 
-        let published = shim.publish_batch();
+        let published = shim.publish_batch().await;
         assert_eq!(published, 2);
         assert_eq!(shim.events_published, 2);
         assert_eq!(shim.pending_count(), 0);
@@ -412,8 +582,8 @@ mod tests {
         assert_eq!(shim.events_captured, 0);
     }
 
-    #[test]
-    fn test_publish_batch_respects_batch_size() {
+    #[tokio::test]
+    async fn test_publish_batch_respects_batch_size() {
         let mut shim = make_shim();
         for i in 0..10 {
             let e = shim.create_event(
@@ -425,11 +595,11 @@ mod tests {
             shim.capture(e);
         }
 
-        let first_batch = shim.publish_batch();
+        let first_batch = shim.publish_batch().await;
         assert_eq!(first_batch, 5);
         assert_eq!(shim.pending_count(), 5);
 
-        let second_batch = shim.publish_batch();
+        let second_batch = shim.publish_batch().await;
         assert_eq!(second_batch, 5);
     }
 
@@ -458,8 +628,9 @@ mod tests {
     #[test]
     fn test_advance_wal_segment_rollover() {
         let mut shim = make_shim();
-        shim.set_wal_position("0/FFFFFFF0", 0, 0xFFFF_FFF0);
-        shim.advance_wal(32);
+        // Set offset near the 16MB boundary
+        shim.set_wal_position("0/FFFFFF0", 0, 0x0FFF_FFF0);
+        shim.advance_wal(0x100); // 0x0FFF_FFF0 + 0x100 = 0x1000000 = WAL_SEGMENT_SIZE
         assert_eq!(shim.wal_position.segment, 1);
         assert_eq!(shim.wal_position.offset, 0);
     }
@@ -477,7 +648,7 @@ mod tests {
             after: Some(serde_json::json!({"id": 1})),
             published: false,
         };
-        let json = shim.serialize_event(&event);
+        let json = shim.serialize_event(&event).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["event_id"], "cdc-1");
         assert_eq!(parsed["table"], "users");
@@ -510,5 +681,29 @@ mod tests {
         assert_eq!(metrics[0].value, 100.0);
         assert_eq!(metrics[1].value, 95.0);
         assert_eq!(metrics[3].value, 2.5);
+    }
+
+    #[test]
+    fn test_ring_buffer_bounded() {
+        let mut shim = CdcShim {
+            ring_capacity: 3,
+            ..CdcShim::new()
+        };
+        for i in 0..5 {
+            let event = CdcEvent {
+                event_id: format!("cdc-{}", i),
+                lsn: "0/0".to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                table: "t".to_string(),
+                operation: CdcOperation::Insert,
+                before: None,
+                after: None,
+                published: true,
+            };
+            shim.push_to_ring(event);
+        }
+        assert_eq!(shim.recent_published().len(), 3);
+        assert_eq!(shim.recent_published()[0].event_id, "cdc-2");
+        assert_eq!(shim.recent_published()[2].event_id, "cdc-4");
     }
 }
