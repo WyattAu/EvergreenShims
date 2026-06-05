@@ -76,6 +76,7 @@ pub struct ArchivalSummary {
 }
 
 /// Archival shim.
+#[allow(dead_code)]
 pub struct ArchivalShim {
     schedule: String,
     tables: Vec<String>,
@@ -102,8 +103,8 @@ pub struct ArchivalShim {
 
 impl ArchivalShim {
     pub fn new() -> Self {
-        let compression = std::env::var("ARCHIVAL_COMPRESSION")
-            .unwrap_or_else(|_| "zstd".to_string());
+        let compression =
+            std::env::var("ARCHIVAL_COMPRESSION").unwrap_or_else(|_| "zstd".to_string());
 
         let compression_ratio = match compression.as_str() {
             "gzip" => 0.3,
@@ -269,8 +270,7 @@ impl ArchivalShim {
             self.archive_path, table, self.record_counter
         );
 
-        let archived_size =
-            (original_size_bytes as f64 * self.compression_ratio) as u64;
+        let archived_size = (original_size_bytes as f64 * self.compression_ratio) as u64;
         let saved = original_size_bytes.saturating_sub(archived_size);
 
         let retention_days = self
@@ -477,9 +477,7 @@ mod tests {
     #[tokio::test]
     async fn test_archive_batch_gzip() {
         let (mut shim, _dir) = temp_shim("gzip", 0.3);
-        let record = shim
-            .archive_batch("orders", 1000, 10_000_000, None)
-            .await;
+        let record = shim.archive_batch("orders", 1000, 10_000_000, None).await;
 
         assert!(record.is_some());
         let record = record.unwrap();
@@ -493,9 +491,7 @@ mod tests {
     #[tokio::test]
     async fn test_archive_batch_no_compression() {
         let (mut shim, _dir) = temp_shim("none", 1.0);
-        let record = shim
-            .archive_batch("users", 100, 1_000_000, None)
-            .await;
+        let record = shim.archive_batch("users", 100, 1_000_000, None).await;
 
         assert!(record.is_some());
         let record = record.unwrap();
