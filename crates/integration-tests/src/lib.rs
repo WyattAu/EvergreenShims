@@ -16,47 +16,31 @@ mod vault;
 async fn test_backup_postgres_connector_config() {
     use backup_shim::BackupShim;
 
-    // Clean up any leaked env vars from parallel tests
-    std::env::remove_var("BACKUP_DB_TYPE");
-    std::env::remove_var("BACKUP_DB_HOST");
-    std::env::remove_var("BACKUP_DB_PORT");
-    std::env::remove_var("BACKUP_DB_USER");
-    std::env::remove_var("BACKUP_DB_PASSWORD");
-    std::env::remove_var("BACKUP_DATABASE");
-    std::env::remove_var("BACKUP_CMD");
-    std::env::remove_var("BACKUP_OUTPUT_DIR");
-    std::env::remove_var("BACKUP_TIMEOUT_SECS");
-
-    std::env::set_var("BACKUP_DB_TYPE", "postgres");
-    std::env::set_var("BACKUP_DB_HOST", "pg-primary.internal");
-    std::env::set_var("BACKUP_DB_PORT", "5432");
-    std::env::set_var("BACKUP_DB_USER", "backup_user");
-    std::env::set_var("BACKUP_DB_PASSWORD", "secret");
-    std::env::set_var("BACKUP_DATABASE", "production");
-    std::env::set_var("BACKUP_CMD", "pg_dump");
-    std::env::set_var("BACKUP_OUTPUT_DIR", "/var/backups/pg");
-    std::env::set_var("BACKUP_TIMEOUT_SECS", "7200");
-
-    let shim = BackupShim::new();
-    assert_eq!(shim.db_type(), "postgres");
-    assert_eq!(shim.db_host(), "pg-primary.internal");
-    assert_eq!(shim.db_port(), 5432);
-    assert_eq!(shim.db_user(), "backup_user");
-    assert_eq!(shim.db_password(), "secret");
-    assert_eq!(shim.database(), "production");
-    assert_eq!(shim.backup_cmd(), "pg_dump");
-    assert_eq!(shim.output_dir(), "/var/backups/pg");
-    assert_eq!(shim.timeout_secs(), 7200);
-
-    std::env::remove_var("BACKUP_DB_TYPE");
-    std::env::remove_var("BACKUP_DB_HOST");
-    std::env::remove_var("BACKUP_DB_PORT");
-    std::env::remove_var("BACKUP_DB_USER");
-    std::env::remove_var("BACKUP_DB_PASSWORD");
-    std::env::remove_var("BACKUP_DATABASE");
-    std::env::remove_var("BACKUP_CMD");
-    std::env::remove_var("BACKUP_OUTPUT_DIR");
-    std::env::remove_var("BACKUP_TIMEOUT_SECS");
+    temp_env::with_vars(
+        [
+            ("BACKUP_DB_TYPE", Some("postgres")),
+            ("BACKUP_DB_HOST", Some("pg-primary.internal")),
+            ("BACKUP_DB_PORT", Some("5432")),
+            ("BACKUP_DB_USER", Some("backup_user")),
+            ("BACKUP_DB_PASSWORD", Some("secret")),
+            ("BACKUP_DATABASE", Some("production")),
+            ("BACKUP_CMD", Some("pg_dump")),
+            ("BACKUP_OUTPUT_DIR", Some("/var/backups/pg")),
+            ("BACKUP_TIMEOUT_SECS", Some("7200")),
+        ],
+        || {
+            let shim = BackupShim::new();
+            assert_eq!(shim.db_type(), "postgres");
+            assert_eq!(shim.db_host(), "pg-primary.internal");
+            assert_eq!(shim.db_port(), 5432);
+            assert_eq!(shim.db_user(), "backup_user");
+            assert_eq!(shim.db_password(), "secret");
+            assert_eq!(shim.database(), "production");
+            assert_eq!(shim.backup_cmd(), "pg_dump");
+            assert_eq!(shim.output_dir(), "/var/backups/pg");
+            assert_eq!(shim.timeout_secs(), 7200);
+        },
+    );
 }
 
 /// Test backup-shim Redis connector env var configuration.
@@ -64,29 +48,23 @@ async fn test_backup_postgres_connector_config() {
 async fn test_backup_redis_connector_config() {
     use backup_shim::BackupShim;
 
-    // Clean up any leaked env vars from parallel tests
-    std::env::remove_var("BACKUP_DB_TYPE");
-    std::env::remove_var("BACKUP_OUTPUT_DIR");
-    std::env::remove_var("BACKUP_TIMEOUT_SECS");
-
-    std::env::set_var("BACKUP_DB_TYPE", "redis");
-    std::env::set_var("REDIS_URL", "redis://redis-cluster:6380");
-    std::env::set_var("REDIS_PASSWORD", "redis-secret");
-    std::env::set_var("BACKUP_OUTPUT_DIR", "/var/backups/redis");
-    std::env::set_var("BACKUP_TIMEOUT_SECS", "120");
-
-    let shim = BackupShim::new();
-    assert_eq!(shim.db_type(), "redis");
-    assert_eq!(shim.redis_url(), "redis://redis-cluster:6380");
-    assert_eq!(shim.redis_password(), "redis-secret");
-    assert_eq!(shim.output_dir(), "/var/backups/redis");
-    assert_eq!(shim.timeout_secs(), 120);
-
-    std::env::remove_var("BACKUP_DB_TYPE");
-    std::env::remove_var("REDIS_URL");
-    std::env::remove_var("REDIS_PASSWORD");
-    std::env::remove_var("BACKUP_OUTPUT_DIR");
-    std::env::remove_var("BACKUP_TIMEOUT_SECS");
+    temp_env::with_vars(
+        [
+            ("BACKUP_DB_TYPE", Some("redis")),
+            ("REDIS_URL", Some("redis://redis-cluster:6380")),
+            ("REDIS_PASSWORD", Some("redis-secret")),
+            ("BACKUP_OUTPUT_DIR", Some("/var/backups/redis")),
+            ("BACKUP_TIMEOUT_SECS", Some("120")),
+        ],
+        || {
+            let shim = BackupShim::new();
+            assert_eq!(shim.db_type(), "redis");
+            assert_eq!(shim.redis_url(), "redis://redis-cluster:6380");
+            assert_eq!(shim.redis_password(), "redis-secret");
+            assert_eq!(shim.output_dir(), "/var/backups/redis");
+            assert_eq!(shim.timeout_secs(), 120);
+        },
+    );
 }
 
 /// Test backup SHA-256 checksum verification.
@@ -119,27 +97,25 @@ async fn test_backup_checksum_verification() {
 async fn test_replication_wal_tracking_config() {
     use replication_shim::ReplicationShim;
 
-    std::env::set_var("REPLICATION_DB_HOST", "pg-primary.internal");
-    std::env::set_var("REPLICATION_DB_PORT", "5433");
-    std::env::set_var("REPLICATION_DB_USER", "repl_monitor");
-    std::env::set_var("REPLICATION_DB_PASSWORD", "repl-secret");
-    std::env::set_var("REPLICATION_DB_NAME", "production");
-    std::env::set_var("REPLICATION_LAG_THRESHOLD_BYTES", "2097152");
-
-    let shim = ReplicationShim::new();
-    assert_eq!(shim.db_host(), "pg-primary.internal");
-    assert_eq!(shim.db_port(), 5433);
-    assert_eq!(shim.db_user(), "repl_monitor");
-    assert_eq!(shim.db_password(), "repl-secret");
-    assert_eq!(shim.db_name(), "production");
-    assert_eq!(shim.lag_threshold_bytes(), 2_097_152);
-
-    std::env::remove_var("REPLICATION_DB_HOST");
-    std::env::remove_var("REPLICATION_DB_PORT");
-    std::env::remove_var("REPLICATION_DB_USER");
-    std::env::remove_var("REPLICATION_DB_PASSWORD");
-    std::env::remove_var("REPLICATION_DB_NAME");
-    std::env::remove_var("REPLICATION_LAG_THRESHOLD_BYTES");
+    temp_env::with_vars(
+        [
+            ("REPLICATION_DB_HOST", Some("pg-primary.internal")),
+            ("REPLICATION_DB_PORT", Some("5433")),
+            ("REPLICATION_DB_USER", Some("repl_monitor")),
+            ("REPLICATION_DB_PASSWORD", Some("repl-secret")),
+            ("REPLICATION_DB_NAME", Some("production")),
+            ("REPLICATION_LAG_THRESHOLD_BYTES", Some("2097152")),
+        ],
+        || {
+            let shim = ReplicationShim::new();
+            assert_eq!(shim.db_host(), "pg-primary.internal");
+            assert_eq!(shim.db_port(), 5433);
+            assert_eq!(shim.db_user(), "repl_monitor");
+            assert_eq!(shim.db_password(), "repl-secret");
+            assert_eq!(shim.db_name(), "production");
+            assert_eq!(shim.lag_threshold_bytes(), 2_097_152);
+        },
+    );
 }
 
 /// Test replication-shim lag threshold default.
@@ -198,21 +174,25 @@ async fn test_replication_wal_position_update() {
 async fn test_migration_db_url_override() {
     use migration_shim::MigrationShim;
 
-    std::env::set_var("MIGRATION_DB_URL", "postgres://admin:s3cret@db.prod:5432/app");
-    std::env::set_var("MIGRATION_DIR", "/opt/migrations");
-    std::env::set_var("MIGRATION_AUTO_MIGRATE", "true");
-
-    let shim = MigrationShim::new();
-    assert_eq!(
-        shim.get_connection_string(),
-        "postgres://admin:s3cret@db.prod:5432/app"
+    temp_env::with_vars(
+        [
+            (
+                "MIGRATION_DB_URL",
+                Some("postgres://admin:s3cret@db.prod:5432/app"),
+            ),
+            ("MIGRATION_DIR", Some("/opt/migrations")),
+            ("MIGRATION_AUTO_MIGRATE", Some("true")),
+        ],
+        || {
+            let shim = MigrationShim::new();
+            assert_eq!(
+                shim.get_connection_string(),
+                "postgres://admin:s3cret@db.prod:5432/app"
+            );
+            assert_eq!(shim.dir(), &std::path::PathBuf::from("/opt/migrations"));
+            assert!(shim.auto_migrate());
+        },
     );
-    assert_eq!(shim.dir(), &std::path::PathBuf::from("/opt/migrations"));
-    assert!(shim.auto_migrate());
-
-    std::env::remove_var("MIGRATION_DB_URL");
-    std::env::remove_var("MIGRATION_DIR");
-    std::env::remove_var("MIGRATION_AUTO_MIGRATE");
 }
 
 /// Test migration-shim sequential apply with checksum verification.
@@ -227,7 +207,9 @@ async fn test_migration_sequential_apply_with_checksum() {
         name: "create_users".to_string(),
         up_sql: "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)".to_string(),
         down_sql: Some("DROP TABLE users".to_string()),
-        checksum: MigrationShim::compute_checksum("CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)"),
+        checksum: MigrationShim::compute_checksum(
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)",
+        ),
     };
 
     let m2 = Migration {
@@ -302,7 +284,7 @@ async fn test_migration_rollback_restores_version() {
     assert_eq!(shim.migrations_rolled_back(), 2);
 
     // Re-apply m2 with a new version
-    let m2b = Migration {
+    let _m2b = Migration {
         version: 2,
         name: "add_column_v2".to_string(),
         up_sql: "ALTER TABLE test ADD email TEXT".to_string(),
@@ -322,12 +304,24 @@ async fn test_migration_file_scanning_ordering() {
 
     // Verify version parsing handles various formats
     assert_eq!(MigrationShim::parse_version("001_init.up.sql").unwrap(), 1);
-    assert_eq!(MigrationShim::parse_version("010_add_index.up.sql").unwrap(), 10);
-    assert_eq!(MigrationShim::parse_version("099_final.up.sql").unwrap(), 99);
+    assert_eq!(
+        MigrationShim::parse_version("010_add_index.up.sql").unwrap(),
+        10
+    );
+    assert_eq!(
+        MigrationShim::parse_version("099_final.up.sql").unwrap(),
+        99
+    );
 
     // Verify name parsing
-    assert_eq!(MigrationShim::parse_name("001_create_users.up.sql"), "create_users");
-    assert_eq!(MigrationShim::parse_name("002_add_email_index.down.sql"), "add_email_index");
+    assert_eq!(
+        MigrationShim::parse_name("001_create_users.up.sql"),
+        "create_users"
+    );
+    assert_eq!(
+        MigrationShim::parse_name("002_add_email_index.down.sql"),
+        "add_email_index"
+    );
 }
 
 // ============================================================================
@@ -367,28 +361,31 @@ async fn test_config_hash_detection() {
 async fn test_encryption_aes_gcm_roundtrip() {
     use encryption_shim::EncryptionShim;
 
-    std::env::set_var("ENCRYPTION_METHOD", "aes-gcm");
-    std::env::set_var(
-        "ENCRYPTION_KEY",
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    temp_env::with_vars(
+        [
+            ("ENCRYPTION_METHOD", Some("aes-gcm")),
+            (
+                "ENCRYPTION_KEY",
+                Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            ),
+        ],
+        || {
+            let mut shim = EncryptionShim::new();
+
+            let plaintext = b"Hello, EvergreenShims! This is a secret message.";
+            let fixed_nonce = [1u8; 12];
+            let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
+
+            assert_eq!(encrypted.method, "aes-gcm");
+            assert_eq!(encrypted.key_id, "default");
+            assert_eq!(encrypted.ciphertext.len(), plaintext.len());
+            assert_eq!(encrypted.nonce.len(), 12);
+            assert_eq!(encrypted.tag.len(), 16);
+
+            let decrypted = shim.decrypt(&encrypted).unwrap();
+            assert_eq!(decrypted, plaintext);
+        },
     );
-    let mut shim = EncryptionShim::new();
-
-    let plaintext = b"Hello, EvergreenShims! This is a secret message.";
-    let fixed_nonce = [1u8; 12];
-    let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
-
-    assert_eq!(encrypted.method, "aes-gcm");
-    assert_eq!(encrypted.key_id, "default");
-    assert_eq!(encrypted.ciphertext.len(), plaintext.len());
-    assert_eq!(encrypted.nonce.len(), 12);
-    assert_eq!(encrypted.tag.len(), 16);
-
-    let decrypted = shim.decrypt(&encrypted).unwrap();
-    assert_eq!(decrypted, plaintext);
-
-    std::env::remove_var("ENCRYPTION_METHOD");
-    std::env::remove_var("ENCRYPTION_KEY");
 }
 
 /// Test ChaCha20-Poly1305 roundtrip.
@@ -396,22 +393,25 @@ async fn test_encryption_aes_gcm_roundtrip() {
 async fn test_encryption_chacha20_roundtrip() {
     use encryption_shim::EncryptionShim;
 
-    std::env::set_var("ENCRYPTION_METHOD", "chacha20");
-    std::env::set_var(
-        "ENCRYPTION_KEY",
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    temp_env::with_vars(
+        [
+            ("ENCRYPTION_METHOD", Some("chacha20")),
+            (
+                "ENCRYPTION_KEY",
+                Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            ),
+        ],
+        || {
+            let mut shim = EncryptionShim::new();
+
+            let plaintext = b"ChaCha20 encryption test data";
+            let fixed_nonce = [2u8; 12];
+            let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
+            let decrypted = shim.decrypt(&encrypted).unwrap();
+
+            assert_eq!(decrypted, plaintext);
+        },
     );
-    let mut shim = EncryptionShim::new();
-
-    let plaintext = b"ChaCha20 encryption test data";
-    let fixed_nonce = [2u8; 12];
-    let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
-    let decrypted = shim.decrypt(&encrypted).unwrap();
-
-    assert_eq!(decrypted, plaintext);
-
-    std::env::remove_var("ENCRYPTION_METHOD");
-    std::env::remove_var("ENCRYPTION_KEY");
 }
 
 /// Test encryption with key rotation.
@@ -419,33 +419,41 @@ async fn test_encryption_chacha20_roundtrip() {
 async fn test_encryption_key_rotation() {
     use encryption_shim::EncryptionShim;
 
-    std::env::set_var("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    let mut shim = EncryptionShim::new();
+    temp_env::with_vars(
+        [(
+            "ENCRYPTION_KEY",
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+        )],
+        || {
+            let mut shim = EncryptionShim::new();
 
-    let fixed_nonce1 = [3u8; 12];
-    let encrypted1 = shim.encrypt(b"before rotation", Some(&fixed_nonce1)).unwrap();
-    assert_eq!(encrypted1.key_id, "default");
+            let fixed_nonce1 = [3u8; 12];
+            let encrypted1 = shim
+                .encrypt(b"before rotation", Some(&fixed_nonce1))
+                .unwrap();
+            assert_eq!(encrypted1.key_id, "default");
 
-    // Rotate
-    let new_key = [
-        0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
-        0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
-        0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
-        0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
-    ];
-    shim.rotate_key("v2".to_string(), new_key.to_vec()).unwrap();
+            // Rotate
+            let new_key = [
+                0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45,
+                0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01,
+                0x23, 0x45, 0x67, 0x89,
+            ];
+            shim.rotate_key("v2".to_string(), new_key.to_vec()).unwrap();
 
-    // Old data still decrypts
-    let decrypted = shim.decrypt(&encrypted1).unwrap();
-    assert_eq!(decrypted, b"before rotation");
+            // Old data still decrypts
+            let decrypted = shim.decrypt(&encrypted1).unwrap();
+            assert_eq!(decrypted, b"before rotation");
 
-    // New data uses new key
-    let fixed_nonce2 = [4u8; 12];
-    let encrypted2 = shim.encrypt(b"after rotation", Some(&fixed_nonce2)).unwrap();
-    assert_eq!(encrypted2.key_id, "v2");
-    assert_ne!(encrypted1.key_id, encrypted2.key_id);
-
-    std::env::remove_var("ENCRYPTION_KEY");
+            // New data uses new key
+            let fixed_nonce2 = [4u8; 12];
+            let encrypted2 = shim
+                .encrypt(b"after rotation", Some(&fixed_nonce2))
+                .unwrap();
+            assert_eq!(encrypted2.key_id, "v2");
+            assert_ne!(encrypted1.key_id, encrypted2.key_id);
+        },
+    );
 }
 
 // ============================================================================
@@ -455,7 +463,7 @@ async fn test_encryption_key_rotation() {
 /// Test scheduler cron parsing and task management.
 #[tokio::test]
 async fn test_scheduler_cron_integration() {
-    use scheduler_shim::{SchedulerShim, RetryConfig, ScheduledTask};
+    use scheduler_shim::{RetryConfig, ScheduledTask, SchedulerShim};
 
     let tasks = vec![
         ScheduledTask {
@@ -482,28 +490,33 @@ async fn test_scheduler_cron_integration() {
         },
     ];
 
-    std::env::set_var("SCHEDULER_TASKS", serde_json::to_string(&tasks).unwrap());
-    let shim = SchedulerShim::new();
+    temp_env::with_vars(
+        &[(
+            "SCHEDULER_TASKS",
+            Some(serde_json::to_string(&tasks).unwrap()),
+        )],
+        || {
+            let shim = SchedulerShim::new();
 
-    // Only enabled task should be loaded (disabled filtered out)
-    let task_list = shim.list_tasks();
-    assert_eq!(task_list.len(), 1);
-    assert_eq!(task_list[0].name, "hourly-backup");
+            // Only enabled task should be loaded (disabled filtered out)
+            let task_list = shim.list_tasks();
+            assert_eq!(task_list.len(), 1);
+            assert_eq!(task_list[0].name, "hourly-backup");
 
-    // Verify next run is scheduled
-    let next = shim.next_run("hourly-backup");
-    assert!(next.is_some());
+            // Verify next run is scheduled
+            let next = shim.next_run("hourly-backup");
+            assert!(next.is_some());
 
-    // Disabled task has no state
-    assert!(shim.task_state("disabled-task").is_none());
-
-    std::env::remove_var("SCHEDULER_TASKS");
+            // Disabled task has no state
+            assert!(shim.task_state("disabled-task").is_none());
+        },
+    );
 }
 
 /// Test scheduler task state lifecycle.
 #[tokio::test]
 async fn test_scheduler_state_lifecycle() {
-    use scheduler_shim::{SchedulerShim, ScheduledTask, RetryConfig, TaskState};
+    use scheduler_shim::{RetryConfig, ScheduledTask, SchedulerShim, TaskState};
 
     let tasks = vec![ScheduledTask {
         name: "test".into(),
@@ -515,27 +528,32 @@ async fn test_scheduler_state_lifecycle() {
         retry: RetryConfig::default(),
     }];
 
-    std::env::set_var("SCHEDULER_TASKS", serde_json::to_string(&tasks).unwrap());
-    let mut shim = SchedulerShim::new();
+    temp_env::with_vars(
+        &[(
+            "SCHEDULER_TASKS",
+            Some(serde_json::to_string(&tasks).unwrap()),
+        )],
+        || {
+            let mut shim = SchedulerShim::new();
 
-    // Initial state
-    assert_eq!(shim.task_state("test"), Some(TaskState::Pending));
+            // Initial state
+            assert_eq!(shim.task_state("test"), Some(TaskState::Pending));
 
-    // Running
-    shim.update_task_state("test", TaskState::Running);
-    assert_eq!(shim.task_state("test"), Some(TaskState::Running));
+            // Running
+            shim.update_task_state("test", TaskState::Running);
+            assert_eq!(shim.task_state("test"), Some(TaskState::Running));
 
-    // Success
-    shim.update_task_state("test", TaskState::Success);
-    assert_eq!(shim.task_state("test"), Some(TaskState::Success));
+            // Success
+            shim.update_task_state("test", TaskState::Success);
+            assert_eq!(shim.task_state("test"), Some(TaskState::Success));
 
-    // List shows updated state
-    let info = shim.list_tasks();
-    assert_eq!(info.len(), 1);
-    assert_eq!(info[0].state, TaskState::Success);
-    assert!(info[0].last_success.is_some());
-
-    std::env::remove_var("SCHEDULER_TASKS");
+            // List shows updated state
+            let info = shim.list_tasks();
+            assert_eq!(info.len(), 1);
+            assert_eq!(info[0].state, TaskState::Success);
+            assert!(info[0].last_success.is_some());
+        },
+    );
 }
 
 // ============================================================================
@@ -548,56 +566,60 @@ async fn test_alerting_routing_and_dedup() {
     use alerting_shim::{AlertingShim, Severity};
     use std::collections::HashMap;
 
-    std::env::set_var(
-        "ALERTING_WEBHOOKS",
-        r##"[{"name":"slack","url":"http://localhost:3001/slack","channel":"#alerts","min_severity":"info","headers":{}},{"name":"pager","url":"http://localhost:3002/pager","channel":"critical","min_severity":"warning","headers":{}}]"##,
+    temp_env::with_vars(
+        [
+            (
+                "ALERTING_WEBHOOKS",
+                Some(
+                    r##"[{"name":"slack","url":"http://localhost:3001/slack","channel":"#alerts","min_severity":"info","headers":{}},{"name":"pager","url":"http://localhost:3002/pager","channel":"critical","min_severity":"warning","headers":{}}]"##,
+                ),
+            ),
+            ("ALERTING_DEDUP_WINDOW", Some("60")),
+        ],
+        || {
+            let shim = AlertingShim::new();
+
+            // Info alert -> only slack
+            let info_alert = alerting_shim::Alert {
+                id: "1".into(),
+                title: "Disk usage".into(),
+                message: "80%".into(),
+                severity: Severity::Info,
+                source: "monitoring".into(),
+                labels: HashMap::new(),
+                timestamp: chrono::Utc::now(),
+            };
+            let targets = shim.route(&info_alert);
+            assert_eq!(targets.len(), 1);
+            assert_eq!(targets[0].name, "slack");
+
+            // Warning -> both
+            let warn_alert = alerting_shim::Alert {
+                id: "2".into(),
+                title: "CPU spike".into(),
+                message: "95%".into(),
+                severity: Severity::Warning,
+                source: "monitoring".into(),
+                labels: HashMap::new(),
+                timestamp: chrono::Utc::now(),
+            };
+            let targets = shim.route(&warn_alert);
+            assert_eq!(targets.len(), 2);
+
+            // Critical -> both
+            let crit_alert = alerting_shim::Alert {
+                id: "3".into(),
+                title: "DB down".into(),
+                message: "Connection refused".into(),
+                severity: Severity::Critical,
+                source: "health".into(),
+                labels: HashMap::new(),
+                timestamp: chrono::Utc::now(),
+            };
+            let targets = shim.route(&crit_alert);
+            assert_eq!(targets.len(), 2);
+        },
     );
-    std::env::set_var("ALERTING_DEDUP_WINDOW", "60");
-
-    let shim = AlertingShim::new();
-
-    // Info alert -> only slack
-    let info_alert = alerting_shim::Alert {
-        id: "1".into(),
-        title: "Disk usage".into(),
-        message: "80%".into(),
-        severity: Severity::Info,
-        source: "monitoring".into(),
-        labels: HashMap::new(),
-        timestamp: chrono::Utc::now(),
-    };
-    let targets = shim.route(&info_alert);
-    assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].name, "slack");
-
-    // Warning -> both
-    let warn_alert = alerting_shim::Alert {
-        id: "2".into(),
-        title: "CPU spike".into(),
-        message: "95%".into(),
-        severity: Severity::Warning,
-        source: "monitoring".into(),
-        labels: HashMap::new(),
-        timestamp: chrono::Utc::now(),
-    };
-    let targets = shim.route(&warn_alert);
-    assert_eq!(targets.len(), 2);
-
-    // Critical -> both
-    let crit_alert = alerting_shim::Alert {
-        id: "3".into(),
-        title: "DB down".into(),
-        message: "Connection refused".into(),
-        severity: Severity::Critical,
-        source: "health".into(),
-        labels: HashMap::new(),
-        timestamp: chrono::Utc::now(),
-    };
-    let targets = shim.route(&crit_alert);
-    assert_eq!(targets.len(), 2);
-
-    std::env::remove_var("ALERTING_WEBHOOKS");
-    std::env::remove_var("ALERTING_DEDUP_WINDOW");
 }
 
 // ============================================================================
@@ -637,8 +659,6 @@ async fn test_queue_job_lifecycle() {
 
     // Job is back in pending with retry
     assert_eq!(shim.pending_count().await, 2); // job2 retried + id3 still pending
-
-    std::env::remove_var("QUEUE_MAX_WORKERS");
 }
 
 /// Test queue DLQ after exhausting retries.
@@ -679,11 +699,7 @@ async fn test_auth_token_lifecycle() {
     let mut shim = AuthShim::new();
 
     // Create token
-    let token_value = shim.create_token(
-        "user123",
-        Role::ReadWrite,
-        None,
-    );
+    let token_value = shim.create_token("user123", Role::ReadWrite, None);
 
     assert!(!token_value.is_empty());
 
@@ -782,7 +798,7 @@ async fn test_compliance_scoring() {
 async fn test_cache_lifecycle() {
     use cache_shim::CacheShim;
 
-    let mut shim = CacheShim::new();
+    let shim = CacheShim::new();
 
     // Set values
     shim.set("key1", b"value1");
@@ -841,26 +857,28 @@ async fn test_cdc_event_lifecycle() {
 async fn test_sharding_hash_routing() {
     use sharding_shim::ShardingShim;
 
-    std::env::set_var(
-        "SHARDING_ADDRESSES",
-        "redis://localhost:6380,redis://localhost:6381,redis://localhost:6382",
+    temp_env::with_vars(
+        [(
+            "SHARDING_ADDRESSES",
+            Some("redis://localhost:6380,redis://localhost:6381,redis://localhost:6382"),
+        )],
+        || {
+            let mut shim = ShardingShim::new();
+
+            // Route different keys
+            let mut shard_counts = std::collections::HashMap::new();
+            for i in 0..1000 {
+                let key = format!("user:{}", i);
+                let (shard_id, _addr) = shim.route(&key).unwrap();
+                *shard_counts.entry(shard_id).or_insert(0) += 1;
+            }
+
+            // All keys should be routed
+            assert_eq!(shard_counts.values().sum::<u32>(), 1000);
+            // Distribution should be roughly even (at least 2 of 3 shards used)
+            assert!(shard_counts.len() >= 2);
+        },
     );
-    let mut shim = ShardingShim::new();
-
-    // Route different keys
-    let mut shard_counts = std::collections::HashMap::new();
-    for i in 0..1000 {
-        let key = format!("user:{}", i);
-        let (shard_id, _addr) = shim.route(&key).unwrap();
-        *shard_counts.entry(shard_id).or_insert(0) += 1;
-    }
-
-    // All keys should be routed
-    assert_eq!(shard_counts.values().sum::<u32>(), 1000);
-    // Distribution should be roughly even (at least 2 of 3 shards used)
-    assert!(shard_counts.len() >= 2);
-
-    std::env::remove_var("SHARDING_ADDRESSES");
 }
 
 // ============================================================================
@@ -886,7 +904,7 @@ async fn test_chaos_experiment_lifecycle() {
     let exp_name = exp.name.clone();
     let exp_id = exp.id.clone();
     assert_eq!(exp_name, "latency-test");
-    assert!(shim.active_experiments().len() > 0);
+    assert!(!shim.active_experiments().is_empty());
 
     // Stop experiment
     assert!(shim.stop_experiment(&exp_id));
@@ -908,8 +926,20 @@ async fn test_cost_budget_tracking() {
     shim.create_budget("cpu-monthly", 1000.0);
 
     // Record usage
-    shim.record_usage("cpu-monthly", cost_shim::ResourceType::Cpu, 100.0, "hours", 1.0);
-    shim.record_usage("cpu-monthly", cost_shim::ResourceType::Cpu, 200.0, "hours", 1.0);
+    shim.record_usage(
+        "cpu-monthly",
+        cost_shim::ResourceType::Cpu,
+        100.0,
+        "hours",
+        1.0,
+    );
+    shim.record_usage(
+        "cpu-monthly",
+        cost_shim::ResourceType::Cpu,
+        200.0,
+        "hours",
+        1.0,
+    );
 
     // Check budget
     let budget = shim.get_budget("cpu-monthly").unwrap();
@@ -918,7 +948,13 @@ async fn test_cost_budget_tracking() {
     assert!(budget.remaining() > 600.0);
 
     // Over budget
-    shim.record_usage("cpu-monthly", cost_shim::ResourceType::Cpu, 800.0, "hours", 1.0);
+    shim.record_usage(
+        "cpu-monthly",
+        cost_shim::ResourceType::Cpu,
+        800.0,
+        "hours",
+        1.0,
+    );
     let budget = shim.get_budget("cpu-monthly").unwrap();
     assert!(budget.is_over_budget());
 
@@ -937,19 +973,23 @@ async fn test_archival_lifecycle() {
     use archival_shim::ArchivalShim;
 
     let dir = tempfile::tempdir().unwrap();
-    std::env::set_var("ARCHIVAL_ARCHIVE_PATH", dir.path().to_str().unwrap());
-    let mut shim = ArchivalShim::new();
+    let dir_path = dir.path().to_str().unwrap().to_string();
 
-    // Add retention rule
-    shim.add_retention_rule(archival_shim::RetentionRule {
-        table: "logs".into(),
-        age_days: 7,
-        lifecycle_days: 30,
-        storage_tier: archival_shim::StorageTier::Cold,
-    });
+    // Create shim inside env scope so it reads ARCHIVAL_ARCHIVE_PATH
+    let mut shim =
+        temp_env::with_vars([("ARCHIVAL_ARCHIVE_PATH", Some(dir_path.as_str()))], || {
+            let mut shim = ArchivalShim::new();
+            shim.add_retention_rule(archival_shim::RetentionRule {
+                table: "logs".into(),
+                age_days: 7,
+                lifecycle_days: 30,
+                storage_tier: archival_shim::StorageTier::Cold,
+            });
+            shim
+        });
 
-    // Archive a batch
-    let archived = shim.archive_batch("logs", 3, 3000, None).await;
+    // Archive a batch (async, outside temp_env scope)
+    let archived = shim.archive_batch("logs", 3, 3000, None::<&str>).await;
 
     assert!(archived.is_some());
     let archived = archived.unwrap();
@@ -958,8 +998,6 @@ async fn test_archival_lifecycle() {
     // Summary
     let summary = shim.summary();
     assert!(summary.total_records > 0);
-
-    std::env::remove_var("ARCHIVAL_ARCHIVE_PATH");
 }
 
 // ============================================================================
@@ -969,9 +1007,9 @@ async fn test_archival_lifecycle() {
 /// Test the full health→failover event chain via ShimBus.
 #[tokio::test]
 async fn test_cross_shim_health_to_failover() {
-    use shim_core::{ShimBus, Severity};
-    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::event::EventType;
     use shim_core::wiring::HealthFailoverHandler;
+    use shim_core::{Severity, ShimBus};
     use std::sync::Arc;
 
     let bus = ShimBus::new();
@@ -981,18 +1019,26 @@ async fn test_cross_shim_health_to_failover() {
     let mut rx = bus.subscribe();
 
     // Simulate health shim detecting unhealthy
-    bus.emit("health-shim", EventType::HealthStatusChanged {
-        previous: "healthy".into(),
-        current: "unhealthy".into(),
-    }, Severity::Warning);
+    bus.emit(
+        "health-shim",
+        EventType::HealthStatusChanged {
+            previous: "healthy".into(),
+            current: "unhealthy".into(),
+        },
+        Severity::Warning,
+    );
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Second unhealthy should trigger failover
-    bus.emit("health-shim", EventType::HealthStatusChanged {
-        previous: "unhealthy".into(),
-        current: "unhealthy".into(),
-    }, Severity::Warning);
+    bus.emit(
+        "health-shim",
+        EventType::HealthStatusChanged {
+            previous: "unhealthy".into(),
+            current: "unhealthy".into(),
+        },
+        Severity::Warning,
+    );
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -1005,15 +1051,18 @@ async fn test_cross_shim_health_to_failover() {
             assert_eq!(evt.severity, Severity::Critical);
         }
     }
-    assert!(found, "Health→Failover chain should produce FailoverTriggered event");
+    assert!(
+        found,
+        "Health→Failover chain should produce FailoverTriggered event"
+    );
 }
 
 /// Test the backup→encryption event chain.
 #[tokio::test]
 async fn test_cross_shim_backup_to_encryption() {
-    use shim_core::{ShimBus, Severity};
-    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::event::EventType;
     use shim_core::wiring::BackupEncryptionHandler;
+    use shim_core::{Severity, ShimBus};
     use std::sync::Arc;
 
     let bus = ShimBus::new();
@@ -1023,11 +1072,15 @@ async fn test_cross_shim_backup_to_encryption() {
     let mut rx = bus.subscribe();
 
     // Simulate backup completing
-    bus.emit("backup-shim", EventType::BackupCompleted {
-        name: "postgres-daily".into(),
-        size_bytes: 5_000_000,
-        checksum: "sha256:abcdef123456".into(),
-    }, Severity::Info);
+    bus.emit(
+        "backup-shim",
+        EventType::BackupCompleted {
+            name: "postgres-daily".into(),
+            size_bytes: 5_000_000,
+            checksum: "sha256:abcdef123456".into(),
+        },
+        Severity::Info,
+    );
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -1040,15 +1093,18 @@ async fn test_cross_shim_backup_to_encryption() {
             assert_eq!(algorithm, "AES-256-GCM");
         }
     }
-    assert!(found, "Backup→Encryption chain should produce EncryptionKeyRotated event");
+    assert!(
+        found,
+        "Backup→Encryption chain should produce EncryptionKeyRotated event"
+    );
 }
 
 /// Test the scheduler→backup event chain.
 #[tokio::test]
 async fn test_cross_shim_scheduler_to_backup() {
-    use shim_core::{ShimBus, Severity};
-    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::event::EventType;
     use shim_core::wiring::SchedulerBackupHandler;
+    use shim_core::{Severity, ShimBus};
     use std::sync::Arc;
 
     let bus = ShimBus::new();
@@ -1058,10 +1114,14 @@ async fn test_cross_shim_scheduler_to_backup() {
     let mut rx = bus.subscribe();
 
     // Simulate scheduler firing a backup task
-    bus.emit("scheduler-shim", EventType::SchedulerTaskFired {
-        task_name: "nightly-backup".into(),
-        schedule: "0 2 * * *".into(),
-    }, Severity::Info);
+    bus.emit(
+        "scheduler-shim",
+        EventType::SchedulerTaskFired {
+            task_name: "nightly-backup".into(),
+            schedule: "0 2 * * *".into(),
+        },
+        Severity::Info,
+    );
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -1073,15 +1133,18 @@ async fn test_cross_shim_scheduler_to_backup() {
             assert_eq!(name, "nightly-backup");
         }
     }
-    assert!(found, "Scheduler→Backup chain should produce BackupStarted event");
+    assert!(
+        found,
+        "Scheduler→Backup chain should produce BackupStarted event"
+    );
 }
 
 /// Test the alert fan-in: all alertable events reach the alerting shim.
 #[tokio::test]
 async fn test_cross_shim_alert_fan_in() {
-    use shim_core::{ShimBus, Severity};
-    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::event::EventType;
     use shim_core::wiring::AlertFanInHandler;
+    use shim_core::{Severity, ShimBus};
     use std::sync::Arc;
 
     let bus = ShimBus::new();
@@ -1091,20 +1154,32 @@ async fn test_cross_shim_alert_fan_in() {
     let mut rx = bus.subscribe();
 
     // Emit several alertable events
-    bus.emit("backup-shim", EventType::BackupFailed {
-        name: "redis-daily".into(),
-        reason: "connection refused".into(),
-    }, Severity::Error);
+    bus.emit(
+        "backup-shim",
+        EventType::BackupFailed {
+            name: "redis-daily".into(),
+            reason: "connection refused".into(),
+        },
+        Severity::Error,
+    );
 
-    bus.emit("tls-shim", EventType::TlsCertExpiring {
-        cert_path: "/etc/tls/api.pem".into(),
-        days_remaining: 3,
-    }, Severity::Warning);
+    bus.emit(
+        "tls-shim",
+        EventType::TlsCertExpiring {
+            cert_path: "/etc/tls/api.pem".into(),
+            days_remaining: 3,
+        },
+        Severity::Warning,
+    );
 
-    bus.emit("health-shim", EventType::HealthStatusChanged {
-        previous: "healthy".into(),
-        current: "unhealthy".into(),
-    }, Severity::Critical);
+    bus.emit(
+        "health-shim",
+        EventType::HealthStatusChanged {
+            previous: "healthy".into(),
+            current: "unhealthy".into(),
+        },
+        Severity::Critical,
+    );
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -1115,14 +1190,18 @@ async fn test_cross_shim_alert_fan_in() {
             alert_count += 1;
         }
     }
-    assert!(alert_count >= 3, "Alert fan-in should forward all alertable events, got {}", alert_count);
+    assert!(
+        alert_count >= 3,
+        "Alert fan-in should forward all alertable events, got {}",
+        alert_count
+    );
 }
 
 /// Test the wire_all_handlers convenience function.
 #[tokio::test]
 async fn test_wire_all_handlers() {
-    use shim_core::{ShimBus, Severity};
     use shim_core::event::{EventType, ShimEvent};
+    use shim_core::{Severity, ShimBus};
 
     let bus = ShimBus::new();
     shim_core::wiring::wire_all_handlers(&bus);
@@ -1131,18 +1210,26 @@ async fn test_wire_all_handlers() {
 
     // Trigger a chain: health → unhealthy (x3) → failover (threshold=3 in wire_all_handlers)
     for _ in 0..3 {
-        bus.emit("health-shim", EventType::HealthStatusChanged {
-            previous: "healthy".into(),
-            current: "unhealthy".into(),
-        }, Severity::Warning);
+        bus.emit(
+            "health-shim",
+            EventType::HealthStatusChanged {
+                previous: "healthy".into(),
+                current: "unhealthy".into(),
+            },
+            Severity::Warning,
+        );
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
 
     // Trigger scheduler → backup chain
-    bus.emit("scheduler-shim", EventType::SchedulerTaskFired {
-        task_name: "weekly-backup".into(),
-        schedule: "0 3 * * 0".into(),
-    }, Severity::Info);
+    bus.emit(
+        "scheduler-shim",
+        EventType::SchedulerTaskFired {
+            task_name: "weekly-backup".into(),
+            schedule: "0 3 * * 0".into(),
+        },
+        Severity::Info,
+    );
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     // Collect all events
@@ -1152,24 +1239,55 @@ async fn test_wire_all_handlers() {
     }
 
     // Should have failover + backup started events (plus the originals)
-    let has_failover = events.iter().any(|e| matches!(e.event, EventType::FailoverTriggered { .. }));
-    let has_backup = events.iter().any(|e| matches!(e.event, EventType::BackupStarted { .. }));
+    let has_failover = events
+        .iter()
+        .any(|e| matches!(e.event, EventType::FailoverTriggered { .. }));
+    let has_backup = events
+        .iter()
+        .any(|e| matches!(e.event, EventType::BackupStarted { .. }));
 
-    assert!(has_failover, "wire_all_handlers should include health→failover wiring");
-    assert!(has_backup, "wire_all_handlers should include scheduler→backup wiring");
+    assert!(
+        has_failover,
+        "wire_all_handlers should include health→failover wiring"
+    );
+    assert!(
+        has_backup,
+        "wire_all_handlers should include scheduler→backup wiring"
+    );
 }
 
 /// Test ShimBus event sequencing across multiple sources.
 #[tokio::test]
 async fn test_bus_multi_source_sequencing() {
-    use shim_core::{ShimBus, Severity};
-    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::event::EventType;
+    use shim_core::{Severity, ShimBus};
 
     let bus = ShimBus::new();
 
-    let e1 = bus.emit("shim-a", EventType::Custom { event_name: "a1".into(), payload: serde_json::json!(null) }, Severity::Info);
-    let e2 = bus.emit("shim-b", EventType::Custom { event_name: "b1".into(), payload: serde_json::json!(null) }, Severity::Info);
-    let e3 = bus.emit("shim-a", EventType::Custom { event_name: "a2".into(), payload: serde_json::json!(null) }, Severity::Info);
+    let e1 = bus.emit(
+        "shim-a",
+        EventType::Custom {
+            event_name: "a1".into(),
+            payload: serde_json::json!(null),
+        },
+        Severity::Info,
+    );
+    let e2 = bus.emit(
+        "shim-b",
+        EventType::Custom {
+            event_name: "b1".into(),
+            payload: serde_json::json!(null),
+        },
+        Severity::Info,
+    );
+    let e3 = bus.emit(
+        "shim-a",
+        EventType::Custom {
+            event_name: "a2".into(),
+            payload: serde_json::json!(null),
+        },
+        Severity::Info,
+    );
 
     // Sequences are per-source
     assert_eq!(e1.sequence, 1);

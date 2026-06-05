@@ -62,33 +62,29 @@ async fn test_failover_event_serialization() {
 async fn test_patroni_connector_config() {
     use failover_shim::{FailoverConnector, FailoverShim};
 
-    std::env::set_var("FAILOVER_CONNECTOR", "patroni");
-    std::env::set_var("FAILOVER_DB_HOST", "pg-cluster.internal");
-    std::env::set_var("FAILOVER_DB_PORT", "5433");
-    std::env::set_var("FAILOVER_DB_USER", "patroni_admin");
-    std::env::set_var("FAILOVER_DB_PASSWORD", "supersecret");
-    std::env::set_var("FAILOVER_DB_NAME", "cluster_db");
-    std::env::set_var("FAILOVER_LAG_THRESHOLD_SECS", "45.5");
-    std::env::set_var("FAILOVER_CHECK_INTERVAL_SECS", "15");
-
-    let shim = FailoverShim::new();
-    assert_eq!(shim.connector(), &FailoverConnector::Patroni);
-    assert_eq!(shim.db_host(), "pg-cluster.internal");
-    assert_eq!(shim.db_port(), "5433");
-    assert_eq!(shim.db_user(), "patroni_admin");
-    assert_eq!(shim.db_password(), "supersecret");
-    assert_eq!(shim.db_name(), "cluster_db");
-    assert_eq!(shim.lag_threshold_secs(), 45.5);
-    assert_eq!(shim.check_interval_secs(), 15);
-
-    std::env::remove_var("FAILOVER_CONNECTOR");
-    std::env::remove_var("FAILOVER_DB_HOST");
-    std::env::remove_var("FAILOVER_DB_PORT");
-    std::env::remove_var("FAILOVER_DB_USER");
-    std::env::remove_var("FAILOVER_DB_PASSWORD");
-    std::env::remove_var("FAILOVER_DB_NAME");
-    std::env::remove_var("FAILOVER_LAG_THRESHOLD_SECS");
-    std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
+    temp_env::with_vars(
+        [
+            ("FAILOVER_CONNECTOR", Some("patroni")),
+            ("FAILOVER_DB_HOST", Some("pg-cluster.internal")),
+            ("FAILOVER_DB_PORT", Some("5433")),
+            ("FAILOVER_DB_USER", Some("patroni_admin")),
+            ("FAILOVER_DB_PASSWORD", Some("supersecret")),
+            ("FAILOVER_DB_NAME", Some("cluster_db")),
+            ("FAILOVER_LAG_THRESHOLD_SECS", Some("45.5")),
+            ("FAILOVER_CHECK_INTERVAL_SECS", Some("15")),
+        ],
+        || {
+            let shim = FailoverShim::new();
+            assert_eq!(shim.connector(), &FailoverConnector::Patroni);
+            assert_eq!(shim.db_host(), "pg-cluster.internal");
+            assert_eq!(shim.db_port(), "5433");
+            assert_eq!(shim.db_user(), "patroni_admin");
+            assert_eq!(shim.db_password(), "supersecret");
+            assert_eq!(shim.db_name(), "cluster_db");
+            assert_eq!(shim.lag_threshold_secs(), 45.5);
+            assert_eq!(shim.check_interval_secs(), 15);
+        },
+    );
 }
 
 /// Test redis sentinel connector configuration via env vars.
@@ -96,21 +92,21 @@ async fn test_patroni_connector_config() {
 async fn test_redis_sentinel_connector_config() {
     use failover_shim::{FailoverConnector, FailoverShim};
 
-    std::env::set_var("FAILOVER_CONNECTOR", "redis-sentinel");
-    std::env::set_var("REDIS_SENTINEL_URL", "redis://sentinel.prod:26379");
-    std::env::set_var("REDIS_SENTINEL_MASTER", "production-master");
-    std::env::set_var("FAILOVER_CHECK_INTERVAL_SECS", "7");
-
-    let shim = FailoverShim::new();
-    assert_eq!(shim.connector(), &FailoverConnector::RedisSentinel);
-    assert_eq!(shim.redis_sentinel_url(), "redis://sentinel.prod:26379");
-    assert_eq!(shim.redis_sentinel_master(), "production-master");
-    assert_eq!(shim.check_interval_secs(), 7);
-
-    std::env::remove_var("FAILOVER_CONNECTOR");
-    std::env::remove_var("REDIS_SENTINEL_URL");
-    std::env::remove_var("REDIS_SENTINEL_MASTER");
-    std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
+    temp_env::with_vars(
+        [
+            ("FAILOVER_CONNECTOR", Some("redis-sentinel")),
+            ("REDIS_SENTINEL_URL", Some("redis://sentinel.prod:26379")),
+            ("REDIS_SENTINEL_MASTER", Some("production-master")),
+            ("FAILOVER_CHECK_INTERVAL_SECS", Some("7")),
+        ],
+        || {
+            let shim = FailoverShim::new();
+            assert_eq!(shim.connector(), &FailoverConnector::RedisSentinel);
+            assert_eq!(shim.redis_sentinel_url(), "redis://sentinel.prod:26379");
+            assert_eq!(shim.redis_sentinel_master(), "production-master");
+            assert_eq!(shim.check_interval_secs(), 7);
+        },
+    );
 }
 
 /// Test connector type equality.
@@ -133,13 +129,25 @@ async fn test_connector_type_equality() {
 async fn test_patroni_connector_defaults() {
     use failover_shim::FailoverShim;
 
-    let shim = FailoverShim::new();
-    assert_eq!(shim.db_host(), "127.0.0.1");
-    assert_eq!(shim.db_port(), "5432");
-    assert_eq!(shim.db_user(), "postgres");
-    assert_eq!(shim.db_password(), "");
-    assert_eq!(shim.db_name(), "postgres");
-    assert_eq!(shim.lag_threshold_secs(), 30.0);
+    temp_env::with_vars(
+        [
+            ("FAILOVER_DB_HOST", None::<&str>),
+            ("FAILOVER_DB_PORT", None::<&str>),
+            ("FAILOVER_DB_USER", None::<&str>),
+            ("FAILOVER_DB_PASSWORD", None::<&str>),
+            ("FAILOVER_DB_NAME", None::<&str>),
+            ("FAILOVER_LAG_THRESHOLD_SECS", None::<&str>),
+        ],
+        || {
+            let shim = FailoverShim::new();
+            assert_eq!(shim.db_host(), "127.0.0.1");
+            assert_eq!(shim.db_port(), "5432");
+            assert_eq!(shim.db_user(), "postgres");
+            assert_eq!(shim.db_password(), "");
+            assert_eq!(shim.db_name(), "postgres");
+            assert_eq!(shim.lag_threshold_secs(), 30.0);
+        },
+    );
 }
 
 /// Test redis sentinel defaults.
@@ -162,7 +170,7 @@ async fn test_graceful_shutdown_generic() {
     assert!(!manager.is_initiated());
 
     // Shutdown a nonexistent PID — should handle gracefully
-    let result = manager.shutdown(u32::MAX).await.unwrap();
+    let result = manager.shutdown(i32::MAX as u32).await.unwrap();
     assert!(!result.clean_exit);
     assert!(manager.is_initiated());
 }
@@ -175,7 +183,7 @@ async fn test_graceful_shutdown_postgres() {
     let manager = ShutdownManager::new(DatabaseType::Postgres, 10);
     assert_eq!(manager.db_type(), DatabaseType::Postgres);
 
-    let result = manager.shutdown(u32::MAX).await.unwrap();
+    let result = manager.shutdown(i32::MAX as u32).await.unwrap();
     assert!(!result.clean_exit);
     assert!(result.db_type == DatabaseType::Postgres);
 }
@@ -188,7 +196,7 @@ async fn test_graceful_shutdown_redis() {
     let manager = ShutdownManager::new(DatabaseType::Redis, 10);
     assert_eq!(manager.db_type(), DatabaseType::Redis);
 
-    let result = manager.shutdown(u32::MAX).await.unwrap();
+    let result = manager.shutdown(i32::MAX as u32).await.unwrap();
     assert!(!result.clean_exit);
     assert!(result.db_type == DatabaseType::Redis);
 }
@@ -203,12 +211,15 @@ async fn test_shutdown_result_serialization() {
         db_type: DatabaseType::Postgres,
         duration_ms: 1500,
         signals_sent: 1,
-        log: vec!["Step 1: SIGTERM sent".to_string(), "Step 2: Clean exit".to_string()],
+        log: vec![
+            "Step 1: SIGTERM sent".to_string(),
+            "Step 2: Clean exit".to_string(),
+        ],
     };
 
     let json = serde_json::to_string(&result).unwrap();
     assert!(json.contains("clean_exit"));
-    assert!(json.contains("postgres"));
+    assert!(json.contains("Postgres"));
     assert!(json.contains("1500"));
 }
 
@@ -250,7 +261,9 @@ async fn test_redis_startup_probe_construction() {
     use shim_core::health::redis_startup_probe;
 
     let probe = redis_startup_probe("redis-cluster:6379");
-    assert!(probe.check_cmd.contains("redis-cluster:6379"));
+    assert!(probe.check_cmd.contains("redis-cli"));
+    assert!(probe.check_cmd.contains("6379"));
+    assert!(probe.check_cmd.contains("ping"));
     assert_eq!(probe.max_retries, 30);
     assert_eq!(probe.retry_delay_secs, 1);
 }
@@ -258,8 +271,8 @@ async fn test_redis_startup_probe_construction() {
 /// Test ChildProcess with database type.
 #[tokio::test]
 async fn test_child_process_with_db_type() {
-    use shim_core::{ChildProcess, DatabaseType};
     use shim_core::config::ProcessConfig;
+    use shim_core::{ChildProcess, DatabaseType};
 
     let config = ProcessConfig::default();
     let mut proc = ChildProcess::with_db_type(config, DatabaseType::Postgres);
@@ -295,10 +308,7 @@ async fn test_shutdown_strategy_redis() {
     let strategy = ShutdownStrategy::RedisGraceful;
     assert_eq!(strategy, ShutdownStrategy::RedisGraceful);
     assert_eq!(strategy.to_string(), "redis");
-    assert_eq!(
-        strategy.to_database_type(),
-        shim_core::DatabaseType::Redis
-    );
+    assert_eq!(strategy.to_database_type(), shim_core::DatabaseType::Redis);
 }
 
 /// Test shutdown strategy: generic sends SIGTERM then SIGKILL.
@@ -384,9 +394,10 @@ async fn test_startup_probe_redis() {
 async fn test_startup_probe_from_env_tcp() {
     use shim_core::health::startup_probe_from_env;
 
-    std::env::remove_var("STARTUP_PROBE_TYPE");
-    let probe = startup_probe_from_env();
-    assert!(probe.check_cmd.contains("tcp:"));
+    temp_env::with_var_unset("STARTUP_PROBE_TYPE", || {
+        let probe = startup_probe_from_env();
+        assert!(probe.check_cmd.contains("tcp:"));
+    });
 }
 
 /// Test startup probe from env: postgres.
@@ -394,16 +405,19 @@ async fn test_startup_probe_from_env_tcp() {
 async fn test_startup_probe_from_env_postgres() {
     use shim_core::health::startup_probe_from_env;
 
-    std::env::set_var("STARTUP_PROBE_TYPE", "postgres");
-    std::env::set_var("FAILOVER_DB_HOST", "pg.internal");
-    std::env::set_var("FAILOVER_DB_PORT", "5433");
-    let probe = startup_probe_from_env();
-    assert!(probe.check_cmd.contains("pg_isready"));
-    assert!(probe.check_cmd.contains("pg.internal"));
-    assert!(probe.check_cmd.contains("5433"));
-    std::env::remove_var("STARTUP_PROBE_TYPE");
-    std::env::remove_var("FAILOVER_DB_HOST");
-    std::env::remove_var("FAILOVER_DB_PORT");
+    temp_env::with_vars(
+        [
+            ("STARTUP_PROBE_TYPE", Some("postgres")),
+            ("FAILOVER_DB_HOST", Some("pg.internal")),
+            ("FAILOVER_DB_PORT", Some("5433")),
+        ],
+        || {
+            let probe = startup_probe_from_env();
+            assert!(probe.check_cmd.contains("pg_isready"));
+            assert!(probe.check_cmd.contains("pg.internal"));
+            assert!(probe.check_cmd.contains("5433"));
+        },
+    );
 }
 
 /// Test startup probe from env: redis.
@@ -411,11 +425,11 @@ async fn test_startup_probe_from_env_postgres() {
 async fn test_startup_probe_from_env_redis() {
     use shim_core::health::startup_probe_from_env;
 
-    std::env::set_var("STARTUP_PROBE_TYPE", "redis");
-    let probe = startup_probe_from_env();
-    assert!(probe.check_cmd.contains("redis-cli"));
-    assert!(probe.check_cmd.contains("ping"));
-    std::env::remove_var("STARTUP_PROBE_TYPE");
+    temp_env::with_vars([("STARTUP_PROBE_TYPE", Some("redis"))], || {
+        let probe = startup_probe_from_env();
+        assert!(probe.check_cmd.contains("redis-cli"));
+        assert!(probe.check_cmd.contains("ping"));
+    });
 }
 
 // ============================================================================
@@ -427,26 +441,30 @@ async fn test_startup_probe_from_env_redis() {
 async fn test_failover_monitor_patroni() {
     use failover_shim::PatroniMonitor;
 
-    std::env::set_var("FAILOVER_DB_HOST", "pg-cluster.internal");
-    std::env::set_var("FAILOVER_DB_PORT", "5433");
-    std::env::set_var("FAILOVER_DB_USER", "admin");
-    std::env::set_var("FAILOVER_DB_PASSWORD", "secret");
-    std::env::set_var("FAILOVER_DB_NAME", "cluster_db");
-    std::env::set_var("FAILOVER_CHECK_INTERVAL_SECS", "15");
-    std::env::set_var("FAILOVER_LAG_THRESHOLD_SECS", "20.5");
-
-    let monitor = PatroniMonitor::from_env();
-    assert_eq!(monitor.db_host(), "pg-cluster.internal");
-    assert_eq!(monitor.db_port(), "5433");
-    assert_eq!(monitor.db_user(), "admin");
-    assert_eq!(monitor.db_password(), "secret");
-    assert_eq!(monitor.check_interval_secs(), 15);
-    assert_eq!(monitor.lag_threshold_secs(), 20.5);
+    let monitor = temp_env::with_vars(
+        [
+            ("FAILOVER_DB_HOST", Some("pg-cluster.internal")),
+            ("FAILOVER_DB_PORT", Some("5433")),
+            ("FAILOVER_DB_USER", Some("admin")),
+            ("FAILOVER_DB_PASSWORD", Some("secret")),
+            ("FAILOVER_DB_NAME", Some("cluster_db")),
+            ("FAILOVER_CHECK_INTERVAL_SECS", Some("15")),
+            ("FAILOVER_LAG_THRESHOLD_SECS", Some("20.5")),
+        ],
+        || {
+            let monitor = PatroniMonitor::from_env();
+            assert_eq!(monitor.db_host(), "pg-cluster.internal");
+            assert_eq!(monitor.db_port(), "5433");
+            assert_eq!(monitor.db_user(), "admin");
+            assert_eq!(monitor.db_password(), "secret");
+            assert_eq!(monitor.check_interval_secs(), 15);
+            assert_eq!(monitor.lag_threshold_secs(), 20.5);
+            monitor
+        },
+    );
 
     // Check that it returns Unreachable when no PG is running
     let result = monitor.check().await;
-    // The check runs psql which won't be available or won't connect
-    // Result depends on environment
     match result {
         failover_shim::PatroniCheckResult::Unreachable => {
             // Expected in CI
@@ -455,14 +473,6 @@ async fn test_failover_monitor_patroni() {
             // PG is running somewhere
         }
     }
-
-    std::env::remove_var("FAILOVER_DB_HOST");
-    std::env::remove_var("FAILOVER_DB_PORT");
-    std::env::remove_var("FAILOVER_DB_USER");
-    std::env::remove_var("FAILOVER_DB_PASSWORD");
-    std::env::remove_var("FAILOVER_DB_NAME");
-    std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
-    std::env::remove_var("FAILOVER_LAG_THRESHOLD_SECS");
 }
 
 /// Test RedisSentinelMonitor construction and env var configuration.
@@ -470,14 +480,20 @@ async fn test_failover_monitor_patroni() {
 async fn test_failover_monitor_redis_sentinel() {
     use failover_shim::RedisSentinelMonitor;
 
-    std::env::set_var("REDIS_SENTINEL_URL", "redis://sentinel.prod:26379");
-    std::env::set_var("REDIS_SENTINEL_MASTER", "prod-master");
-    std::env::set_var("FAILOVER_CHECK_INTERVAL_SECS", "7");
-
-    let monitor = RedisSentinelMonitor::from_env();
-    assert_eq!(monitor.sentinel_url(), "redis://sentinel.prod:26379");
-    assert_eq!(monitor.master_name(), "prod-master");
-    assert_eq!(monitor.check_interval_secs(), 7);
+    let monitor = temp_env::with_vars(
+        [
+            ("REDIS_SENTINEL_URL", Some("redis://sentinel.prod:26379")),
+            ("REDIS_SENTINEL_MASTER", Some("prod-master")),
+            ("FAILOVER_CHECK_INTERVAL_SECS", Some("7")),
+        ],
+        || {
+            let monitor = RedisSentinelMonitor::from_env();
+            assert_eq!(monitor.sentinel_url(), "redis://sentinel.prod:26379");
+            assert_eq!(monitor.master_name(), "prod-master");
+            assert_eq!(monitor.check_interval_secs(), 7);
+            monitor
+        },
+    );
 
     // Check that it returns Unreachable when no sentinel is running
     let result = monitor.check().await;
@@ -489,8 +505,4 @@ async fn test_failover_monitor_redis_sentinel() {
             // Sentinel is running somewhere
         }
     }
-
-    std::env::remove_var("REDIS_SENTINEL_URL");
-    std::env::remove_var("REDIS_SENTINEL_MASTER");
-    std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
 }

@@ -24,20 +24,15 @@ use tokio::process::Child;
 use crate::error::Result;
 
 /// Database type for shutdown sequence selection.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DatabaseType {
     /// PostgreSQL database.
     Postgres,
     /// Redis cache.
     Redis,
     /// Generic process (default).
+    #[default]
     Generic,
-}
-
-impl Default for DatabaseType {
-    fn default() -> Self {
-        Self::Generic
-    }
 }
 
 impl std::fmt::Display for DatabaseType {
@@ -94,7 +89,8 @@ impl GracefulShutdown for PostgresShutdown {
     }
 
     fn description(&self) -> String {
-        "PostgreSQL: SIGTERM -> smart shutdown -> wait for queries -> checkpoint -> exit".to_string()
+        "PostgreSQL: SIGTERM -> smart shutdown -> wait for queries -> checkpoint -> exit"
+            .to_string()
     }
 
     async fn shutdown(&self, pid: u32, timeout_secs: u64) -> Result<ShutdownResult> {
@@ -105,7 +101,10 @@ impl GracefulShutdown for PostgresShutdown {
         // Step 1: Send SIGTERM (PostgreSQL interprets this as smart shutdown)
         log.push(format!("[1/4] Sending SIGTERM to PID {}", pid));
         if let Err(e) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
-            log.push(format!("  SIGTERM failed: {} (process may already be dead)", e));
+            log.push(format!(
+                "  SIGTERM failed: {} (process may already be dead)",
+                e
+            ));
             return Ok(ShutdownResult {
                 clean_exit: false,
                 db_type: DatabaseType::Postgres,
@@ -195,7 +194,10 @@ impl GracefulShutdown for RedisShutdown {
         // Step 1: Send SIGTERM (Redis saves RDB on SIGTERM by default)
         log.push(format!("[1/3] Sending SIGTERM to PID {}", pid));
         if let Err(e) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
-            log.push(format!("  SIGTERM failed: {} (process may already be dead)", e));
+            log.push(format!(
+                "  SIGTERM failed: {} (process may already be dead)",
+                e
+            ));
             return Ok(ShutdownResult {
                 clean_exit: false,
                 db_type: DatabaseType::Redis,
@@ -277,7 +279,10 @@ impl GracefulShutdown for GenericShutdown {
         // Step 1: Send SIGTERM
         log.push(format!("[1/3] Sending SIGTERM to PID {}", pid));
         if let Err(e) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
-            log.push(format!("  SIGTERM failed: {} (process may already be dead)", e));
+            log.push(format!(
+                "  SIGTERM failed: {} (process may already be dead)",
+                e
+            ));
             return Ok(ShutdownResult {
                 clean_exit: false,
                 db_type: DatabaseType::Generic,
@@ -289,10 +294,7 @@ impl GracefulShutdown for GenericShutdown {
         signals_sent += 1;
 
         // Step 2: Wait for timeout
-        log.push(format!(
-            "[2/3] Waiting {}s for graceful exit",
-            timeout_secs
-        ));
+        log.push(format!("[2/3] Waiting {}s for graceful exit", timeout_secs));
         tokio::time::timeout(Duration::from_secs(timeout_secs), async {
             while is_process_alive(pid) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -432,20 +434,15 @@ impl ShutdownManager {
 /// - `PostgresGraceful`: SIGTERM -> wait for smart shutdown -> SIGKILL on timeout
 /// - `RedisGraceful`: SIGTERM -> wait for RDB save -> SIGKILL on timeout
 /// - `GenericGraceful`: SIGTERM -> wait timeout -> SIGKILL
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ShutdownStrategy {
     /// PostgreSQL: SIGTERM triggers smart shutdown, wait for queries to drain.
     PostgresGraceful,
     /// Redis: SIGTERM triggers RDB save, wait for fork to complete.
     RedisGraceful,
     /// Generic: SIGTERM, wait timeout, then SIGKILL.
+    #[default]
     GenericGraceful,
-}
-
-impl Default for ShutdownStrategy {
-    fn default() -> Self {
-        Self::GenericGraceful
-    }
 }
 
 impl std::fmt::Display for ShutdownStrategy {
@@ -460,6 +457,7 @@ impl std::fmt::Display for ShutdownStrategy {
 
 impl ShutdownStrategy {
     /// Create from a string (e.g., from env var).
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "postgres" | "postgresql" | "pg" => Self::PostgresGraceful,
@@ -519,10 +517,7 @@ pub async fn graceful_shutdown(
     let mut signals_sent = 0u32;
 
     // Step 1: Send SIGTERM
-    log.push(format!(
-        "[1] Sending SIGTERM to PID {} ({})",
-        pid, strategy
-    ));
+    log.push(format!("[1] Sending SIGTERM to PID {} ({})", pid, strategy));
     if let Err(e) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
         log.push(format!("  SIGTERM failed: {}", e));
         return Ok(ShutdownResult {
@@ -560,14 +555,11 @@ pub async fn graceful_shutdown(
         }
     };
 
-    let wait_result = tokio::time::timeout(
-        Duration::from_secs(wait_secs),
-        async {
-            while is_process_alive(pid) {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        },
-    )
+    let wait_result = tokio::time::timeout(Duration::from_secs(wait_secs), async {
+        while is_process_alive(pid) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
     .await;
 
     if !is_process_alive(pid) {
@@ -598,6 +590,8 @@ pub async fn graceful_shutdown(
     if let Ok(()) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGKILL) {
         signals_sent += 1;
     }
+    // Reap the child process to eliminate zombie state
+    child.kill().await.ok();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let clean = !is_process_alive(pid);
@@ -670,7 +664,7 @@ mod tests {
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("clean_exit"));
-        assert!(json.contains("postgres"));
+        assert!(json.contains("Postgres"));
     }
 
     #[test]
@@ -696,13 +690,13 @@ mod tests {
     #[test]
     fn test_is_process_alive_invalid_pid() {
         // PID 1 might exist but very high PIDs should not
-        assert!(!is_process_alive(u32::MAX));
+        assert!(!is_process_alive(i32::MAX as u32));
     }
 
     #[tokio::test]
     async fn test_postgres_shutdown_nonexistent() {
         let handler = PostgresShutdown;
-        let result = handler.shutdown(u32::MAX, 5).await;
+        let result = handler.shutdown(i32::MAX as u32, 5).await;
         assert!(result.is_ok());
         // Should fail to send signal
         let r = result.unwrap();
@@ -713,7 +707,7 @@ mod tests {
     #[tokio::test]
     async fn test_redis_shutdown_nonexistent() {
         let handler = RedisShutdown;
-        let result = handler.shutdown(u32::MAX, 5).await;
+        let result = handler.shutdown(i32::MAX as u32, 5).await;
         assert!(result.is_ok());
         let r = result.unwrap();
         assert!(!r.clean_exit);
@@ -722,7 +716,7 @@ mod tests {
     #[tokio::test]
     async fn test_generic_shutdown_nonexistent() {
         let handler = GenericShutdown;
-        let result = handler.shutdown(u32::MAX, 5).await;
+        let result = handler.shutdown(i32::MAX as u32, 5).await;
         assert!(result.is_ok());
         let r = result.unwrap();
         assert!(!r.clean_exit);
@@ -731,14 +725,17 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_manager_shutdown_nonexistent() {
         let manager = ShutdownManager::new(DatabaseType::Postgres, 5);
-        let result = manager.shutdown(u32::MAX).await;
+        let result = manager.shutdown(i32::MAX as u32).await;
         assert!(result.is_ok());
         assert!(manager.is_initiated());
     }
 
     #[test]
     fn test_shutdown_strategy_default() {
-        assert_eq!(ShutdownStrategy::default(), ShutdownStrategy::GenericGraceful);
+        assert_eq!(
+            ShutdownStrategy::default(),
+            ShutdownStrategy::GenericGraceful
+        );
     }
 
     #[test]
@@ -794,12 +791,12 @@ mod tests {
 
     #[test]
     fn test_shutdown_strategy_from_env() {
-        std::env::set_var("SHUTDOWN_STRATEGY", "postgres");
-        assert_eq!(
-            ShutdownStrategy::from_env(),
-            ShutdownStrategy::PostgresGraceful
-        );
-        std::env::remove_var("SHUTDOWN_STRATEGY");
+        temp_env::with_vars([("SHUTDOWN_STRATEGY", Some("postgres"))], || {
+            assert_eq!(
+                ShutdownStrategy::from_env(),
+                ShutdownStrategy::PostgresGraceful
+            );
+        });
 
         assert_eq!(
             ShutdownStrategy::from_env(),
@@ -809,12 +806,13 @@ mod tests {
 
     #[test]
     fn test_shutdown_strategy_default_timeout() {
-        std::env::remove_var("SHUTDOWN_TIMEOUT_SECS");
-        assert_eq!(ShutdownStrategy::default_timeout(), 30);
+        temp_env::with_var_unset("SHUTDOWN_TIMEOUT_SECS", || {
+            assert_eq!(ShutdownStrategy::default_timeout(), 30);
+        });
 
-        std::env::set_var("SHUTDOWN_TIMEOUT_SECS", "60");
-        assert_eq!(ShutdownStrategy::default_timeout(), 60);
-        std::env::remove_var("SHUTDOWN_TIMEOUT_SECS");
+        temp_env::with_vars([("SHUTDOWN_TIMEOUT_SECS", Some("60"))], || {
+            assert_eq!(ShutdownStrategy::default_timeout(), 60);
+        });
     }
 
     #[test]
@@ -830,9 +828,7 @@ mod tests {
     #[tokio::test]
     async fn test_graceful_shutdown_nonexistent_process() {
         let strategy = ShutdownStrategy::GenericGraceful;
-        let mut child = tokio::process::Command::new("true")
-            .spawn()
-            .unwrap();
+        let mut child = tokio::process::Command::new("true").spawn().unwrap();
         // Kill it immediately so PID is invalid
         child.kill().await.ok();
         // Wait for it to finish

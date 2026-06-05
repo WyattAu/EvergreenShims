@@ -374,8 +374,8 @@ impl BackupShim {
             .await
             .map_err(|e| anyhow::anyhow!("Redis BGSAVE failed: {}", e))?;
 
-        let deadline = tokio::time::Instant::now()
-            + tokio::time::Duration::from_secs(self.timeout_secs);
+        let deadline =
+            tokio::time::Instant::now() + tokio::time::Duration::from_secs(self.timeout_secs);
         loop {
             let info: String = redis::cmd("INFO")
                 .arg("persistence")
@@ -386,10 +386,7 @@ impl BackupShim {
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
-                anyhow::bail!(
-                    "Redis BGSAVE timed out after {} seconds",
-                    self.timeout_secs
-                );
+                anyhow::bail!("Redis BGSAVE timed out after {} seconds", self.timeout_secs);
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
@@ -848,8 +845,10 @@ mod tests {
 
     #[test]
     fn test_default_db_type() {
-        let shim = BackupShim::new();
-        assert_eq!(shim.db_type, "postgres");
+        temp_env::with_var_unset("BACKUP_DB_TYPE", || {
+            let shim = BackupShim::new();
+            assert_eq!(shim.db_type, "postgres");
+        });
     }
 
     #[test]
@@ -860,28 +859,27 @@ mod tests {
 
     #[test]
     fn test_env_overrides() {
-        std::env::set_var("BACKUP_DB_TYPE", "mysql");
-        std::env::set_var("BACKUP_RETENTION_DAYS", "60");
-        std::env::set_var("BACKUP_COMPRESSION", "zstd");
-        std::env::set_var("BACKUP_CMD", "mysqldump");
-        std::env::set_var("BACKUP_OUTPUT_DIR", "/data/backups");
-        std::env::set_var("REDIS_URL", "redis://redis-host:6380");
-        std::env::set_var("REDIS_PASSWORD", "secret123");
-        let shim = BackupShim::new();
-        assert_eq!(shim.db_type, "mysql");
-        assert_eq!(shim.retention_days, 60);
-        assert_eq!(shim.compression, "zstd");
-        assert_eq!(shim.backup_cmd, "mysqldump");
-        assert_eq!(shim.output_dir, "/data/backups");
-        assert_eq!(shim.redis_url, "redis://redis-host:6380");
-        assert_eq!(shim.redis_password, "secret123");
-        std::env::remove_var("BACKUP_DB_TYPE");
-        std::env::remove_var("BACKUP_RETENTION_DAYS");
-        std::env::remove_var("BACKUP_COMPRESSION");
-        std::env::remove_var("BACKUP_CMD");
-        std::env::remove_var("BACKUP_OUTPUT_DIR");
-        std::env::remove_var("REDIS_URL");
-        std::env::remove_var("REDIS_PASSWORD");
+        temp_env::with_vars(
+            [
+                ("BACKUP_DB_TYPE", Some("mysql")),
+                ("BACKUP_RETENTION_DAYS", Some("60")),
+                ("BACKUP_COMPRESSION", Some("zstd")),
+                ("BACKUP_CMD", Some("mysqldump")),
+                ("BACKUP_OUTPUT_DIR", Some("/data/backups")),
+                ("REDIS_URL", Some("redis://redis-host:6380")),
+                ("REDIS_PASSWORD", Some("secret123")),
+            ],
+            || {
+                let shim = BackupShim::new();
+                assert_eq!(shim.db_type, "mysql");
+                assert_eq!(shim.retention_days, 60);
+                assert_eq!(shim.compression, "zstd");
+                assert_eq!(shim.backup_cmd, "mysqldump");
+                assert_eq!(shim.output_dir, "/data/backups");
+                assert_eq!(shim.redis_url, "redis://redis-host:6380");
+                assert_eq!(shim.redis_password, "secret123");
+            },
+        );
     }
 
     #[test]
