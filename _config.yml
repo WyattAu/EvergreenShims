@@ -1,0 +1,21 @@
+title: EvergreenShims
+description: Rust-native shims for self-managing container images
+remote_theme: pages-themes/cayman@v0.2.0
+plugins:
+  - jekyll-remote-theme
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+exclude:
+  - crates/
+  - target/
+  - .git/
+  - Cargo.*
+  - Dockerfile*
+  - LICENSE
+  - scripts/
+  - .githooks/
+  - tests/
