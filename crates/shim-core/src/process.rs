@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::ProcessConfig;
 use crate::error::Result;
+use crate::shutdown::{DatabaseType, ShutdownManager};
 
 /// Child process state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,6 +36,9 @@ pub struct ChildProcess {
 
     /// Process state.
     state: ProcessState,
+
+    /// Database type for shutdown sequence selection.
+    db_type: DatabaseType,
 }
 
 impl ChildProcess {
@@ -45,7 +49,29 @@ impl ChildProcess {
             pid: None,
             child: None,
             state: ProcessState::Stopped,
+            db_type: DatabaseType::Generic,
         }
+    }
+
+    /// Create a new child process manager with a specific database type.
+    pub fn with_db_type(config: ProcessConfig, db_type: DatabaseType) -> Self {
+        Self {
+            config,
+            pid: None,
+            child: None,
+            state: ProcessState::Stopped,
+            db_type,
+        }
+    }
+
+    /// Set the database type for shutdown sequence selection.
+    pub fn set_db_type(&mut self, db_type: DatabaseType) {
+        self.db_type = db_type;
+    }
+
+    /// Get the database type.
+    pub fn db_type(&self) -> &DatabaseType {
+        &self.db_type
     }
 
     /// Start the child process.
@@ -79,28 +105,28 @@ impl ChildProcess {
     /// Stop the child process gracefully.
     pub async fn stop(&mut self) -> Result<()> {
         if let Some(pid) = self.pid {
-            tracing::info!("Stopping child process PID {}", pid);
-
-            // Send SIGTERM
+            tracing::info!("Stopping child process PID {} (type: {})", pid, self.db_type);
             self.state = ProcessState::Stopping;
-            if let Err(e) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
-                tracing::warn!("failed to send SIGTERM to PID {}: {}", pid, e);
-            }
 
-            // Wait for graceful shutdown using the child handle
-            let timeout = std::time::Duration::from_secs(self.config.shutdown_timeout_secs);
-            if let Some(ref mut child) = self.child {
-                let _ = tokio::time::timeout(timeout, child.wait()).await;
-            }
+            let shutdown_mgr = ShutdownManager::new(
+                self.db_type.clone(),
+                self.config.shutdown_timeout_secs,
+            );
 
-            // Force kill if still running
-            if self.is_running() {
-                tracing::warn!(
-                    "Child process PID {} did not exit gracefully, sending SIGKILL",
-                    pid
-                );
-                if let Err(e) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGKILL) {
-                    tracing::warn!("failed to send SIGKILL to PID {}: {}", pid, e);
+            let result = shutdown_mgr.shutdown(pid).await?;
+
+            if !result.clean_exit {
+                // Force kill if still running
+                if self.is_running() {
+                    tracing::warn!(
+                        "Child process PID {} did not exit gracefully, sending SIGKILL",
+                        pid
+                    );
+                    if let Err(e) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGKILL) {
+                        tracing::warn!("failed to send SIGKILL to PID {}: {}", pid, e);
+                    }
+                    // Wait briefly for SIGKILL
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
             }
 
@@ -108,7 +134,7 @@ impl ChildProcess {
             self.child = None;
             self.pid = None;
             self.state = ProcessState::Stopped;
-            tracing::info!("Child process stopped");
+            tracing::info!("Child process stopped ({}ms)", result.duration_ms);
         }
 
         Ok(())
@@ -139,5 +165,44 @@ impl ChildProcess {
     /// Get the child process state.
     pub fn state(&self) -> &ProcessState {
         &self.state
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_child_process_new() {
+        let config = ProcessConfig::default();
+        let proc = ChildProcess::new(config);
+        assert_eq!(*proc.state(), ProcessState::Stopped);
+        assert!(!proc.is_running());
+        assert_eq!(proc.pid(), None);
+    }
+
+    #[test]
+    fn test_child_process_with_db_type() {
+        let config = ProcessConfig::default();
+        let proc = ChildProcess::with_db_type(config, DatabaseType::Postgres);
+        assert_eq!(*proc.db_type(), DatabaseType::Postgres);
+    }
+
+    #[test]
+    fn test_child_process_set_db_type() {
+        let config = ProcessConfig::default();
+        let mut proc = ChildProcess::new(config);
+        assert_eq!(*proc.db_type(), DatabaseType::Generic);
+
+        proc.set_db_type(DatabaseType::Redis);
+        assert_eq!(*proc.db_type(), DatabaseType::Redis);
+    }
+
+    #[test]
+    fn test_signal_to_nonexistent_process() {
+        let config = ProcessConfig::default();
+        let proc = ChildProcess::new(config);
+        // Should not panic
+        let _ = proc.signal(Signal::SIGTERM);
     }
 }

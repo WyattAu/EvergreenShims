@@ -962,6 +962,7 @@ dependencies = [
  "chrono",
  "parking_lot",
  "prometheus",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",

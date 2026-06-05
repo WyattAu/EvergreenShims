@@ -11,6 +11,7 @@ pub mod health;
 pub mod hotreload;
 pub mod metrics;
 pub mod process;
+pub mod shutdown;
 pub mod signal;
 pub mod wiring;
 
@@ -24,9 +25,13 @@ pub use config::{
 };
 pub use error::{Error, Result};
 pub use event::{EventHandler, EventType, Severity, ShimEvent};
-pub use health::{CommandHealthCheck, HealthCheck, HealthStatus};
+pub use health::{CommandHealthCheck, HealthCheck, HealthStatus, StartupProbe};
 pub use metrics::Metric;
 pub use process::ChildProcess;
+pub use shutdown::{
+    graceful_shutdown, DatabaseType, GracefulShutdown, ShutdownManager, ShutdownResult,
+    ShutdownStrategy,
+};
 pub use signal::{Signal, SignalHandler};
 
 /// A shim capability that can be enabled/disabled.

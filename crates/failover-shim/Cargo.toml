@@ -18,3 +18,4 @@ serde_json.workspace = true
 chrono.workspace = true
 prometheus.workspace = true
 parking_lot.workspace = true
+redis.workspace = true
