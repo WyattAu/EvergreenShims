@@ -20,6 +20,8 @@ prometheus.workspace = true
 sha2.workspace = true
 cron.workspace = true
 redis.workspace = true
+aws-sdk-s3.workspace = true
+aws-config.workspace = true
 
 [dev-dependencies]
 temp-env.workspace = true

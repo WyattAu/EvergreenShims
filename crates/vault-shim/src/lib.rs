@@ -6,14 +6,15 @@
 //! ## Environment Variables
 //!
 //! ```text
-//! VAULT_ADDR          Vault server URL (default: https://127.0.0.1:8200)
-//! VAULT_TOKEN         Vault token (or use AppRole/K8s auth)
-//! VAULT_ROLE          Vault role for dynamic credentials
-//! VAULT_SECRET        Secret path (e.g., secret/data/postgres/creds)
-//! VAULT_KEY           Key within secret (default: password)
-//! VAULT_OUTPUT_FILE   File to write rotated credentials
-//! VAULT_ROTATION_SECS Rotation interval in seconds (default: 3600)
-//! VAULT_MOUNT         Vault mount point (default: secret)
+//! VAULT_ADDR              Vault server URL (default: https://127.0.0.1:8200)
+//! VAULT_TOKEN             Vault token (or use AppRole/K8s auth)
+//! VAULT_ROLE              Vault role for dynamic credentials
+//! VAULT_SECRET            Secret path (e.g., secret/data/postgres/creds)
+//! VAULT_KEY               Key within secret (default: password)
+//! VAULT_OUTPUT_FILE       File to write rotated credentials
+//! VAULT_ROTATION_SECS     Rotation interval in seconds (default: 3600)
+//! VAULT_MOUNT             Vault mount point (default: secret)
+//! VAULT_TLS_SKIP_VERIFY   Skip TLS certificate verification (default: false)
 //! ```
 
 use std::collections::HashMap;
@@ -59,6 +60,7 @@ pub struct VaultShim {
     vault_mount: String,
     output_file: Option<PathBuf>,
     rotation_secs: u64,
+    tls_skip_verify: bool,
     http_client: Client,
     last_rotation: Option<chrono::DateTime<chrono::Utc>>,
     rotation_success: u64,
@@ -69,6 +71,22 @@ pub struct VaultShim {
 impl VaultShim {
     /// Create a new vault shim.
     pub fn new() -> Self {
+        let tls_skip_verify = std::env::var("VAULT_TLS_SKIP_VERIFY")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        // Install the default crypto provider for rustls if not already installed.
+        // This is required because reqwest is built with `rustls-tls-no-provider`.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let mut builder = Client::builder();
+        if tls_skip_verify {
+            tracing::warn!("Vault TLS verification disabled via VAULT_TLS_SKIP_VERIFY");
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        let http_client = builder.build().unwrap_or_default();
+
         Self {
             vault_addr: std::env::var("VAULT_ADDR")
                 .unwrap_or_else(|_| "https://127.0.0.1:8200".to_string()),
@@ -82,10 +100,8 @@ impl VaultShim {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3600),
-            http_client: Client::builder()
-                .danger_accept_invalid_certs(true)
-                .build()
-                .unwrap_or_default(),
+            tls_skip_verify,
+            http_client,
             last_rotation: None,
             rotation_success: 0,
             rotation_failure: 0,
@@ -249,14 +265,16 @@ impl Capability for VaultShim {
         let vault_key = self.vault_key.clone();
         let vault_mount = self.vault_mount.clone();
         let output_file = self.output_file.clone();
+        let tls_skip_verify = self.tls_skip_verify;
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
         tokio::spawn(async move {
-            let client = Client::builder()
-                .danger_accept_invalid_certs(true)
-                .build()
-                .unwrap_or_default();
+            let mut builder = Client::builder();
+            if tls_skip_verify {
+                builder = builder.danger_accept_invalid_certs(true);
+            }
+            let client = builder.build().unwrap_or_default();
 
             let mut shim = VaultShim {
                 vault_addr,
@@ -267,6 +285,7 @@ impl Capability for VaultShim {
                 vault_mount,
                 output_file,
                 rotation_secs,
+                tls_skip_verify,
                 http_client: client,
                 last_rotation: None,
                 rotation_success: 0,
@@ -318,5 +337,116 @@ impl Capability for VaultShim {
         }
 
         metrics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vault_shim_defaults() {
+        temp_env::with_var_unset("VAULT_ADDR", || {
+            temp_env::with_var_unset("VAULT_TOKEN", || {
+                temp_env::with_var_unset("VAULT_TLS_SKIP_VERIFY", || {
+                    let shim = VaultShim::new();
+                    assert_eq!(shim.vault_addr, "https://127.0.0.1:8200");
+                    assert_eq!(shim.vault_token, "");
+                    assert_eq!(shim.vault_role, "");
+                    assert_eq!(shim.vault_secret, "");
+                    assert_eq!(shim.vault_key, "password");
+                    assert_eq!(shim.vault_mount, "secret");
+                    assert_eq!(shim.rotation_secs, 3600);
+                    assert!(!shim.tls_skip_verify);
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn test_tls_skip_verify_default_off() {
+        temp_env::with_var_unset("VAULT_TLS_SKIP_VERIFY", || {
+            let shim = VaultShim::new();
+            assert!(!shim.tls_skip_verify);
+        });
+    }
+
+    #[test]
+    fn test_tls_skip_verify_true() {
+        temp_env::with_vars([("VAULT_TLS_SKIP_VERIFY", Some("true"))], || {
+            let shim = VaultShim::new();
+            assert!(shim.tls_skip_verify);
+        });
+    }
+
+    #[test]
+    fn test_tls_skip_verify_one() {
+        temp_env::with_vars([("VAULT_TLS_SKIP_VERIFY", Some("1"))], || {
+            let shim = VaultShim::new();
+            assert!(shim.tls_skip_verify);
+        });
+    }
+
+    #[test]
+    fn test_tls_skip_verify_false_string() {
+        temp_env::with_vars([("VAULT_TLS_SKIP_VERIFY", Some("false"))], || {
+            let shim = VaultShim::new();
+            assert!(!shim.tls_skip_verify);
+        });
+    }
+
+    #[test]
+    fn test_env_overrides() {
+        temp_env::with_vars(
+            [
+                ("VAULT_ADDR", Some("https://vault.prod:8200")),
+                ("VAULT_TOKEN", Some("hvs.test-token")),
+                ("VAULT_ROLE", Some("postgres-admin")),
+                ("VAULT_SECRET", Some("secret/data/db")),
+                ("VAULT_KEY", Some("pass")),
+                ("VAULT_MOUNT", Some("kv")),
+                ("VAULT_ROTATION_SECS", Some("1800")),
+            ],
+            || {
+                let shim = VaultShim::new();
+                assert_eq!(shim.vault_addr, "https://vault.prod:8200");
+                assert_eq!(shim.vault_token, "hvs.test-token");
+                assert_eq!(shim.vault_role, "postgres-admin");
+                assert_eq!(shim.vault_secret, "secret/data/db");
+                assert_eq!(shim.vault_key, "pass");
+                assert_eq!(shim.vault_mount, "kv");
+                assert_eq!(shim.rotation_secs, 1800);
+            },
+        );
+    }
+
+    #[test]
+    fn test_capability_name() {
+        let shim = VaultShim::new();
+        assert_eq!(shim.name(), "vault");
+    }
+
+    #[test]
+    fn test_metrics_initial() {
+        let shim = VaultShim::new();
+        let metrics = shim.metrics();
+        assert_eq!(metrics.len(), 2);
+        assert_eq!(metrics[0].name, "vault_rotation_success_total");
+        assert_eq!(metrics[1].name, "vault_rotation_failure_total");
+    }
+
+    #[test]
+    fn test_metrics_with_last_rotation() {
+        let mut shim = VaultShim::new();
+        shim.last_rotation = Some(chrono::Utc::now());
+        let metrics = shim.metrics();
+        assert_eq!(metrics.len(), 3);
+        assert_eq!(metrics[2].name, "vault_rotation_last_success_timestamp");
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let shim = VaultShim::default();
+        assert_eq!(shim.name(), "vault");
     }
 }

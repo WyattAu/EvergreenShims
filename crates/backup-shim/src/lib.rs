@@ -29,6 +29,7 @@
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+use aws_sdk_s3::Client as S3Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shim_core::{Capability, Config, Metric, Result};
@@ -151,6 +152,13 @@ pub struct BackupShim {
     output_dir: String,
     redis_url: String,
     redis_password: String,
+    // S3 configuration
+    s3_bucket: String,
+    s3_region: String,
+    s3_endpoint: Option<String>,
+    s3_prefix: String,
+    s3_force_path_style: bool,
+    s3_server_side_encryption: bool,
     state: Arc<Mutex<BackupState>>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
@@ -187,6 +195,17 @@ impl BackupShim {
             redis_url: std::env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://localhost:6379".to_string()),
             redis_password: std::env::var("REDIS_PASSWORD").unwrap_or_default(),
+            s3_bucket: std::env::var("BACKUP_S3_BUCKET").unwrap_or_default(),
+            s3_region: std::env::var("BACKUP_S3_REGION")
+                .unwrap_or_else(|_| "us-east-1".to_string()),
+            s3_endpoint: std::env::var("BACKUP_S3_ENDPOINT").ok(),
+            s3_prefix: std::env::var("BACKUP_S3_PREFIX").unwrap_or_else(|_| "backups".to_string()),
+            s3_force_path_style: std::env::var("BACKUP_S3_FORCE_PATH_STYLE")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            s3_server_side_encryption: std::env::var("BACKUP_S3_SSE")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(true),
             state: Arc::new(Mutex::new(BackupState::new())),
             shutdown_tx: None,
         }
@@ -263,6 +282,137 @@ impl BackupShim {
     /// Get the timeout in seconds.
     pub fn timeout_secs(&self) -> u64 {
         self.timeout_secs
+    }
+
+    /// Get the S3 bucket.
+    pub fn s3_bucket(&self) -> &str {
+        &self.s3_bucket
+    }
+
+    /// Get the S3 region.
+    pub fn s3_region(&self) -> &str {
+        &self.s3_region
+    }
+
+    /// Get the S3 endpoint (for MinIO/LocalStack).
+    pub fn s3_endpoint(&self) -> Option<&str> {
+        self.s3_endpoint.as_deref()
+    }
+
+    /// Get the S3 key prefix.
+    pub fn s3_prefix(&self) -> &str {
+        &self.s3_prefix
+    }
+
+    /// Check if S3 server-side encryption is enabled.
+    pub fn s3_server_side_encryption(&self) -> bool {
+        self.s3_server_side_encryption
+    }
+
+    /// Check if S3 path style is forced (for MinIO).
+    pub fn s3_force_path_style(&self) -> bool {
+        self.s3_force_path_style
+    }
+
+    /// Build an S3 client from the current configuration.
+    async fn build_s3_client(&self) -> anyhow::Result<S3Client> {
+        let mut config_loader =
+            aws_config::from_env().region(aws_config::Region::new(self.s3_region.clone()));
+
+        if let Some(endpoint) = &self.s3_endpoint {
+            config_loader = config_loader.endpoint_url(endpoint);
+        }
+
+        let sdk_config = config_loader.load().await;
+
+        let mut s3_config = aws_sdk_s3::config::Builder::from(&sdk_config);
+        if self.s3_force_path_style {
+            s3_config = s3_config.force_path_style(true);
+        }
+
+        Ok(S3Client::from_conf(s3_config.build()))
+    }
+
+    /// Upload a file to S3.
+    ///
+    /// The key is constructed as `{s3_prefix}/{database}/{filename}`.
+    /// If `s3_server_side_encryption` is enabled, uses AES256 SSE.
+    /// Returns the full S3 URI on success.
+    async fn upload_to_s3(&self, local_path: &str, filename: &str) -> anyhow::Result<String> {
+        let client = self.build_s3_client().await?;
+
+        let key = if self.s3_prefix.is_empty() {
+            format!("{}/{}", self.database, filename)
+        } else {
+            format!("{}/{}/{}", self.s3_prefix, self.database, filename)
+        };
+
+        let body = fs::read(local_path).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read backup file for S3 upload: {}: {}",
+                local_path,
+                e
+            )
+        })?;
+        let body_len = body.len() as u64;
+
+        let mut put_req = client
+            .put_object()
+            .bucket(&self.s3_bucket)
+            .key(&key)
+            .body(body.into());
+
+        if self.s3_server_side_encryption {
+            put_req =
+                put_req.server_side_encryption(aws_sdk_s3::types::ServerSideEncryption::Aes256);
+        }
+
+        // Set content type based on file extension
+        let content_type = if filename.ends_with(".gz") {
+            "application/gzip"
+        } else if filename.ends_with(".zst") {
+            "application/zstd"
+        } else {
+            "application/octet-stream"
+        };
+        put_req = put_req.content_type(content_type);
+
+        put_req
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("S3 upload failed: {}/{}: {}", self.s3_bucket, key, e))?;
+
+        let s3_uri = format!("s3://{}/{}", self.s3_bucket, key);
+        tracing::info!(
+            "S3 upload complete: {} ({} bytes) -> {}",
+            local_path,
+            body_len,
+            s3_uri
+        );
+
+        Ok(s3_uri)
+    }
+
+    /// Delete a backup from S3.
+    async fn delete_from_s3(&self, filename: &str) -> anyhow::Result<()> {
+        let client = self.build_s3_client().await?;
+
+        let key = if self.s3_prefix.is_empty() {
+            format!("{}/{}", self.database, filename)
+        } else {
+            format!("{}/{}/{}", self.s3_prefix, self.database, filename)
+        };
+
+        client
+            .delete_object()
+            .bucket(&self.s3_bucket)
+            .key(&key)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("S3 delete failed: {}/{}: {}", self.s3_bucket, key, e))?;
+
+        tracing::info!("S3 delete: s3://{}/{}", self.s3_bucket, key);
+        Ok(())
     }
 
     /// Validate a backup entry: checks size, checksum format, and verifies checksum against data.
@@ -443,22 +593,36 @@ impl BackupShim {
                 let size = data.len() as u64;
                 let checksum = Self::compute_checksum(&data);
 
-                let expected_checksum = Self::compute_checksum(&data);
-                if checksum != expected_checksum {
-                    tracing::warn!(
-                        "Backup checksum mismatch for {}: expected {}, got {}",
-                        filename,
-                        expected_checksum,
-                        checksum
-                    );
-                }
-
                 tracing::info!(
                     "Backup {} verified: {} bytes, sha256:{}",
                     filename,
                     size,
                     &checksum[..16]
                 );
+
+                // Upload to S3 if configured
+                if self.storage == "s3" && !self.s3_bucket.is_empty() {
+                    match self.upload_to_s3(&output_path, &filename).await {
+                        Ok(s3_uri) => {
+                            tracing::info!("Backup uploaded to S3: {}", s3_uri);
+                            // Optionally remove local file after successful S3 upload
+                            if std::env::var("BACKUP_S3_REMOVE_LOCAL")
+                                .map(|v| v == "true" || v == "1")
+                                .unwrap_or(false)
+                            {
+                                if let Err(e) = fs::remove_file(&output_path).await {
+                                    tracing::warn!(
+                                        "Failed to remove local backup after S3 upload: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("S3 upload failed, backup retained locally: {}", e);
+                        }
+                    }
+                }
 
                 let mut state = self.state.lock().unwrap();
                 state.record_backup(filename.clone(), size, checksum);
@@ -526,6 +690,13 @@ impl Capability for BackupShim {
         let backup_cmd = self.backup_cmd.clone();
         let redis_url = self.redis_url.clone();
         let redis_password = self.redis_password.clone();
+        let storage = self.storage.clone();
+        let s3_bucket = self.s3_bucket.clone();
+        let s3_region = self.s3_region.clone();
+        let s3_endpoint = self.s3_endpoint.clone();
+        let s3_prefix = self.s3_prefix.clone();
+        let s3_force_path_style = self.s3_force_path_style;
+        let s3_server_side_encryption = self.s3_server_side_encryption;
 
         let schedule = cron::Schedule::from_str(&schedule_str)
             .unwrap_or_else(|_| cron::Schedule::from_str("0 2 * * *").unwrap());
@@ -549,7 +720,7 @@ impl Capability for BackupShim {
 
                 let shim = BackupShim {
                     schedule: schedule_str.clone(),
-                    storage: String::new(),
+                    storage: storage.clone(),
                     backup_path: String::new(),
                     prefix: String::new(),
                     retention_days: 30,
@@ -565,6 +736,12 @@ impl Capability for BackupShim {
                     output_dir: output_dir.clone(),
                     redis_url: redis_url.clone(),
                     redis_password: redis_password.clone(),
+                    s3_bucket: s3_bucket.clone(),
+                    s3_region: s3_region.clone(),
+                    s3_endpoint: s3_endpoint.clone(),
+                    s3_prefix: s3_prefix.clone(),
+                    s3_force_path_style,
+                    s3_server_side_encryption,
                     state: Arc::clone(&state),
                     shutdown_tx: None,
                 };
@@ -884,19 +1061,25 @@ mod tests {
 
     #[test]
     fn test_default_backup_cmd() {
-        let shim = BackupShim::new();
-        assert_eq!(shim.backup_cmd, "pg_dump");
+        temp_env::with_var_unset("BACKUP_CMD", || {
+            let shim = BackupShim::new();
+            assert_eq!(shim.backup_cmd, "pg_dump");
+        });
     }
 
     #[test]
     fn test_default_output_dir() {
-        let shim = BackupShim::new();
-        assert_eq!(shim.output_dir, "/tmp/backups");
+        temp_env::with_var_unset("BACKUP_OUTPUT_DIR", || {
+            let shim = BackupShim::new();
+            assert_eq!(shim.output_dir, "/tmp/backups");
+        });
     }
 
     #[test]
     fn test_default_redis_url() {
-        let shim = BackupShim::new();
-        assert_eq!(shim.redis_url, "redis://localhost:6379");
+        temp_env::with_var_unset("REDIS_URL", || {
+            let shim = BackupShim::new();
+            assert_eq!(shim.redis_url, "redis://localhost:6379");
+        });
     }
 }

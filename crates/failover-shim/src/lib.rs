@@ -1309,13 +1309,15 @@ mod tests {
 
     #[test]
     fn test_new_defaults() {
-        let shim = FailoverShim::new();
-        assert_eq!(shim.check_interval_secs(), 5);
-        assert_eq!(shim.failure_threshold, 3);
-        assert_eq!(shim.db_type, "postgres");
-        assert_eq!(shim.connector(), &FailoverConnector::Tcp);
-        assert_eq!(shim.shared.state(), FailoverState::Healthy);
-        assert_eq!(shim.shared.failover_count.load(Ordering::Relaxed), 0);
+        temp_env::with_var_unset("FAILOVER_CHECK_INTERVAL_SECS", || {
+            let shim = FailoverShim::new();
+            assert_eq!(shim.check_interval_secs(), 5);
+            assert_eq!(shim.failure_threshold, 3);
+            assert_eq!(shim.db_type, "postgres");
+            assert_eq!(shim.connector(), &FailoverConnector::Tcp);
+            assert_eq!(shim.shared.state(), FailoverState::Healthy);
+            assert_eq!(shim.shared.failover_count.load(Ordering::Relaxed), 0);
+        });
     }
 
     #[test]
@@ -1463,13 +1465,25 @@ mod tests {
 
     #[test]
     fn test_patroni_defaults() {
-        let shim = FailoverShim::new();
-        assert_eq!(shim.db_host(), "127.0.0.1");
-        assert_eq!(shim.db_port(), "5432");
-        assert_eq!(shim.db_user(), "postgres");
-        assert_eq!(shim.db_password(), "");
-        assert_eq!(shim.db_name(), "postgres");
-        assert_eq!(shim.lag_threshold_secs(), 30.0);
+        temp_env::with_vars(
+            [
+                ("FAILOVER_DB_HOST", None::<&str>),
+                ("FAILOVER_DB_PORT", None::<&str>),
+                ("FAILOVER_DB_USER", None::<&str>),
+                ("FAILOVER_DB_PASSWORD", None::<&str>),
+                ("FAILOVER_DB_NAME", None::<&str>),
+                ("FAILOVER_LAG_THRESHOLD_SECS", None::<&str>),
+            ],
+            || {
+                let shim = FailoverShim::new();
+                assert_eq!(shim.db_host(), "127.0.0.1");
+                assert_eq!(shim.db_port(), "5432");
+                assert_eq!(shim.db_user(), "postgres");
+                assert_eq!(shim.db_password(), "");
+                assert_eq!(shim.db_name(), "postgres");
+                assert_eq!(shim.lag_threshold_secs(), 30.0);
+            },
+        );
     }
 
     #[test]
