@@ -19,3 +19,4 @@ chrono.workspace = true
 prometheus.workspace = true
 sha2.workspace = true
 cron.workspace = true
+redis.workspace = true

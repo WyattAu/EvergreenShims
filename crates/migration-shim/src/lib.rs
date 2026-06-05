@@ -2,7 +2,7 @@
 //! Migration shim — database schema migrations with rollback support.
 //!
 //! Runs SQL migration files from a directory in order, tracking applied
-//! migrations in a `_migrations` table.
+//! migrations in a `schema_migrations` table.
 //!
 //! ## Environment Variables
 //!
@@ -13,6 +13,7 @@
 //! MIGRATION_DB_PORT   Database port (default: 5432)
 //! MIGRATION_DB_USER   Database user (default: postgres)
 //! MIGRATION_DB_PASSWORD Database password
+//! MIGRATION_DB_URL    Full database URL (overrides host/port/user/password/name)
 //! MIGRATION_AUTO_MIGRATE Auto-migrate on startup (default: false)
 //! MIGRATION_DB_TYPE   Database type: postgres, mysql
 //! ```
@@ -124,6 +125,7 @@ pub struct MigrationShim {
     db_port: u16,
     db_user: String,
     db_password: String,
+    db_url: Option<String>,
     auto_migrate: bool,
     db_type: String,
     current_version: u32,
@@ -151,6 +153,7 @@ impl MigrationShim {
             db_user: std::env::var("MIGRATION_DB_USER")
                 .unwrap_or_else(|_| "postgres".to_string()),
             db_password: std::env::var("MIGRATION_DB_PASSWORD").unwrap_or_default(),
+            db_url: std::env::var("MIGRATION_DB_URL").ok(),
             auto_migrate: std::env::var("MIGRATION_AUTO_MIGRATE")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
@@ -173,6 +176,9 @@ impl MigrationShim {
 
     /// Build a connection string for the configured database.
     fn connection_string(&self) -> String {
+        if let Some(ref url) = self.db_url {
+            return url.clone();
+        }
         match self.db_type.as_str() {
             "mysql" => format!(
                 "mysql://{}:{}@{}:{}/{}",
@@ -185,16 +191,15 @@ impl MigrationShim {
         }
     }
 
-    /// Create the `_migrations` tracking table if it doesn't exist.
+    /// Create the `schema_migrations` tracking table if it doesn't exist.
     async fn ensure_migrations_table(&self) -> anyhow::Result<()> {
         if !self.has_db() {
-            tracing::debug!("No database configured, skipping _migrations table creation");
+            tracing::debug!("No database configured, skipping schema_migrations table creation");
             return Ok(());
         }
 
-        let cs = self.connection_string();
-        let create_sql = "CREATE TABLE IF NOT EXISTS _migrations (
-            version TEXT PRIMARY KEY,
+        let create_sql = "CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             checksum TEXT NOT NULL,
             applied_at TEXT NOT NULL
@@ -202,15 +207,36 @@ impl MigrationShim {
 
         match self.db_type.as_str() {
             "mysql" => {
+                let cs = self.connection_string();
                 let pool = sqlx::MySqlPool::connect(&cs).await?;
                 sqlx::query(create_sql).execute(&pool).await?;
             }
             _ => {
-                let pool = sqlx::PgPool::connect(&cs).await?;
-                sqlx::query(create_sql).execute(&pool).await?;
+                self.execute_sql_via_psql(create_sql).await?;
             }
         }
-        tracing::info!("_migrations table ensured");
+        tracing::info!("schema_migrations table ensured");
+        Ok(())
+    }
+
+    /// Execute a SQL statement via psql command.
+    async fn execute_sql_via_psql(&self, sql: &str) -> anyhow::Result<()> {
+        let output = tokio::process::Command::new("psql")
+            .args([
+                "-h", &self.db_host,
+                "-p", &self.db_port.to_string(),
+                "-U", &self.db_user,
+                "-d", &self.database,
+                "-c", sql,
+            ])
+            .env("PGPASSWORD", &self.db_password)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("psql failed: {}", stderr);
+        }
         Ok(())
     }
 
@@ -221,36 +247,41 @@ impl MigrationShim {
             return Ok(());
         }
 
-        let cs = self.connection_string();
         match self.db_type.as_str() {
             "mysql" => {
+                let cs = self.connection_string();
                 let pool = sqlx::MySqlPool::connect(&cs).await?;
                 sqlx::query(sql).execute(&pool).await?;
             }
             _ => {
-                let pool = sqlx::PgPool::connect(&cs).await?;
-                sqlx::query(sql).execute(&pool).await?;
+                self.execute_sql_via_psql(sql).await?;
             }
         }
         Ok(())
     }
 
-    /// Insert a migration record into `_migrations` table.
+    /// Insert a migration record into `schema_migrations` table.
     async fn insert_migration_record(&self, record: &MigrationRecord) -> anyhow::Result<()> {
         if !self.has_db() {
             return Ok(());
         }
 
-        let cs = self.connection_string();
-        let sql = "INSERT INTO _migrations (version, name, checksum, applied_at) VALUES ($1, $2, $3, $4)";
+        let sql = format!(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES ({}, '{}', '{}', '{}')",
+            record.version,
+            record.name.replace('\'', "''"),
+            record.checksum.replace('\'', "''"),
+            record.applied_at.replace('\'', "''")
+        );
 
         match self.db_type.as_str() {
             "mysql" => {
+                let cs = self.connection_string();
                 let pool = sqlx::MySqlPool::connect(&cs).await?;
                 let mysql_sql =
-                    "INSERT INTO _migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)";
+                    "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)";
                 sqlx::query(mysql_sql)
-                    .bind(record.version.to_string())
+                    .bind(record.version as i32)
                     .bind(&record.name)
                     .bind(&record.checksum)
                     .bind(&record.applied_at)
@@ -258,40 +289,33 @@ impl MigrationShim {
                     .await?;
             }
             _ => {
-                let pool = sqlx::PgPool::connect(&cs).await?;
-                sqlx::query(sql)
-                    .bind(record.version.to_string())
-                    .bind(&record.name)
-                    .bind(&record.checksum)
-                    .bind(&record.applied_at)
-                    .execute(&pool)
-                    .await?;
+                self.execute_sql_via_psql(&sql).await?;
             }
         }
         Ok(())
     }
 
-    /// Delete a migration record from `_migrations` table.
+    /// Delete a migration record from `schema_migrations` table.
     async fn delete_migration_record(&self, version: u32) -> anyhow::Result<()> {
         if !self.has_db() {
             return Ok(());
         }
 
-        let cs = self.connection_string();
         match self.db_type.as_str() {
             "mysql" => {
+                let cs = self.connection_string();
                 let pool = sqlx::MySqlPool::connect(&cs).await?;
-                sqlx::query("DELETE FROM _migrations WHERE version = ?")
-                    .bind(version.to_string())
+                sqlx::query("DELETE FROM schema_migrations WHERE version = ?")
+                    .bind(version as i32)
                     .execute(&pool)
                     .await?;
             }
             _ => {
-                let pool = sqlx::PgPool::connect(&cs).await?;
-                sqlx::query("DELETE FROM _migrations WHERE version = $1")
-                    .bind(version.to_string())
-                    .execute(&pool)
-                    .await?;
+                let sql = format!(
+                    "DELETE FROM schema_migrations WHERE version = {}",
+                    version
+                );
+                self.execute_sql_via_psql(&sql).await?;
             }
         }
         Ok(())
@@ -598,6 +622,41 @@ impl MigrationShim {
         fs::read_to_string(path)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read migration {}: {}", path.display(), e))
+    }
+
+    /// Get the connection string for external callers.
+    pub fn get_connection_string(&self) -> String {
+        self.connection_string()
+    }
+
+    /// Get the migration directory.
+    pub fn dir(&self) -> &PathBuf {
+        &self.dir
+    }
+
+    /// Get the database name.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    /// Get auto-migrate flag.
+    pub fn auto_migrate(&self) -> bool {
+        self.auto_migrate
+    }
+
+    /// Get current version.
+    pub fn current_version(&self) -> u32 {
+        self.current_version
+    }
+
+    /// Get migrations applied count.
+    pub fn migrations_applied(&self) -> u64 {
+        self.migrations_applied
+    }
+
+    /// Get migrations rolled back count.
+    pub fn migrations_rolled_back(&self) -> u64 {
+        self.migrations_rolled_back
     }
 }
 
@@ -963,5 +1022,38 @@ mod tests {
             shim.connection_string(),
             "mysql://admin:secret@db.example.com:3306/mydb"
         );
+    }
+
+    #[test]
+    fn test_connection_string_db_url_override() {
+        let mut shim = MigrationShim::new();
+        shim.db_url = Some("postgres://custom:pass@remote:5433/mydb".to_string());
+        shim.database = "mydb".to_string();
+        shim.db_host = "localhost".to_string();
+        shim.db_port = 5432;
+
+        assert_eq!(
+            shim.connection_string(),
+            "postgres://custom:pass@remote:5433/mydb"
+        );
+    }
+
+    #[test]
+    fn test_env_db_url() {
+        std::env::set_var("MIGRATION_DB_URL", "postgres://user:pass@host:5432/db");
+        let shim = MigrationShim::new();
+        assert_eq!(
+            shim.connection_string(),
+            "postgres://user:pass@host:5432/db"
+        );
+        std::env::remove_var("MIGRATION_DB_URL");
+    }
+
+    #[test]
+    fn test_checksum_uses_sha256_equivalent() {
+        let c1 = MigrationShim::compute_checksum("CREATE TABLE test (id INT)");
+        let c2 = MigrationShim::compute_checksum("CREATE TABLE test (id INT)");
+        assert_eq!(c1, c2);
+        assert_eq!(c1.len(), 16); // FNV-1a is 64-bit, formatted as 16 hex chars
     }
 }

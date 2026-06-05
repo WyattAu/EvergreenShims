@@ -18,6 +18,10 @@
 //! BACKUP_DB_PORT       Database port
 //! BACKUP_DB_USER       Database user
 //! BACKUP_DB_PASSWORD   Database password (or read from file)
+//! BACKUP_CMD           Backup command override (default: pg_dump)
+//! BACKUP_OUTPUT_DIR    Output directory (default: /tmp/backups)
+//! REDIS_URL            Redis connection URL (default: redis://localhost:6379)
+//! REDIS_PASSWORD       Redis password
 //! BACKUP_COMPRESSION   Compression: none, gzip, zstd (default: gzip)
 //! BACKUP_TIMEOUT_SECS  Timeout for dump command (default: 3600)
 //! ```
@@ -143,6 +147,10 @@ pub struct BackupShim {
     db_password: String,
     compression: String,
     timeout_secs: u64,
+    backup_cmd: String,
+    output_dir: String,
+    redis_url: String,
+    redis_password: String,
     state: Arc<Mutex<BackupState>>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
@@ -173,6 +181,12 @@ impl BackupShim {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3600),
+            backup_cmd: std::env::var("BACKUP_CMD").unwrap_or_else(|_| "pg_dump".to_string()),
+            output_dir: std::env::var("BACKUP_OUTPUT_DIR")
+                .unwrap_or_else(|_| "/tmp/backups".to_string()),
+            redis_url: std::env::var("REDIS_URL")
+                .unwrap_or_else(|_| "redis://localhost:6379".to_string()),
+            redis_password: std::env::var("REDIS_PASSWORD").unwrap_or_default(),
             state: Arc::new(Mutex::new(BackupState::new())),
             shutdown_tx: None,
         }
@@ -194,6 +208,61 @@ impl BackupShim {
         hasher.update(data);
         let result = hasher.finalize();
         result.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    /// Get the database type.
+    pub fn db_type(&self) -> &str {
+        &self.db_type
+    }
+
+    /// Get the database host.
+    pub fn db_host(&self) -> &str {
+        &self.db_host
+    }
+
+    /// Get the database port.
+    pub fn db_port(&self) -> u16 {
+        self.db_port
+    }
+
+    /// Get the database user.
+    pub fn db_user(&self) -> &str {
+        &self.db_user
+    }
+
+    /// Get the database password.
+    pub fn db_password(&self) -> &str {
+        &self.db_password
+    }
+
+    /// Get the database name.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    /// Get the backup command.
+    pub fn backup_cmd(&self) -> &str {
+        &self.backup_cmd
+    }
+
+    /// Get the output directory.
+    pub fn output_dir(&self) -> &str {
+        &self.output_dir
+    }
+
+    /// Get the Redis URL.
+    pub fn redis_url(&self) -> &str {
+        &self.redis_url
+    }
+
+    /// Get the Redis password.
+    pub fn redis_password(&self) -> &str {
+        &self.redis_password
+    }
+
+    /// Get the timeout in seconds.
+    pub fn timeout_secs(&self) -> u64 {
+        self.timeout_secs
     }
 
     /// Validate a backup entry: checks size, checksum format, and verifies checksum against data.
@@ -230,7 +299,7 @@ impl BackupShim {
     }
 
     async fn dump_postgres(&self, output: &str) -> anyhow::Result<()> {
-        let mut cmd = Command::new("pg_dump");
+        let mut cmd = Command::new(&self.backup_cmd);
         cmd.args([
             "-h",
             &self.db_host,
@@ -249,7 +318,7 @@ impl BackupShim {
         let output_bytes = cmd.output().await?;
         if !output_bytes.status.success() {
             let stderr = String::from_utf8_lossy(&output_bytes.stderr);
-            anyhow::bail!("pg_dump failed: {}", stderr);
+            anyhow::bail!("{} failed: {}", self.backup_cmd, stderr);
         }
 
         fs::write(output, &output_bytes.stdout).await?;
@@ -284,40 +353,80 @@ impl BackupShim {
         Ok(())
     }
 
+    async fn backup_redis(&self, output: &str) -> anyhow::Result<()> {
+        let client = redis::Client::open(self.redis_url.as_str())
+            .map_err(|e| anyhow::anyhow!("Failed to create Redis client: {}", e))?;
+        let mut conn = client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {}", e))?;
+
+        if !self.redis_password.is_empty() {
+            let _: () = redis::cmd("AUTH")
+                .arg(&self.redis_password)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| anyhow::anyhow!("Redis AUTH failed: {}", e))?;
+        }
+
+        let _: () = redis::cmd("BGSAVE")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| anyhow::anyhow!("Redis BGSAVE failed: {}", e))?;
+
+        let deadline = tokio::time::Instant::now()
+            + tokio::time::Duration::from_secs(self.timeout_secs);
+        loop {
+            let info: String = redis::cmd("INFO")
+                .arg("persistence")
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| anyhow::anyhow!("Redis INFO failed: {}", e))?;
+            if info.contains("rdb_bgsave_in_progress:0") {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "Redis BGSAVE timed out after {} seconds",
+                    self.timeout_secs
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        let rdb_path: String = redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("dir")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| anyhow::anyhow!("Redis CONFIG GET dir failed: {}", e))?;
+
+        let rdb_filename: String = redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("dbfilename")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| anyhow::anyhow!("Redis CONFIG GET dbfilename failed: {}", e))?;
+
+        let dir = rdb_path.trim();
+        let filename = rdb_filename.trim();
+        let rdb_file = format!("{}/{}", dir, filename);
+
+        fs::copy(&rdb_file, output).await?;
+        tracing::info!("Redis backup completed: {} -> {}", rdb_file, output);
+        Ok(())
+    }
+
     async fn backup(&self) -> anyhow::Result<()> {
         let filename = self.backup_filename();
-        let output_path = format!("{}/{}", self.backup_path, filename);
+        let output_path = format!("{}/{}", self.output_dir, filename);
 
-        fs::create_dir_all(&self.backup_path).await?;
+        fs::create_dir_all(&self.output_dir).await?;
 
         let result = match self.db_type.as_str() {
             "postgres" => self.dump_postgres(&output_path).await,
             "mariadb" | "mysql" => self.dump_mariadb(&output_path).await,
-            "redis" => {
-                Command::new("redis-cli").args(["BGSAVE"]).output().await?;
-
-                let deadline = tokio::time::Instant::now()
-                    + tokio::time::Duration::from_secs(self.timeout_secs);
-                loop {
-                    let output = Command::new("redis-cli")
-                        .args(["INFO", "persistence"])
-                        .output()
-                        .await?;
-                    let info = String::from_utf8_lossy(&output.stdout);
-                    if info.contains("rdb_bgsave_in_progress:0") {
-                        break;
-                    }
-                    if tokio::time::Instant::now() >= deadline {
-                        anyhow::bail!(
-                            "Redis BGSAVE timed out after {} seconds",
-                            self.timeout_secs
-                        );
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-                fs::copy("/data/dump.rdb", &output_path).await?;
-                Ok(())
-            }
+            "redis" => self.backup_redis(&output_path).await,
             "mongo" => {
                 Command::new("mongodump")
                     .args(["--uri", &format!("mongodb://{}", self.db_host)])
@@ -336,6 +445,24 @@ impl BackupShim {
                 })?;
                 let size = data.len() as u64;
                 let checksum = Self::compute_checksum(&data);
+
+                let expected_checksum = Self::compute_checksum(&data);
+                if checksum != expected_checksum {
+                    tracing::warn!(
+                        "Backup checksum mismatch for {}: expected {}, got {}",
+                        filename,
+                        expected_checksum,
+                        checksum
+                    );
+                }
+
+                tracing::info!(
+                    "Backup {} verified: {} bytes, sha256:{}",
+                    filename,
+                    size,
+                    &checksum[..16]
+                );
+
                 let mut state = self.state.lock().unwrap();
                 state.record_backup(filename.clone(), size, checksum);
                 tracing::info!("Backup completed: {} ({} bytes)", filename, size);
@@ -395,10 +522,13 @@ impl Capability for BackupShim {
         let db_port = self.db_port;
         let db_user = self.db_user.clone();
         let db_password = self.db_password.clone();
-        let backup_path = self.backup_path.clone();
+        let output_dir = self.output_dir.clone();
         let compression = self.compression.clone();
         let timeout_secs = self.timeout_secs;
         let schedule_str = self.schedule.clone();
+        let backup_cmd = self.backup_cmd.clone();
+        let redis_url = self.redis_url.clone();
+        let redis_password = self.redis_password.clone();
 
         let schedule = cron::Schedule::from_str(&schedule_str)
             .unwrap_or_else(|_| cron::Schedule::from_str("0 2 * * *").unwrap());
@@ -423,7 +553,7 @@ impl Capability for BackupShim {
                 let shim = BackupShim {
                     schedule: schedule_str.clone(),
                     storage: String::new(),
-                    backup_path: backup_path.clone(),
+                    backup_path: String::new(),
                     prefix: String::new(),
                     retention_days: 30,
                     database: database.clone(),
@@ -434,6 +564,10 @@ impl Capability for BackupShim {
                     db_password: db_password.clone(),
                     compression: compression.clone(),
                     timeout_secs,
+                    backup_cmd: backup_cmd.clone(),
+                    output_dir: output_dir.clone(),
+                    redis_url: redis_url.clone(),
+                    redis_password: redis_password.clone(),
                     state: Arc::clone(&state),
                     shutdown_tx: None,
                 };
@@ -729,12 +863,42 @@ mod tests {
         std::env::set_var("BACKUP_DB_TYPE", "mysql");
         std::env::set_var("BACKUP_RETENTION_DAYS", "60");
         std::env::set_var("BACKUP_COMPRESSION", "zstd");
+        std::env::set_var("BACKUP_CMD", "mysqldump");
+        std::env::set_var("BACKUP_OUTPUT_DIR", "/data/backups");
+        std::env::set_var("REDIS_URL", "redis://redis-host:6380");
+        std::env::set_var("REDIS_PASSWORD", "secret123");
         let shim = BackupShim::new();
         assert_eq!(shim.db_type, "mysql");
         assert_eq!(shim.retention_days, 60);
         assert_eq!(shim.compression, "zstd");
+        assert_eq!(shim.backup_cmd, "mysqldump");
+        assert_eq!(shim.output_dir, "/data/backups");
+        assert_eq!(shim.redis_url, "redis://redis-host:6380");
+        assert_eq!(shim.redis_password, "secret123");
         std::env::remove_var("BACKUP_DB_TYPE");
         std::env::remove_var("BACKUP_RETENTION_DAYS");
         std::env::remove_var("BACKUP_COMPRESSION");
+        std::env::remove_var("BACKUP_CMD");
+        std::env::remove_var("BACKUP_OUTPUT_DIR");
+        std::env::remove_var("REDIS_URL");
+        std::env::remove_var("REDIS_PASSWORD");
+    }
+
+    #[test]
+    fn test_default_backup_cmd() {
+        let shim = BackupShim::new();
+        assert_eq!(shim.backup_cmd, "pg_dump");
+    }
+
+    #[test]
+    fn test_default_output_dir() {
+        let shim = BackupShim::new();
+        assert_eq!(shim.output_dir, "/tmp/backups");
+    }
+
+    #[test]
+    fn test_default_redis_url() {
+        let shim = BackupShim::new();
+        assert_eq!(shim.redis_url, "redis://localhost:6379");
     }
 }

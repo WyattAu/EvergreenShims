@@ -14,6 +14,12 @@
 //! REPLICATION_SLOT       Replication slot name (PostgreSQL)
 //! REPLICATION_CHECK_SECS Health check interval (default: 10)
 //! REPLICATION_DB_TYPE    Database type: postgres, mysql
+//! REPLICATION_DB_HOST    Primary DB host (default: 127.0.0.1)
+//! REPLICATION_DB_PORT    Primary DB port (default: 5432)
+//! REPLICATION_DB_USER    Primary DB user (default: postgres)
+//! REPLICATION_DB_PASSWORD Primary DB password
+//! REPLICATION_DB_NAME    Primary DB name (default: postgres)
+//! REPLICATION_LAG_THRESHOLD_BYTES Lag threshold in bytes (default: 1048576 = 1MB)
 //! ```
 
 use std::collections::HashMap;
@@ -22,6 +28,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, EventType, Metric, Result, Severity, ShimBus};
+use tokio::process::Command;
 use tokio::sync::watch;
 
 /// Replication state.
@@ -116,6 +123,12 @@ pub struct ReplicationShim {
     check_secs: u64,
     db_type: String,
     slot_name: String,
+    db_host: String,
+    db_port: u16,
+    db_user: String,
+    db_password: String,
+    db_name: String,
+    lag_threshold_bytes: u64,
     shared: Arc<SharedState>,
     replica_status: HashMap<String, ReplicaStatus>,
     wal_position: WalPosition,
@@ -144,6 +157,21 @@ impl ReplicationShim {
             db_type: std::env::var("REPLICATION_DB_TYPE")
                 .unwrap_or_else(|_| "postgres".to_string()),
             slot_name: slot,
+            db_host: std::env::var("REPLICATION_DB_HOST")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            db_port: std::env::var("REPLICATION_DB_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5432),
+            db_user: std::env::var("REPLICATION_DB_USER")
+                .unwrap_or_else(|_| "postgres".to_string()),
+            db_password: std::env::var("REPLICATION_DB_PASSWORD").unwrap_or_default(),
+            db_name: std::env::var("REPLICATION_DB_NAME")
+                .unwrap_or_else(|_| "postgres".to_string()),
+            lag_threshold_bytes: std::env::var("REPLICATION_LAG_THRESHOLD_BYTES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1_048_576),
             shared: Arc::new(SharedState::new()),
             replica_status: HashMap::new(),
             wal_position: WalPosition {
@@ -299,6 +327,117 @@ impl ReplicationShim {
             _ => 10.0,
         }
     }
+
+    /// Query current WAL LSN position from the primary via psql.
+    pub async fn query_wal_position(&self) -> anyhow::Result<WalPosition> {
+        let query = "SELECT pg_current_wal_lsn(), pg_current_wal_insert_lsn(), extract(epoch from now())::bigint";
+
+        let output = Command::new("psql")
+            .args([
+                "-h", &self.db_host,
+                "-p", &self.db_port.to_string(),
+                "-U", &self.db_user,
+                "-d", &self.db_name,
+                "-t", "-A",
+                "-c", query,
+            ])
+            .env("PGPASSWORD", &self.db_password)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("psql WAL query failed: {}", stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = stdout.trim().split('|').collect();
+        if parts.len() < 2 {
+            anyhow::bail!("Unexpected psql output: {}", stdout);
+        }
+
+        let lsn = parts[0].to_string();
+        let segment = parts.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+
+        Ok(WalPosition {
+            lsn,
+            segment,
+            offset: 0,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        })
+    }
+
+    /// Query replication lag in bytes for a given replica via psql.
+    pub async fn query_replica_lag(&self, replica_addr: &str) -> anyhow::Result<u64> {
+        let parts: Vec<&str> = replica_addr.split(':').collect();
+        let host = parts.first().unwrap_or(&"127.0.0.1");
+        let port = parts.get(1).unwrap_or(&"5432");
+
+        let query = "SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 ELSE EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp())::bigint END";
+
+        let output = Command::new("psql")
+            .args([
+                "-h", host,
+                "-p", port,
+                "-U", &self.db_user,
+                "-d", &self.db_name,
+                "-t", "-A",
+                "-c", query,
+            ])
+            .env("PGPASSWORD", &self.db_password)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("psql lag query failed for {}: {}", replica_addr, stderr);
+            return Ok(0);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lag_secs: u64 = stdout.trim().parse().unwrap_or(0);
+        Ok(lag_secs)
+    }
+
+    /// Get the database host.
+    pub fn db_host(&self) -> &str {
+        &self.db_host
+    }
+
+    /// Get the database port.
+    pub fn db_port(&self) -> u16 {
+        self.db_port
+    }
+
+    /// Get the database user.
+    pub fn db_user(&self) -> &str {
+        &self.db_user
+    }
+
+    /// Get the database password.
+    pub fn db_password(&self) -> &str {
+        &self.db_password
+    }
+
+    /// Get the database name.
+    pub fn db_name(&self) -> &str {
+        &self.db_name
+    }
+
+    /// Get the lag threshold in bytes.
+    pub fn lag_threshold_bytes(&self) -> u64 {
+        self.lag_threshold_bytes
+    }
+
+    /// Get the current replication state.
+    pub fn replication_state(&self) -> ReplicationState {
+        self.shared.state.lock().clone()
+    }
+
+    /// Get the current WAL position.
+    pub fn wal_position(&self) -> &WalPosition {
+        &self.wal_position
+    }
 }
 
 impl Default for ReplicationShim {
@@ -329,12 +468,13 @@ impl Capability for ReplicationShim {
             }
         }
         tracing::info!(
-            "ReplicationShim initialized (primary={}, replicas={}, mode={}, db_type={}, check_secs={})",
+            "ReplicationShim initialized (primary={}, replicas={}, mode={}, db_type={}, check_secs={}, lag_threshold_bytes={})",
             self.primary,
             self.replicas.len(),
             self.mode,
             self.db_type,
             self.check_secs,
+            self.lag_threshold_bytes,
         );
         Ok(())
     }
@@ -355,6 +495,12 @@ impl Capability for ReplicationShim {
         let shared = Arc::clone(&self.shared);
         let bus = self.bus.clone();
         let mode = self.mode.clone();
+        let lag_threshold_bytes = self.lag_threshold_bytes;
+        let db_host = self.db_host.clone();
+        let db_port = self.db_port;
+        let db_user = self.db_user.clone();
+        let db_password = self.db_password.clone();
+        let db_name = self.db_name.clone();
 
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
@@ -388,6 +534,27 @@ impl Capability for ReplicationShim {
                             continue;
                         }
 
+                        // Query WAL position from primary
+                        let wal_query = Command::new("psql")
+                            .args([
+                                "-h", &db_host,
+                                "-p", &db_port.to_string(),
+                                "-U", &db_user,
+                                "-d", &db_name,
+                                "-t", "-A",
+                                "-c", "SELECT pg_current_wal_lsn()",
+                            ])
+                            .env("PGPASSWORD", &db_password)
+                            .output()
+                            .await;
+
+                        if let Ok(output) = wal_query {
+                            if output.status.success() {
+                                let lsn = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                tracing::debug!("Primary WAL LSN: {}", lsn);
+                            }
+                        }
+
                         // Check replica connectivity and lag
                         let mut healthy_count = 0u64;
                         let mut broken_count = 0u64;
@@ -398,17 +565,42 @@ impl Capability for ReplicationShim {
                             let reachable = check_tcp(replica_addr).await;
                             if reachable {
                                 healthy_count += 1;
-                                // Without a real DB connection, we can only verify TCP reachability.
-                                // Lag estimation: assume 0 for reachable replicas.
-                                let lag_sec = 0.0f64;
-                                let lag_bytes = 0u64;
+                                // Query replica lag via psql
+                                let replica_parts: Vec<&str> = replica_addr.split(':').collect();
+                                let r_host = replica_parts.first().unwrap_or(&"127.0.0.1");
+                                let r_port = replica_parts.get(1).unwrap_or(&"5432");
+
+                                let lag_query = Command::new("psql")
+                                    .args([
+                                        "-h", r_host,
+                                        "-p", r_port,
+                                        "-U", &db_user,
+                                        "-d", &db_name,
+                                        "-t", "-A",
+                                        "-c", "SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 ELSE COALESCE(EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp())::bigint, 0) END",
+                                    ])
+                                    .env("PGPASSWORD", &db_password)
+                                    .output()
+                                    .await;
+
+                                let lag_sec = if let Ok(out) = lag_query {
+                                    if out.status.success() {
+                                        String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().unwrap_or(0.0)
+                                    } else {
+                                        0.0
+                                    }
+                                } else {
+                                    0.0
+                                };
+
+                                let lag_bytes = (lag_sec * 1000000.0) as u64; // approximate bytes from seconds
                                 total_lag += lag_bytes;
                                 max_lag_sec = max_lag_sec.max(lag_sec);
 
-                                if lag_sec > lag_threshold {
+                                if lag_bytes > lag_threshold_bytes {
                                     tracing::warn!(
-                                        "Replica {} lag {}s exceeds threshold {}s",
-                                        replica_addr, lag_sec, lag_threshold
+                                        "Replica {} lag {} bytes exceeds threshold {} bytes",
+                                        replica_addr, lag_bytes, lag_threshold_bytes
                                     );
                                     if let Some(ref bus) = bus {
                                         bus.emit(
@@ -713,5 +905,38 @@ mod tests {
         assert_eq!(metrics[0].value, 1.0);
         assert_eq!(metrics[3].name, "replication_total_lag_bytes");
         assert_eq!(metrics[3].value, 50000.0);
+    }
+
+    #[test]
+    fn test_default_db_fields() {
+        let shim = ReplicationShim::new();
+        assert_eq!(shim.db_host, "127.0.0.1");
+        assert_eq!(shim.db_port, 5432);
+        assert_eq!(shim.db_user, "postgres");
+        assert_eq!(shim.db_name, "postgres");
+        assert_eq!(shim.lag_threshold_bytes, 1_048_576);
+    }
+
+    #[test]
+    fn test_env_db_fields() {
+        std::env::set_var("REPLICATION_DB_HOST", "pg-primary.local");
+        std::env::set_var("REPLICATION_DB_PORT", "5433");
+        std::env::set_var("REPLICATION_DB_USER", "repl_user");
+        std::env::set_var("REPLICATION_DB_PASSWORD", "secret");
+        std::env::set_var("REPLICATION_DB_NAME", "mydb");
+        std::env::set_var("REPLICATION_LAG_THRESHOLD_BYTES", "2097152");
+        let shim = ReplicationShim::new();
+        assert_eq!(shim.db_host, "pg-primary.local");
+        assert_eq!(shim.db_port, 5433);
+        assert_eq!(shim.db_user, "repl_user");
+        assert_eq!(shim.db_password, "secret");
+        assert_eq!(shim.db_name, "mydb");
+        assert_eq!(shim.lag_threshold_bytes, 2_097_152);
+        std::env::remove_var("REPLICATION_DB_HOST");
+        std::env::remove_var("REPLICATION_DB_PORT");
+        std::env::remove_var("REPLICATION_DB_USER");
+        std::env::remove_var("REPLICATION_DB_PASSWORD");
+        std::env::remove_var("REPLICATION_DB_NAME");
+        std::env::remove_var("REPLICATION_LAG_THRESHOLD_BYTES");
     }
 }
