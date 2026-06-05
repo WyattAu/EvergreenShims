@@ -267,6 +267,37 @@ impl Config {
         toml::from_str(&content).map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))
     }
 
+    /// Load configuration: file first, then env var overrides (12-factor).
+    ///
+    /// If `SHIM_CONFIG` env var is set, load that file. Otherwise try
+    /// `./shim.toml`, then fall back to env-only config.
+    pub fn load() -> Self {
+        let mut config = Self::from_env();
+
+        let config_path = std::env::var("SHIM_CONFIG")
+            .unwrap_or_else(|_| "shim.toml".to_string());
+
+        if std::path::Path::new(&config_path).exists() {
+            match Self::from_file(&config_path) {
+                Ok(file_config) => {
+                    // File is base, env overrides
+                    config = file_config;
+                    // Re-apply env overrides
+                    let env_config = Self::from_env();
+                    config.merge(env_config);
+                    tracing::info!("loaded config from {}", config_path);
+                }
+                Err(e) => {
+                    tracing::warn!("failed to load {}: {}", config_path, e);
+                }
+            }
+        } else {
+            tracing::info!("no config file found at {}, using env vars", config_path);
+        }
+
+        config
+    }
+
     /// Load configuration from environment variables.
     pub fn from_env() -> Self {
         let mut config = Config {

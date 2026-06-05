@@ -224,7 +224,7 @@ pub fn wire_all_handlers(bus: &ShimBus) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{EventType, Severity, ShimEvent};
+    use crate::event::{EventType, Severity};
 
     #[tokio::test]
     async fn test_health_failover_triggers_after_threshold() {

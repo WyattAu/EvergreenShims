@@ -8,6 +8,7 @@ pub mod config;
 pub mod error;
 pub mod event;
 pub mod health;
+pub mod hotreload;
 pub mod metrics;
 pub mod process;
 pub mod signal;
