@@ -628,3 +628,218 @@ async fn test_archival_lifecycle() {
     let summary = shim.summary();
     assert!(summary.total_records > 0);
 }
+
+// ============================================================================
+// Cross-Shim Event Wiring Integration Tests
+// ============================================================================
+
+/// Test the full health→failover event chain via ShimBus.
+#[tokio::test]
+async fn test_cross_shim_health_to_failover() {
+    use shim_core::{ShimBus, Severity};
+    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::wiring::HealthFailoverHandler;
+    use std::sync::Arc;
+
+    let bus = ShimBus::new();
+    let handler = Arc::new(HealthFailoverHandler::new(bus.clone(), 2));
+    handler.start();
+
+    let mut rx = bus.subscribe();
+
+    // Simulate health shim detecting unhealthy
+    bus.emit("health-shim", EventType::HealthStatusChanged {
+        previous: "healthy".into(),
+        current: "unhealthy".into(),
+    }, Severity::Warning);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Second unhealthy should trigger failover
+    bus.emit("health-shim", EventType::HealthStatusChanged {
+        previous: "unhealthy".into(),
+        current: "unhealthy".into(),
+    }, Severity::Warning);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Verify failover event was generated
+    let mut found = false;
+    while let Ok(evt) = rx.try_recv() {
+        if matches!(evt.event, EventType::FailoverTriggered { .. }) {
+            found = true;
+            assert_eq!(evt.source, "failover-shim");
+            assert_eq!(evt.severity, Severity::Critical);
+        }
+    }
+    assert!(found, "Health→Failover chain should produce FailoverTriggered event");
+}
+
+/// Test the backup→encryption event chain.
+#[tokio::test]
+async fn test_cross_shim_backup_to_encryption() {
+    use shim_core::{ShimBus, Severity};
+    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::wiring::BackupEncryptionHandler;
+    use std::sync::Arc;
+
+    let bus = ShimBus::new();
+    let handler = Arc::new(BackupEncryptionHandler::new(bus.clone()));
+    handler.start();
+
+    let mut rx = bus.subscribe();
+
+    // Simulate backup completing
+    bus.emit("backup-shim", EventType::BackupCompleted {
+        name: "postgres-daily".into(),
+        size_bytes: 5_000_000,
+        checksum: "sha256:abcdef123456".into(),
+    }, Severity::Info);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Verify encryption key rotation was triggered
+    let mut found = false;
+    while let Ok(evt) = rx.try_recv() {
+        if let EventType::EncryptionKeyRotated { key_id, algorithm } = &evt.event {
+            found = true;
+            assert_eq!(key_id, "backup-postgres-daily");
+            assert_eq!(algorithm, "AES-256-GCM");
+        }
+    }
+    assert!(found, "Backup→Encryption chain should produce EncryptionKeyRotated event");
+}
+
+/// Test the scheduler→backup event chain.
+#[tokio::test]
+async fn test_cross_shim_scheduler_to_backup() {
+    use shim_core::{ShimBus, Severity};
+    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::wiring::SchedulerBackupHandler;
+    use std::sync::Arc;
+
+    let bus = ShimBus::new();
+    let handler = Arc::new(SchedulerBackupHandler::new(bus.clone()));
+    handler.start();
+
+    let mut rx = bus.subscribe();
+
+    // Simulate scheduler firing a backup task
+    bus.emit("scheduler-shim", EventType::SchedulerTaskFired {
+        task_name: "nightly-backup".into(),
+        schedule: "0 2 * * *".into(),
+    }, Severity::Info);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Verify backup was started
+    let mut found = false;
+    while let Ok(evt) = rx.try_recv() {
+        if let EventType::BackupStarted { name } = &evt.event {
+            found = true;
+            assert_eq!(name, "nightly-backup");
+        }
+    }
+    assert!(found, "Scheduler→Backup chain should produce BackupStarted event");
+}
+
+/// Test the alert fan-in: all alertable events reach the alerting shim.
+#[tokio::test]
+async fn test_cross_shim_alert_fan_in() {
+    use shim_core::{ShimBus, Severity};
+    use shim_core::event::{EventType, ShimEvent};
+    use shim_core::wiring::AlertFanInHandler;
+    use std::sync::Arc;
+
+    let bus = ShimBus::new();
+    let _handler = Arc::new(AlertFanInHandler::new(bus.clone()));
+    // AlertFanInHandler.start() is already called in wire_all_handlers
+
+    let mut rx = bus.subscribe();
+
+    // Emit several alertable events
+    bus.emit("backup-shim", EventType::BackupFailed {
+        name: "redis-daily".into(),
+        reason: "connection refused".into(),
+    }, Severity::Error);
+
+    bus.emit("tls-shim", EventType::TlsCertExpiring {
+        cert_path: "/etc/tls/api.pem".into(),
+        days_remaining: 3,
+    }, Severity::Warning);
+
+    bus.emit("health-shim", EventType::HealthStatusChanged {
+        previous: "healthy".into(),
+        current: "unhealthy".into(),
+    }, Severity::Critical);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // All three alertable events should be visible
+    let mut alert_count = 0;
+    while let Ok(evt) = rx.try_recv() {
+        if evt.is_alertable() {
+            alert_count += 1;
+        }
+    }
+    assert!(alert_count >= 3, "Alert fan-in should forward all alertable events, got {}", alert_count);
+}
+
+/// Test the wire_all_handlers convenience function.
+#[tokio::test]
+async fn test_wire_all_handlers() {
+    use shim_core::{ShimBus, Severity};
+    use shim_core::event::{EventType, ShimEvent};
+
+    let bus = ShimBus::new();
+    shim_core::wiring::wire_all_handlers(&bus);
+
+    let mut rx = bus.subscribe();
+
+    // Trigger a chain: health → unhealthy (x3) → failover (threshold=3 in wire_all_handlers)
+    for _ in 0..3 {
+        bus.emit("health-shim", EventType::HealthStatusChanged {
+            previous: "healthy".into(),
+            current: "unhealthy".into(),
+        }, Severity::Warning);
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+
+    // Trigger scheduler → backup chain
+    bus.emit("scheduler-shim", EventType::SchedulerTaskFired {
+        task_name: "weekly-backup".into(),
+        schedule: "0 3 * * 0".into(),
+    }, Severity::Info);
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Collect all events
+    let mut events: Vec<ShimEvent> = vec![];
+    while let Ok(evt) = rx.try_recv() {
+        events.push(evt);
+    }
+
+    // Should have failover + backup started events (plus the originals)
+    let has_failover = events.iter().any(|e| matches!(e.event, EventType::FailoverTriggered { .. }));
+    let has_backup = events.iter().any(|e| matches!(e.event, EventType::BackupStarted { .. }));
+
+    assert!(has_failover, "wire_all_handlers should include health→failover wiring");
+    assert!(has_backup, "wire_all_handlers should include scheduler→backup wiring");
+}
+
+/// Test ShimBus event sequencing across multiple sources.
+#[tokio::test]
+async fn test_bus_multi_source_sequencing() {
+    use shim_core::{ShimBus, Severity};
+    use shim_core::event::{EventType, ShimEvent};
+
+    let bus = ShimBus::new();
+
+    let e1 = bus.emit("shim-a", EventType::Custom { event_name: "a1".into(), payload: serde_json::json!(null) }, Severity::Info);
+    let e2 = bus.emit("shim-b", EventType::Custom { event_name: "b1".into(), payload: serde_json::json!(null) }, Severity::Info);
+    let e3 = bus.emit("shim-a", EventType::Custom { event_name: "a2".into(), payload: serde_json::json!(null) }, Severity::Info);
+
+    // Sequences are per-source
+    assert_eq!(e1.sequence, 1);
+    assert_eq!(e2.sequence, 1);
+    assert_eq!(e3.sequence, 2);
+}
