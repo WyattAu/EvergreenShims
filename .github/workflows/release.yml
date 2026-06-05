@@ -37,18 +37,11 @@ jobs:
             features: cache-shim-combo
             artifact: shim-cache
           # aarch64 presets (musl static, all stripped)
+          # NOTE: aarch64-infra/full excluded — aws-lc-rs doesn't cross-compile for aarch64-musl
           - target: aarch64-unknown-linux-musl
             arch: aarch64
             features: health
             artifact: shim-aarch64
-          - target: aarch64-unknown-linux-musl
-            arch: aarch64-infra
-            features: infra
-            artifact: shim-infra-aarch64
-          - target: aarch64-unknown-linux-musl
-            arch: aarch64-full
-            features: full
-            artifact: shim-full-aarch64
 
     steps:
       - uses: actions/checkout@v4
