@@ -34,6 +34,7 @@ async fn test_backup_metadata_serialization() {
         size_bytes: 1024 * 1024,
         success: true,
         error: None,
+        checksum: Some("abc123".to_string()),
     };
 
     let json = serde_json::to_string(&meta).unwrap();

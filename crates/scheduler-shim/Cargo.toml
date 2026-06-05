@@ -15,4 +15,9 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
+cron = { workspace = true }
 prometheus.workspace = true
+fastrand = "2"
+
+[dev-dependencies]
+tempfile.workspace = true
