@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Pre-commit hook for EvergreenShims
+# Runs formatting check, clippy lint, and quick unit tests before allowing commit.
+#
+# Install: git config core.hooksPath .githooks
+# Or run: ./scripts/install-hooks.sh
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+step() { echo -e "${YELLOW}>>> $1${NC}"; }
+pass() { echo -e "${GREEN}PASS: $1${NC}"; }
+fail() { echo -e "${RED}FAIL: $1${NC}"; exit 1; }
+
+# Stage all modified files so fmt/clippy see the actual code
+git diff --cached --name-only --diff-filter=ACM -- '*.rs' '*.toml' | head -1 > /dev/null 2>&1 || true
+
+# Step 1: Formatting
+step "Checking formatting (cargo fmt)..."
+if ! cargo fmt --all -- --check 2>/dev/null; then
+    echo "Auto-formatting staged files..."
+    cargo fmt --all
+    # Re-stage formatted files
+    git diff --cached --name-only --diff-filter=ACM -- '*.rs' | while read -r f; do
+        git add "$f" 2>/dev/null || true
+    done
+    pass "Formatting applied and re-staged"
+else
+    pass "Formatting"
+fi
+
+# Step 2: Clippy lint
+step "Running clippy..."
+if ! cargo clippy --workspace --all-targets -- -D warnings 2>/dev/null; then
+    fail "Clippy failed. Fix warnings before committing."
+fi
+pass "Clippy"
+
+# Step 3: Unit tests (skip integration tests for speed -- they run in CI)
+step "Running unit tests..."
+if ! cargo test --workspace --lib -- --quiet 2>/dev/null; then
+    fail "Unit tests failed."
+fi
+pass "Unit tests"
+
+echo -e "${GREEN}All pre-commit checks passed.${NC}"
