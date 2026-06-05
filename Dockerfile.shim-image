@@ -52,3 +52,19 @@ LABEL org.opencontainers.image.title="evergreen-shim" \
       org.opencontainers.image.description="EvergreenShims full binary (all 22 shims) - statically linked musl" \
       org.opencontainers.image.vendor="WyattAu" \
       org.opencontainers.image.source="https://github.com/WyattAu/EvergreenShims"
+
+FROM scratch AS shim-db
+COPY --from=builder /shim /shim
+USER 65532:65532
+LABEL org.opencontainers.image.title="db-shim" \
+      org.opencontainers.image.description="EvergreenShims DB binary (health+vault+backup+migration+audit) - statically linked musl" \
+      org.opencontainers.image.vendor="WyattAu" \
+      org.opencontainers.image.source="https://github.com/WyattAu/EvergreenShims"
+
+FROM scratch AS shim-cache
+COPY --from=builder /shim /shim
+USER 65532:65532
+LABEL org.opencontainers.image.title="cache-shim" \
+      org.opencontainers.image.description="EvergreenShims cache binary (health+cache) - statically linked musl" \
+      org.opencontainers.image.vendor="WyattAu" \
+      org.opencontainers.image.source="https://github.com/WyattAu/EvergreenShims"
