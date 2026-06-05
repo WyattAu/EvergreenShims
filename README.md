@@ -1,178 +1,149 @@
 # EvergreenShims
 
-Rust-native shims for building self-managing container images. Single binary, multiple capabilities, zero overhead.
+Rust-native shims for self-managing container images. Single binary, multiple capabilities, zero runtime overhead.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/WyattAu/EvergreenShims?style=flat-square)](https://github.com/WyattAu/EvergreenShims/releases)
 
-## Vision
+## Design
 
-Evergreen images don't just run — they manage themselves. A single Rust binary provides health checks, secrets rotation, automated backups, schema migrations, and more. No cron jobs, no scripts, no ops tickets.
+Evergreen images manage themselves. A single Rust binary executes as PID 1 in a `scratch` container, wrapping the application process while providing operational capabilities: health probing, secrets rotation, automated backups, schema migrations, failover, and more. No cron, no scripts, no external orchestration.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  FROM scratch                                           │
-│                                                         │
-│  /app/db-shim (Rust, ~1MB)         ← Entry point (PID 1)│
-│  /app/postgres (application)       ← Child process      │
-│                                                         │
-│  ✓ Health probes (/livez, /readyz, /metrics)           │
-│  ✓ Auto-rotate credentials (Vault/KMS)                 │
-│  ✓ Automated backups (S3-compatible)                   │
-│  ✓ Schema migrations (idempotent)                      │
-│  ✓ Audit logging (SIEM export)                         │
-│  ✓ Auto-TLS (Let's Encrypt)                            │
-│  ✓ Hot-reload config                                   │
-│  ✓ Automatic failover                                  │
-└─────────────────────────────────────────────────────────┘
+FROM scratch
+
+/app/db-shim        (Rust, ~1MB)    PID 1 -- entry point
+/app/postgres       (application)   PID N -- child process
+
+Capabilities:
+  Health probes:       /livez, /readyz, /metrics
+  Secrets rotation:    Vault/KMS integration
+  Backups:             S3-compatible, WAL archiving
+  Migrations:          Idempotent SQL file-based
+  Audit logging:       JSON/CEF, SIEM export
+  Auto-TLS:            Let's Encrypt / internal CA
+  Config hot-reload:   SHA-256 hash change detection
+  Failover:            Automatic primary promotion
 ```
+
+## Pre-Built Binaries
+
+| Binary | Feature Set | Size | Target |
+|--------|-------------|------|--------|
+| `health-shim` | health | ~300KB | Any container |
+| `db-shim` | health + vault + backup + migration + audit | ~1MB | Database containers |
+| `proxy-shim` | health + audit + tls | ~700KB | Reverse proxies |
+| `ha-shim` | health + failover + replication | ~800KB | HA database clusters |
+| `full-shim` | all 22 shims | ~3MB | Full operational stack |
 
 ## Quick Start
 
-```bash
-# Download the database shim
-curl -L https://github.com/WyattAu/EvergreenShims/releases/latest/download/db-shim-x86_64-unknown-linux-musl -o /app/shim
-chmod +x /app/shim
-
-# Use in Dockerfile
+```dockerfile
 FROM scratch
 COPY --from=builder /app/db-shim /app/shim
 COPY --from=builder /app/postgres /app/postgres
 ENTRYPOINT ["/app/shim"]
 ```
 
-## Pre-Built Binaries
+Binary download:
 
-| Binary | Features | Size | Use Case |
-|--------|----------|------|----------|
-| `health-shim` | health | ~300KB | Any container |
-| `db-shim` | health + vault + backup + migration + audit | ~1MB | Databases |
-| `proxy-shim` | health + audit + tls | ~700KB | Proxies |
-| `ha-shim` | health + failover + replication | ~800KB | HA databases |
-| `full-shim` | everything | ~3MB | Power users |
+```bash
+curl -L https://github.com/WyattAu/EvergreenShims/releases/latest/download/shim.gz | gunzip > /app/shim
+chmod +x /app/shim
+```
 
 ## Shim Catalog
 
 ### Core
 
-| Shim | Size | Description |
-|------|------|-------------|
-| [health-shim](crates/health-shim/) | ~300KB | Health probes, metrics, process management |
-| [vault-shim](crates/vault-shim/) | ~200KB | Auto-rotate secrets from Vault/KMS |
-| [backup-shim](crates/backup-shim/) | ~300KB | Automated backups, WAL archiving, S3 upload |
-| [migration-shim](crates/migration-shim/) | ~200KB | Schema migrations, rollback support |
-| [audit-shim](crates/audit-shim/) | ~200KB | Query logging, SIEM export |
-| [proxy-shim](crates/proxy-shim/) | ~500KB | Connection pooling, retries, circuit breaker |
-| [chaos-shim](crates/chaos-shim/) | ~100KB | Fault injection for resilience testing |
-| [cost-shim](crates/cost-shim/) | ~150KB | Resource tracking per tenant |
+| Shim | Description |
+|------|-------------|
+| [health-shim](crates/health-shim/) | Health probes (TCP/HTTP/exec), Prometheus metrics, child process management |
+| [vault-shim](crates/vault-shim/) | Automatic credential rotation from Vault/KMS |
+| [backup-shim](crates/backup-shim/) | pg_dump, mysqldump, BGSAVE, mongodump -- compression, retention, S3 upload |
+| [migration-shim](crates/migration-shim/) | SQL file-based (.up.sql/.down.sql), version tracking, multi-DB |
+| [audit-shim](crates/audit-shim/) | Query logging, JSON/CEF formats, file/webhook output |
+| [proxy-shim](crates/proxy-shim/) | Connection pooling, circuit breaker, weighted routing, retries |
+| [chaos-shim](crates/chaos-shim/) | Fault injection for resilience testing |
+| [cost-shim](crates/cost-shim/) | Per-tenant resource usage tracking, budget alerts |
 
 ### Data Management
 
-| Shim | Size | Description |
-|------|------|-------------|
-| [cache-shim](crates/cache-shim/) | ~200KB | Query result caching (Redis/Memcached) |
-| [replication-shim](crates/replication-shim/) | ~300KB | Database replication management |
-| [failover-shim](crates/failover-shim/) | ~250KB | Automatic failover for HA databases |
-| [sharding-shim](crates/sharding-shim/) | ~400KB | Automatic sharding for distributed DBs |
-| [cdc-shim](crates/cdc-shim/) | ~300KB | Change Data Capture for event-driven |
-| [archival-shim](crates/archival-shim/) | ~200KB | Data archival to cold storage |
+| Shim | Description |
+|------|-------------|
+| [cache-shim](crates/cache-shim/) | Query result caching (TTL, LRU/FIFO eviction) |
+| [replication-shim](crates/replication-shim/) | WAL tracking, lag monitoring, state management |
+| [failover-shim](crates/failover-shim/) | Patroni/Redis Sentinel/TCP health checks, automatic promotion |
+| [sharding-shim](crates/sharding-shim/) | Hash-based and range-based shard routing |
+| [cdc-shim](crates/cdc-shim/) | Change Data Capture, WAL position tracking, Kafka/webhook output |
+| [archival-shim](crates/archival-shim/) | Lifecycle tiers (hot/warm/cold), compression, purge scheduling |
 
 ### Security
 
-| Shim | Size | Description |
-|------|------|-------------|
-| [tls-shim](crates/tls-shim/) | ~200KB | Auto-TLS with Let's Encrypt or internal CA |
-| [auth-shim](crates/auth-shim/) | ~300KB | Authentication/authorization layer |
-| [encryption-shim](crates/encryption-shim/) | ~250KB | Transparent data encryption |
-| [compliance-shim](crates/compliance-shim/) | ~200KB | CIS/STIG compliance checking |
+| Shim | Description |
+|------|-------------|
+| [tls-shim](crates/tls-shim/) | Auto-TLS with Let's Encrypt ACME or internal CA |
+| [auth-shim](crates/auth-shim/) | Token-based auth, API key management, RBAC |
+| [encryption-shim](crates/encryption-shim/) | AES-GCM / ChaCha20-Poly1305, key rotation |
+| [compliance-shim](crates/compliance-shim/) | CIS/STIG compliance scoring and violation tracking |
 
 ### Operations
 
-| Shim | Size | Description |
-|------|------|-------------|
-| [config-shim](crates/config-shim/) | ~150KB | Hot-reload configuration |
-| [scheduler-shim](crates/scheduler-shim/) | ~150KB | Cron-like task scheduling |
-| [queue-shim](crates/queue-shim/) | ~250KB | Background job processing |
-| [alerting-shim](crates/alerting-shim/) | ~150KB | Alert routing (PagerDuty, Slack) |
+| Shim | Description |
+|------|-------------|
+| [config-shim](crates/config-shim/) | File hash monitoring, backup, SIGHUP reload |
+| [scheduler-shim](crates/scheduler-shim/) | Cron-based task scheduling, retry with exponential backoff |
+| [queue-shim](crates/queue-shim/) | Job enqueue/dequeue, DLQ, worker pool |
+| [alerting-shim](crates/alerting-shim/) | Severity routing, deduplication, webhook dispatch |
 
 ## Configuration
 
-All shims support environment variables (12-factor) and TOML configuration files.
-
-### Environment Variables
+12-factor: environment variables override TOML config file (`/etc/shim/config.toml`).
 
 ```bash
-# Health probes
+# Health
 HEALTH_CMD="exec:pg_isready -U postgres"
 HEALTH_LISTEN="0.0.0.0:9101"
 
-# Vault secrets
+# Vault
 VAULT_ADDR="https://vault.internal:8200"
 VAULT_ROLE="postgres-readonly"
-VAULT_SECRET="secret/data/postgres/creds"
 
 # Backups
 BACKUP_SCHEDULE="0 2 * * *"
 BACKUP_STORAGE="s3://backups-bucket"
 BACKUP_RETENTION_DAYS=30
-
-# TLS
-TLS_PROVIDER="letsencrypt"
-TLS_DOMAIN="postgres.example.com"
 ```
 
-### TOML Configuration
-
-```toml
-# /etc/shim/config.toml
-[health]
-cmd = "exec:pg_isready -U postgres"
-listen = "0.0.0.0:9101"
-
-[vault]
-addr = "https://vault.internal:8200"
-role = "postgres-readonly"
-secret = "secret/data/postgres/creds"
-
-[backup]
-schedule = "0 2 * * *"
-storage = "s3://backups-bucket"
-retention_days = 30
-
-[tls]
-provider = "letsencrypt"
-domain = "postgres.example.com"
-```
-
-## Building from Source
+## Building
 
 ```bash
-# Build all shims
-cargo build --release
+# Static musl binary (for scratch images)
+cargo build --release --target x86_64-unknown-linux-musl \
+    -p evergreen-shim --no-default-features --features db-shim
 
-# Build specific shim
-cargo build --release -p health-shim
-
-# Build with features
-cargo build --release -p evergreen-shim --features "health,vault,backup"
+# Cross-compile aarch64
+rustup target add aarch64-unknown-linux-musl
+cargo build --release --target aarch64-unknown-linux-musl \
+    -p evergreen-shim --no-default-features --features health
 ```
 
-## Architecture
-
-See [docs/architecture.md](docs/architecture.md) for the full architecture documentation.
+See [docs/building.md](docs/building.md) for full build instructions.
 
 ## Testing
 
+491 tests across 25 crates. Three tiers:
+
+1. **Unit tests**: Per-crate, run with `cargo test --workspace`
+2. **Integration tests**: Docker Compose with PostgreSQL, MariaDB, Redis, Vault, MinIO
+3. **Chaos tests**: Fault injection (network, process, disk, CPU)
+
 See [docs/testing.md](docs/testing.md) for the testing strategy.
 
-## Roadmap
+## Architecture
 
-See [docs/roadmap.md](docs/roadmap.md) for the implementation roadmap.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+See [docs/architecture.md](docs/architecture.md) for system design, layered architecture, and the Capability trait specification.
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Apache License, Version 2.0. See [LICENSE](LICENSE).

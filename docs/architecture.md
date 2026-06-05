@@ -1,203 +1,184 @@
 # Architecture
 
-## Overview
+## System Overview
 
-EvergreenShims is a Rust workspace containing individual shim crates and a unified binary that combines them via Cargo features.
+EvergreenShims implements a PID 1 shim pattern: a single Rust binary wraps a child process (database, proxy, etc.) while providing operational capabilities. The binary is statically linked via musl, runs in `scratch` containers, and has zero runtime dependencies.
+
+## Workspace Structure
 
 ```
 evergreen-shims/
-├── Cargo.toml              # Workspace root
-├── crates/
-│   ├── shim-core/          # Shared types, traits, config
-│   ├── health-shim/        # Health probes, metrics, process mgmt
-│   ├── vault-shim/         # Secrets rotation
-│   ├── backup-shim/        # Automated backups
-│   ├── migration-shim/     # Schema migrations
-│   ├── audit-shim/         # Query logging, SIEM
-│   ├── proxy-shim/         # Connection pooling, retries
-│   ├── tls-shim/           # Auto-TLS
-│   ├── config-shim/        # Hot-reload config
-│   ├── failover-shim/      # Automatic failover
-│   ├── replication-shim/   # Database replication
-│   ├── cache-shim/         # Query result caching
-│   ├── cdc-shim/           # Change Data Capture
-│   ├── sharding-shim/      # Automatic sharding
-│   ├── archival-shim/      # Data archival
-│   ├── auth-shim/          # Authentication layer
-│   ├── encryption-shim/    # Transparent encryption
-│   ├── compliance-shim/    # CIS/STIG compliance
-│   ├── scheduler-shim/     # Cron-like scheduling
-│   ├── queue-shim/         # Background jobs
-│   ├── alerting-shim/      # Alert routing
-│   ├── chaos-shim/         # Fault injection
-│   ├── cost-shim/          # Resource tracking
-│   └── evergreen-shim/     # Unified binary (feature-gated)
-├── tests/                  # Integration tests
-├── docs/                   # Documentation
-└── .github/workflows/      # CI/CD
+  Cargo.toml                    Workspace root (25 members)
+  crates/
+    shim-core/                  Shared types, Capability trait, bus, events, metrics
+    health-shim/                Health probes, Prometheus metrics, process mgmt
+    vault-shim/                 Vault/KMS secrets rotation
+    backup-shim/                Automated backups, WAL archiving
+    migration-shim/             SQL file-based migrations
+    audit-shim/                 Query logging, SIEM export
+    proxy-shim/                 Connection pooling, circuit breaker, retries
+    tls-shim/                   Auto-TLS (Let's Encrypt / internal CA)
+    config-shim/                Hot-reload configuration
+    failover-shim/              Automatic failover for HA databases
+    replication-shim/           WAL tracking, lag monitoring
+    cache-shim/                 Query result caching (LRU/FIFO)
+    cdc-shim/                   Change Data Capture
+    sharding-shim/              Hash/range shard routing
+    archival-shim/              Lifecycle tiers, compression
+    auth-shim/                  Token auth, API keys, RBAC
+    encryption-shim/            AES-GCM, ChaCha20, key rotation
+    compliance-shim/            CIS/STIG scoring
+    scheduler-shim/             Cron task scheduling
+    queue-shim/                 Job processing, DLQ
+    alerting-shim/              Alert routing and dedup
+    chaos-shim/                 Fault injection
+    cost-shim/                  Resource tracking per tenant
+    evergreen-shim/             Unified binary (feature-gated)
+    integration-tests/          Cross-shim integration tests
+  tests/                        Docker Compose infrastructure
+  docs/                         Documentation
+  .github/workflows/            CI/CD pipelines
 ```
 
 ## Design Principles
 
-### 1. Single Binary, Multiple Capabilities
+### Single Binary, Multiple Capabilities
 
-Each shim is a separate crate for development, but the final binary is a single executable with all capabilities enabled via Cargo features.
+Each shim is a separate crate for development isolation, compiled into a single binary via Cargo feature flags:
 
 ```rust
-// crates/evergreen-shim/src/main.rs
 #[cfg(feature = "health")]
-use health_shim::HealthShim;
-
+capabilities.push(Box::new(HealthShim::new()));
 #[cfg(feature = "vault")]
-use vault_shim::VaultShim;
-
-// ...
+capabilities.push(Box::new(VaultShim::new()));
 ```
 
-### 2. Layered Architecture
+### Layered Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  shim-core (shared types, traits, config)       │
-├─────────────────────────────────────────────────┤
-│  health-shim │ vault-shim │ backup-shim │ ...   │
-├─────────────────────────────────────────────────┤
-│  evergreen-shim (unified binary)                │
-└─────────────────────────────────────────────────┘
++--------------------------------------------------+
+|  shim-core                                        |
+|  (Capability trait, Config, ShimBus, Events,      |
+|   Metrics, Shutdown, Process, HotReload, Signals) |
++--------------------------------------------------+
+|  health | vault | backup | migration | ... (22)   |
++--------------------------------------------------+
+|  evergreen-shim (unified binary, feature-gated)   |
++--------------------------------------------------+
 ```
 
-### 3. PID 1 as Entry Point
-
-The shim runs as PID 1 and manages the application as a child process:
+### PID 1 Execution Model
 
 ```
 PID 1: /app/shim
-  └─ PID N: /app/postgres (child process)
+  +-- PID N: /app/postgres (child process)
 ```
 
 The shim:
-- Forwards signals (SIGTERM, SIGINT, SIGHUP) to the child
-- Monitors child health
-- Performs background tasks (backups, rotations)
-- Exits with child's exit code
 
-### 4. No Runtime Dependencies
+1. Spawns the child process on startup
+2. Forwards signals (SIGTERM, SIGINT, SIGHUP) to the child
+3. Monitors child health via configured probes
+4. Executes background tasks (backups, rotations, migrations)
+5. Exits with the child's exit code
 
-The shim is a static binary with no runtime dependencies (musl-linked). It can run in `scratch` images.
+### Capability Trait
 
-## Core Traits
+All shims implement `Capability`:
 
 ```rust
-// crates/shim-core/src/lib.rs
-
-/// A shim capability that can be enabled/disabled.
 pub trait Capability: Send + Sync {
-    /// Name of the capability (e.g., "health", "vault").
     fn name(&self) -> &str;
-    
-    /// Initialize the capability with config.
     fn init(&mut self, config: &Config) -> Result<()>;
-    
-    /// Start background tasks (if any).
     fn start(&mut self) -> Result<()>;
-    
-    /// Stop gracefully.
     fn stop(&mut self) -> Result<()>;
-    
-    /// Collect metrics.
     fn metrics(&self) -> Vec<Metric>;
-}
-
-/// Health check for the managed application.
-pub trait HealthChecker: Send + Sync {
-    /// Check if the application is alive.
-    fn liveness(&self) -> HealthStatus;
-    
-    /// Check if the application is ready to serve.
-    fn readiness(&self) -> HealthStatus;
+    fn set_bus(&mut self, bus: ShimBus);
 }
 ```
+
+### ShimBus Event System
+
+Cross-shim communication via in-process broadcast channel (`tokio::sync::broadcast`):
+
+```
+health-shim --[Unhealthy]--> ShimBus --[FailoverTriggered]--> failover-shim
+scheduler-shim --[SchedulerTaskFired]--> ShimBus --[BackupStarted]--> backup-shim
+backup-shim --[BackupCompleted]--> ShimBus --[EncryptionKeyRotate]--> encryption-shim
+```
+
+Pre-wired handlers:
+
+- `HealthFailoverHandler`: Triggers failover after N consecutive unhealthy events
+- `SchedulerBackupHandler`: Triggers backup on scheduler task fire
+- `BackupEncryptionHandler`: Triggers key rotation after backup completion
+- `AlertFanInHandler`: Routes alertable events to alerting-shim
 
 ## Signal Handling
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Signal Flow                                     │
-├─────────────────────────────────────────────────┤
-│                                                  │
-│  Kubernetes ──SIGTERM──→ Shim ──SIGTERM──→ App   │
-│                                                  │
-│  Shim waits for app to exit (timeout: 30s)       │
-│  If app doesn't exit, SIGKILL after timeout      │
-│                                                  │
-└─────────────────────────────────────────────────┘
+Kubernetes --SIGTERM--> Shim (PID 1) --SIGTERM--> Child Process
+                             |
+                             +-- timeout (configurable)
+                             |
+                             +-- SIGKILL if not exited
 ```
 
-## Metrics Exposure
+Per-database shutdown sequences:
 
-All shims expose metrics on a single HTTP endpoint:
+| DB Type | Sequence |
+|---------|----------|
+| PostgreSQL | SIGTERM (smart shutdown) -> wait for queries -> checkpoint -> exit |
+| Redis | SIGTERM -> RDB save -> wait for fork -> exit |
+| Generic | SIGTERM -> timeout -> SIGKILL |
+
+## Metrics
+
+Prometheus exposition format on a single HTTP endpoint:
 
 ```
 GET /metrics
 
-# Health metrics
 health_liveness{service="postgres"} 1
 health_readiness{service="postgres"} 1
-health_check_duration_seconds{service="postgres"} 0.001
-
-# Vault metrics
 vault_rotation_success_total{secret="postgres"} 42
-vault_rotation_failure_total{secret="postgres"} 0
-vault_rotation_last_success_timestamp{secret="postgres"} 1717500000
-
-# Backup metrics
 backup_success_total{storage="s3"} 30
-backup_failure_total{storage="s3"} 0
 backup_duration_seconds{storage="s3"} 12.5
-backup_size_bytes{storage="s3"} 1073741824
-
-# Migration metrics
 migration_current_version{service="postgres"} 10
-migration_last_success_timestamp{service="postgres"} 1717500000
+failover_events_total 1
 ```
 
 ## Configuration Hierarchy
 
-1. **Environment variables** (highest priority)
-2. **TOML config file** (`/etc/shim/config.toml`)
-3. **Default values** (lowest priority)
+Priority (highest to lowest):
 
-```rust
-pub fn load_config() -> Config {
-    let mut config = Config::default();
-    
-    // Load from file
-    if let Ok(file_config) = Config::from_file("/etc/shim/config.toml") {
-        config.merge(file_config);
-    }
-    
-    // Override with env vars
-    config.merge(Config::from_env());
-    
-    config
-}
-```
+1. Environment variables
+2. TOML config file (`/etc/shim/config.toml`)
+3. Compiled defaults
 
 ## Error Handling
 
-All shims use `anyhow::Result` for error propagation:
+`anyhow::Result` for error propagation with context. `thiserror` for library error types:
 
 ```rust
-use anyhow::{Context, Result};
-
 fn backup_database() -> Result<()> {
-    let conn = connect().context("Failed to connect to database")?;
-    let backup = dump(&conn).context("Failed to dump database")?;
-    upload(&backup).context("Failed to upload backup")?;
+    let conn = connect().context("database connection failed")?;
+    let backup = dump(&conn).context("dump failed")?;
+    upload(&backup).context("upload failed")?;
     Ok(())
 }
 ```
 
-## Testing Strategy
+## Static Linking
 
-See [testing.md](testing.md) for the full testing strategy.
+All builds target `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl` for static linking. No runtime dependencies. Runs in `scratch` Docker images.
+
+`reqwest` uses `aws-lc-rs` (ring-free) for musl compatibility. TLS via `rustls`.
+
+## Thread Safety
+
+- `ShimBus`: `tokio::sync::broadcast` channel, clone-safe
+- Config: `parking_lot::RwLock` for hot-reload
+- Metrics: `parking_lot::Mutex` on `HashMap`
+- Process: `tokio::process::Child` with async wait
+- Shutdown: `tokio::sync::watch` channel for coordinated shutdown

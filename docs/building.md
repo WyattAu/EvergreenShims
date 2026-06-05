@@ -1,79 +1,88 @@
-# Building for Scratch Images
+# Building
 
-EvergreenShims targets `scratch` Docker images via musl static linking.
+## Target Environment
+
+All builds produce statically linked binaries via musl. The target container is `scratch` (zero base image).
 
 ## Prerequisites
 
-Install the musl toolchain:
-
 ```bash
 # Ubuntu/Debian
-apt-get install musl-tools
+apt-get install -y musl-tools
 
-# macOS
-brew install musl-cross
-
-# Or use the Docker-based build
+# Cross-compile aarch64
+apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+rustup target add aarch64-unknown-linux-musl
 ```
 
 ## Build Commands
 
-### Health-shim only (~300KB)
+### Feature-Prescribed Binaries
+
 ```bash
+# Health only (~300KB)
 cargo build --release --target x86_64-unknown-linux-musl \
-    -p evergreen-shim --features health
+    -p evergreen-shim --no-default-features --features health
+
+# Database shim (~1MB)
+cargo build --release --target x86_64-unknown-linux-musl \
+    -p evergreen-shim --no-default-features --features db-shim
+
+# Full shim (~3MB)
+cargo build --release --target x86_64-unknown-linux-musl \
+    -p evergreen-shim --no-default-features --features full
 ```
 
-### Database shim (~1MB)
-```bash
-cargo build --release --target x86_64-unknown-linux-musl \
-    -p evergreen-shim --features db-shim
-```
+### Cross-Compilation (aarch64)
 
-### Full shim (~3MB)
 ```bash
-cargo build --release --target x86_64-unknown-linux-musl \
-    -p evergreen-shim --features full
-```
-
-### Cross-architecture builds
-```bash
-# aarch64 (ARM64)
-rustup target add aarch64-unknown-linux-musl
 cargo build --release --target aarch64-unknown-linux-musl \
-    -p evergreen-shim --features full
+    -p evergreen-shim --no-default-features --features health \
+    --config "target.aarch64-unknown-linux-musl.linker='aarch64-linux-gnu-gcc'"
 ```
 
-## CI/CD Build
+### Post-Build
 
-The recommended approach is to build in Docker with the musl toolchain pre-installed:
-
-```dockerfile
-FROM rust:1.75 as builder
-RUN apt-get update && apt-get install -y musl-tools
-RUN rustup target add x86_64-unknown-linux-musl
-WORKDIR /src
-COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-musl \
-    -p evergreen-shim --features full
-
-FROM scratch
-COPY --from=builder /src/target/x86_64-unknown-linux-musl/release/shim /shim
-ENTRYPOINT ["/shim"]
+```bash
+strip target/x86_64-unknown-linux-musl/release/shim
+gzip target/x86_64-unknown-linux-musl/release/shim
 ```
 
 ## Feature Flags
 
-| Feature | Description | Size |
-|---------|-------------|------|
-| `health` | Health probes + metrics only | ~300KB |
+| Feature | Composition | Approximate Size |
+|---------|-------------|------------------|
+| `health` | health-shim only | ~300KB |
 | `db-shim` | health + vault + backup + migration + audit | ~1MB |
 | `proxy-combo` | health + audit + tls | ~700KB |
 | `ha-shim` | health + failover + replication | ~800KB |
-| `full` | Everything | ~3MB |
+| `cache-shim-combo` | health + cache + replication | ~700KB |
+| `infra` | health + vault + backup + migration + audit + config + scheduler + queue + alerting | ~2MB |
+| `full` | all 22 shims | ~3MB |
+
+## Docker Build
+
+Multi-stage Dockerfile at `Dockerfile.shim-image`:
+
+```dockerfile
+FROM rust:1-alpine AS builder
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY . .
+RUN cargo build --release --target x86_64-unknown-linux-musl \
+    -p evergreen-shim --no-default-features --features ${FEATURES:-health}
+
+FROM scratch
+COPY --from=builder /src/target/x86_64-unknown-linux-musl/release/shim /shim
+USER 65532
+ENTRYPOINT ["/shim"]
+```
+
+Build targets: `shim-health`, `shim-db`, `shim-cache`, `shim-full`.
 
 ## Notes
 
-- `reqwest` (HTTP client) requires a C compiler for the `ring` crate
-- Musl builds without `http` feature skip HTTP health checks (TCP/exec only)
-- For HTTP health checks in scratch images, use the `http` feature with a musl-compatible build environment
+- `reqwest` requires `aws-lc-rs` for musl (ring-free configuration)
+- `rustls` is used for TLS (no OpenSSL dependency)
+- aarch64 `full`/`infra` builds excluded from CI due to `aws-lc-rs` cross-compile limitation
+- All binaries are stripped before packaging
