@@ -10,45 +10,65 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.arch }} (${{ matrix.features }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
+          # x86_64 presets (musl static, all stripped)
           - target: x86_64-unknown-linux-musl
             arch: x86_64
+            features: health
+            artifact: shim
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64-infra
+            features: infra
+            artifact: shim-infra
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64-full
             features: full
-          - target: aarch64-unknown-linux-musl
-            arch: aarch64
-            features: full
+            artifact: shim-full
           - target: x86_64-unknown-linux-musl
             arch: x86_64-db
             features: db-shim
-          - target: x86_64-unknown-linux-musl
-            arch: x86_64-health
+            artifact: shim-db
+          # aarch64 presets (musl static, all stripped)
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64
             features: health
+            artifact: shim-aarch64
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64-infra
+            features: infra
+            artifact: shim-infra-aarch64
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64-full
+            features: full
+            artifact: shim-full-aarch64
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}-${{ matrix.features }}
 
-      # Install cross-compilation tools
-      - name: Install musl-tools
+      - name: Install cross-compilation tools
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+          if [[ "${{ matrix.arch }}" == aarch64* ]]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu
             rustup target add aarch64-unknown-linux-musl
           fi
 
       - name: Build
         run: |
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+          if [[ "${{ matrix.arch }}" == aarch64* ]]; then
             cargo build --release --target ${{ matrix.target }} \
               -p evergreen-shim --no-default-features --features ${{ matrix.features }} \
               --config "target.aarch64-unknown-linux-musl.linker='aarch64-linux-gnu-gcc'"
@@ -57,12 +77,12 @@ jobs:
               -p evergreen-shim --no-default-features --features ${{ matrix.features }}
           fi
 
-      - name: Package
+      - name: Strip and package
         run: |
-          BINARY_NAME="shim-${{ matrix.arch }}"
-          cp target/${{ matrix.target }}/release/shim ${BINARY_NAME}
-          gzip ${BINARY_NAME}
-          echo "BINARY=${BINARY_NAME}.gz" >> $GITHUB_ENV
+          cp target/${{ matrix.target }}/release/shim ${{ matrix.artifact }}
+          strip ${{ matrix.artifact }}
+          gzip ${{ matrix.artifact }}
+          echo "BINARY=${{ matrix.artifact }}.gz" >> $GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

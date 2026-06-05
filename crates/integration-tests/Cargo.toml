@@ -12,10 +12,27 @@ backup-shim = { path = "../backup-shim" }
 failover-shim = { path = "../failover-shim" }
 migration-shim = { path = "../migration-shim" }
 audit-shim = { path = "../audit-shim" }
+config-shim = { path = "../config-shim" }
+encryption-shim = { path = "../encryption-shim" }
+scheduler-shim = { path = "../scheduler-shim" }
+alerting-shim = { path = "../alerting-shim" }
+queue-shim = { path = "../queue-shim" }
+proxy-shim = { path = "../proxy-shim" }
+tls-shim = { path = "../tls-shim" }
+auth-shim = { path = "../auth-shim" }
+compliance-shim = { path = "../compliance-shim" }
+cache-shim = { path = "../cache-shim" }
+cdc-shim = { path = "../cdc-shim" }
+sharding-shim = { path = "../sharding-shim" }
+archival-shim = { path = "../archival-shim" }
+chaos-shim = { path = "../chaos-shim" }
+cost-shim = { path = "../cost-shim" }
+replication-shim = { path = "../replication-shim" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
