@@ -64,6 +64,8 @@ jobs:
           if [[ "${{ matrix.arch }}" == aarch64* ]]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu
             rustup target add aarch64-unknown-linux-musl
+            # Install cross-strip for aarch64 binaries
+            sudo apt-get install -y binutils-aarch64-linux-gnu
           fi
 
       - name: Build
@@ -80,7 +82,11 @@ jobs:
       - name: Strip and package
         run: |
           cp target/${{ matrix.target }}/release/shim ${{ matrix.artifact }}
-          strip ${{ matrix.artifact }}
+          if [[ "${{ matrix.arch }}" == aarch64* ]]; then
+            aarch64-linux-gnu-strip ${{ matrix.artifact }}
+          else
+            strip ${{ matrix.artifact }}
+          fi
           gzip ${{ matrix.artifact }}
           echo "BINARY=${{ matrix.artifact }}.gz" >> $GITHUB_ENV
 
