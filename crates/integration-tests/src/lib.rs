@@ -52,7 +52,8 @@ async fn test_encryption_aes_gcm_roundtrip() {
     let mut shim = EncryptionShim::new();
 
     let plaintext = b"Hello, EvergreenShims! This is a secret message.";
-    let encrypted = shim.encrypt(plaintext).unwrap();
+    let fixed_nonce = [1u8; 12];
+    let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
 
     assert_eq!(encrypted.method, "aes-gcm");
     assert_eq!(encrypted.key_id, "default");
@@ -80,7 +81,8 @@ async fn test_encryption_chacha20_roundtrip() {
     let mut shim = EncryptionShim::new();
 
     let plaintext = b"ChaCha20 encryption test data";
-    let encrypted = shim.encrypt(plaintext).unwrap();
+    let fixed_nonce = [2u8; 12];
+    let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
     let decrypted = shim.decrypt(&encrypted).unwrap();
 
     assert_eq!(decrypted, plaintext);
@@ -97,7 +99,8 @@ async fn test_encryption_key_rotation() {
     std::env::set_var("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     let mut shim = EncryptionShim::new();
 
-    let encrypted1 = shim.encrypt(b"before rotation").unwrap();
+    let fixed_nonce1 = [3u8; 12];
+    let encrypted1 = shim.encrypt(b"before rotation", Some(&fixed_nonce1)).unwrap();
     assert_eq!(encrypted1.key_id, "default");
 
     // Rotate
@@ -114,7 +117,8 @@ async fn test_encryption_key_rotation() {
     assert_eq!(decrypted, b"before rotation");
 
     // New data uses new key
-    let encrypted2 = shim.encrypt(b"after rotation").unwrap();
+    let fixed_nonce2 = [4u8; 12];
+    let encrypted2 = shim.encrypt(b"after rotation", Some(&fixed_nonce2)).unwrap();
     assert_eq!(encrypted2.key_id, "v2");
     assert_ne!(encrypted1.key_id, encrypted2.key_id);
 

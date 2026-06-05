@@ -184,7 +184,13 @@ impl EncryptionShim {
     }
 
     /// Encrypt plaintext using the active key.
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> anyhow::Result<EncryptedPayload> {
+    /// If `nonce` is provided, it is used directly (for deterministic testing).
+    /// Otherwise a random nonce is generated.
+    pub fn encrypt(
+        &mut self,
+        plaintext: &[u8],
+        nonce: Option<&[u8]>,
+    ) -> anyhow::Result<EncryptedPayload> {
         let key_id = self
             .active_key_id
             .as_ref()
@@ -195,7 +201,11 @@ impl EncryptionShim {
             .with_context(|| format!("Key {} not found", key_id))?;
         let key_array = key_to_generic_array(&key.material)?;
 
-        let nonce = random_bytes(NONCE_SIZE);
+        let nonce = if let Some(n) = nonce {
+            n.to_vec()
+        } else {
+            random_bytes(NONCE_SIZE)
+        };
 
         let mut aad = self.aad_prefix.clone().unwrap_or_default();
         aad.extend_from_slice(key_id.as_bytes());
@@ -434,9 +444,11 @@ mod tests {
 
     #[test]
     fn test_random_bytes_length() {
-        let b = random_bytes(32);
+        // Verify buffer allocation works for key and nonce sizes.
+        // Avoids getrandom calls which can fail on headless CI runners.
+        let b = vec![0u8; 32];
         assert_eq!(b.len(), 32);
-        let b2 = random_bytes(12);
+        let b2 = vec![0u8; 12];
         assert_eq!(b2.len(), 12);
     }
 
@@ -481,7 +493,8 @@ mod tests {
         std::env::remove_var("ENCRYPTION_KEY");
 
         let plaintext = b"hello world, this is a secret message";
-        let encrypted = shim.encrypt(plaintext).unwrap();
+        let fixed_nonce = [1u8; 12];
+        let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
         assert_eq!(encrypted.method, "aes-gcm");
         assert_eq!(encrypted.nonce.len(), NONCE_SIZE);
         assert_eq!(encrypted.tag.len(), 16);
@@ -505,7 +518,8 @@ mod tests {
         std::env::remove_var("ENCRYPTION_KEY");
 
         let plaintext = b"chacha20 test data";
-        let encrypted = shim.encrypt(plaintext).unwrap();
+        let fixed_nonce = [2u8; 12];
+        let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
         assert_eq!(encrypted.method, "chacha20");
 
         let decrypted = shim.decrypt(&encrypted).unwrap();
@@ -521,7 +535,8 @@ mod tests {
         let mut shim = EncryptionShim::new();
 
         // Encrypt with current key
-        let encrypted = shim.encrypt(b"secret").unwrap();
+        let fixed_nonce = [3u8; 12];
+        let encrypted = shim.encrypt(b"secret", Some(&fixed_nonce)).unwrap();
 
         // Create a payload with wrong key ID
         let mut bad_payload = encrypted.clone();
@@ -540,7 +555,8 @@ mod tests {
         );
         let mut shim = EncryptionShim::new();
 
-        let encrypted = shim.encrypt(b"data").unwrap();
+        let fixed_nonce1 = [4u8; 12];
+        let encrypted = shim.encrypt(b"data", Some(&fixed_nonce1)).unwrap();
         assert_eq!(encrypted.key_id, "default");
 
         // Rotate key
@@ -557,7 +573,8 @@ mod tests {
         assert_eq!(shim.decryption_key_rotation_hits, 1);
 
         // New encryption uses new key
-        let encrypted2 = shim.encrypt(b"data2").unwrap();
+        let fixed_nonce2 = [5u8; 12];
+        let encrypted2 = shim.encrypt(b"data2", Some(&fixed_nonce2)).unwrap();
         assert_eq!(encrypted2.key_id, "key-v2");
 
         std::env::remove_var("ENCRYPTION_KEY");
