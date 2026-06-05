@@ -143,8 +143,7 @@ impl TlsShim {
             min_version: min_ver,
             vault_addr: std::env::var("TLS_VAULT_ADDR")
                 .unwrap_or_else(|_| "https://127.0.0.1:8200".to_string()),
-            vault_role: std::env::var("TLS_VAULT_ROLE")
-                .unwrap_or_else(|_| "pki".to_string()),
+            vault_role: std::env::var("TLS_VAULT_ROLE").unwrap_or_else(|_| "pki".to_string()),
             vault_token: std::env::var("TLS_VAULT_TOKEN").ok(),
             state: Arc::new(RwLock::new(TlsState {
                 certs_renewed: 0,
@@ -225,7 +224,7 @@ impl TlsShim {
 
         Some(CertInfo {
             domain: self.domain.clone(),
-            issuer: format!("loaded from disk"),
+            issuer: "loaded from disk".to_string(),
             not_before: (chrono::Utc::now() - chrono::Duration::days(365 - days_until_expiry))
                 .to_rfc3339(),
             not_after: not_after.to_rfc3339(),
@@ -296,7 +295,10 @@ impl TlsShim {
 
     /// Register a managed certificate.
     pub fn register_cert(&self, cert: CertInfo) {
-        self.state.write().managed_certs.insert(cert.domain.clone(), cert);
+        self.state
+            .write()
+            .managed_certs
+            .insert(cert.domain.clone(), cert);
     }
 
     /// Get a managed certificate by domain.
@@ -364,7 +366,10 @@ impl TlsShim {
             anyhow::bail!("Vault PKI returned {}: {}", status, body);
         }
 
-        let body: serde_json::Value = resp.json().await.map_err(|e| anyhow::anyhow!("Failed to parse Vault response: {}", e))?;
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to parse Vault response: {}", e))?;
 
         let cert_pem = body["data"]["certificate"]
             .as_str()
@@ -397,12 +402,8 @@ impl TlsShim {
             .build()?;
 
         // Fetch directory
-        let dir_resp: serde_json::Value = http_client
-            .get(directory_url)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let dir_resp: serde_json::Value =
+            http_client.get(directory_url).send().await?.json().await?;
 
         let new_nonce_url = dir_resp["newNonce"]
             .as_str()
@@ -530,14 +531,14 @@ fn pem_decode(pem: &str, expected_label: &str) -> Option<Vec<u8>> {
 
     let start = pem.find(&label_start)? + label_start.len();
     let end = pem.find(&label_end)?;
-    let b64 = pem[start..end].trim().replace('\n', "").replace('\r', "");
+    let b64 = pem[start..end].trim().replace(['\n', '\r'], "");
     base64_decode(&b64)
 }
 
 /// Minimal base64 encode (no-std compatible, no external dep needed for this).
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -562,15 +563,23 @@ fn base64_encode(data: &[u8]) -> String {
 /// Minimal base64 decode.
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
     let input: String = input.chars().filter(|c| !c.is_whitespace()).collect();
-    if input.len() % 4 != 0 {
+    if !input.len().is_multiple_of(4) {
         return None;
     }
     let mut result = Vec::with_capacity(input.len() * 3 / 4);
     for chunk in input.as_bytes().chunks(4) {
         let c0 = base64_char_to_val(chunk[0])?;
         let c1 = base64_char_to_val(chunk[1])?;
-        let c2 = if chunk[2] == b'=' { 0 } else { base64_char_to_val(chunk[2])? };
-        let c3 = if chunk[3] == b'=' { 0 } else { base64_char_to_val(chunk[3])? };
+        let c2 = if chunk[2] == b'=' {
+            0
+        } else {
+            base64_char_to_val(chunk[2])?
+        };
+        let c3 = if chunk[3] == b'=' {
+            0
+        } else {
+            base64_char_to_val(chunk[3])?
+        };
 
         let triple = (c0 as u32) << 18 | (c1 as u32) << 12 | (c2 as u32) << 6 | (c3 as u32);
         result.push(((triple >> 16) & 0xFF) as u8);
@@ -937,7 +946,10 @@ mod tests {
         cert.cert_pem = Some("not a real PEM certificate".to_string());
         let result = shim.validate_cert(&cert);
         assert!(!result.valid);
-        assert!(result.errors.iter().any(|e| e.contains("Invalid certificate PEM")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("Invalid certificate PEM")));
     }
 
     #[tokio::test]
@@ -948,7 +960,9 @@ mod tests {
         shim.register_cert(make_cert("b.com", 5));
 
         let metrics = shim.metrics();
-        assert!(metrics.iter().any(|m| m.name == "tls_managed_certs" && m.value == 2.0));
+        assert!(metrics
+            .iter()
+            .any(|m| m.name == "tls_managed_certs" && m.value == 2.0));
     }
 
     #[test]

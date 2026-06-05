@@ -24,3 +24,4 @@ getrandom = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true
+temp-env.workspace = true

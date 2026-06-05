@@ -6,11 +6,10 @@
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-use crate::bus::{BusSubscriber, ShimBus};
-use crate::event::{EventType, Severity, ShimEvent};
-use crate::error::Result;
+use crate::bus::ShimBus;
+use crate::event::{EventType, Severity};
 
 /// Monitors health events and triggers failover when status goes unhealthy.
 pub struct HealthFailoverHandler {
@@ -90,7 +89,12 @@ impl BackupEncryptionHandler {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if let EventType::BackupCompleted { name, size_bytes, checksum } = &event.event {
+                        if let EventType::BackupCompleted {
+                            name,
+                            size_bytes,
+                            checksum,
+                        } = &event.event
+                        {
                             info!(
                                 "backup-encryption: backup '{}' completed ({} bytes), ensuring encryption",
                                 name, size_bytes
@@ -129,7 +133,6 @@ impl AlertFanInHandler {
     /// Start monitoring all alertable events and routing to alerting.
     pub fn start(self: Arc<Self>) {
         let mut rx = self.bus.subscribe();
-        let handler = self.clone();
 
         tokio::spawn(async move {
             loop {
@@ -174,7 +177,11 @@ impl SchedulerBackupHandler {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if let EventType::SchedulerTaskFired { task_name, schedule } = &event.event {
+                        if let EventType::SchedulerTaskFired {
+                            task_name,
+                            schedule,
+                        } = &event.event
+                        {
                             if task_name.contains("backup") || task_name.contains("daily") {
                                 info!(
                                     "scheduler-backup: task '{}' fired ({}), triggering backup",

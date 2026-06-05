@@ -17,3 +17,6 @@ serde_json.workspace = true
 chrono.workspace = true
 prometheus.workspace = true
 sqlx = { workspace = true, features = ["postgres", "mysql"] }
+
+[dev-dependencies]
+temp-env.workspace = true

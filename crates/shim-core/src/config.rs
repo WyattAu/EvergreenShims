@@ -374,8 +374,7 @@ impl Config {
     pub fn load() -> Self {
         let mut config = Self::from_env();
 
-        let config_path = std::env::var("SHIM_CONFIG")
-            .unwrap_or_else(|_| "shim.toml".to_string());
+        let config_path = std::env::var("SHIM_CONFIG").unwrap_or_else(|_| "shim.toml".to_string());
 
         if std::path::Path::new(&config_path).exists() {
             match Self::from_file(&config_path) {

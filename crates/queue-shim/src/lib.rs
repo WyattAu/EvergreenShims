@@ -124,7 +124,10 @@ impl QueueShim {
 
     pub fn set_handler<F>(&mut self, handler: F)
     where
-        F: Fn(Job) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
+        F: Fn(
+                Job,
+            )
+                -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
             + Send
             + Sync
             + 'static,
@@ -316,8 +319,7 @@ impl QueueShim {
 
                     if timed_out {
                         let mut inner = inner.lock().await;
-                        if let Some(pos) = inner.running_jobs.iter().position(|j| j.id == job.id)
-                        {
+                        if let Some(pos) = inner.running_jobs.iter().position(|j| j.id == job.id) {
                             inner.running_jobs.remove(pos);
                         }
                         let mut job = job;
@@ -586,13 +588,17 @@ mod tests {
 
     #[test]
     fn test_env_config() {
-        std::env::set_var("QUEUE_MAX_WORKERS", "8");
-        std::env::set_var("QUEUE_MAX_RETRIES", "5");
-        let shim = QueueShim::new();
-        assert_eq!(shim.max_workers, 8);
-        assert_eq!(shim.max_retries, 5);
-        std::env::remove_var("QUEUE_MAX_WORKERS");
-        std::env::remove_var("QUEUE_MAX_RETRIES");
+        temp_env::with_vars(
+            [
+                ("QUEUE_MAX_WORKERS", Some("8")),
+                ("QUEUE_MAX_RETRIES", Some("5")),
+            ],
+            || {
+                let shim = QueueShim::new();
+                assert_eq!(shim.max_workers, 8);
+                assert_eq!(shim.max_retries, 5);
+            },
+        );
     }
 
     #[tokio::test]
@@ -601,14 +607,7 @@ mod tests {
         let id = shim.enqueue("attempt-track".into(), vec![]).await;
         shim.dequeue().await;
         shim.fail_job(&id, "err1".into()).await.unwrap();
-        let pending = shim
-            .inner
-            .lock()
-            .await
-            .pending
-            .front()
-            .unwrap()
-            .clone();
+        let pending = shim.inner.lock().await.pending.front().unwrap().clone();
         assert_eq!(pending.attempts, 1);
         assert_eq!(pending.last_error.as_deref(), Some("err1"));
     }

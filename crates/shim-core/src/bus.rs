@@ -82,10 +82,7 @@ impl ShimBus {
     }
 
     /// Subscribe and filter: only events matching the given type tag names.
-    pub fn subscribe_filtered(
-        &self,
-        _types: Vec<String>,
-    ) -> broadcast::Receiver<ShimEvent> {
+    pub fn subscribe_filtered(&self, _types: Vec<String>) -> broadcast::Receiver<ShimEvent> {
         self.tx.subscribe()
     }
 
@@ -98,7 +95,8 @@ impl ShimBus {
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    if filter.is_empty() || filter.iter().any(|f| f == event_type_tag(&event.event)) {
+                    if filter.is_empty() || filter.iter().any(|f| f == event_type_tag(&event.event))
+                    {
                         return Some(event);
                     }
                     // Not interested, keep listening
@@ -131,11 +129,7 @@ impl ShimBus {
 
     /// Current sequence number for a given source.
     pub fn sequence_for(&self, source: &str) -> u64 {
-        self.sequences
-            .read()
-            .get(source)
-            .copied()
-            .unwrap_or(0)
+        self.sequences.read().get(source).copied().unwrap_or(0)
     }
 }
 
@@ -200,7 +194,8 @@ impl BusSubscriber {
                 Err(broadcast::error::TryRecvError::Lagged(n)) => {
                     tracing::warn!("subscriber lagged by {} events", n);
                 }
-                Err(broadcast::error::TryRecvError::Empty) | Err(broadcast::error::TryRecvError::Closed) => {
+                Err(broadcast::error::TryRecvError::Empty)
+                | Err(broadcast::error::TryRecvError::Closed) => {
                     return None;
                 }
             }
@@ -266,7 +261,7 @@ fn event_type_tag(event: &EventType) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{EventType, Severity, ShimEvent};
+    use crate::event::{EventType, Severity};
 
     #[test]
     fn test_bus_new() {
@@ -299,9 +294,30 @@ mod tests {
     fn test_bus_sequence_monotonic() {
         let bus = ShimBus::new();
 
-        let e1 = bus.emit("shim-a", EventType::Custom { event_name: "x".into(), payload: serde_json::json!(null) }, Severity::Info);
-        let e2 = bus.emit("shim-a", EventType::Custom { event_name: "y".into(), payload: serde_json::json!(null) }, Severity::Info);
-        let e3 = bus.emit("shim-b", EventType::Custom { event_name: "z".into(), payload: serde_json::json!(null) }, Severity::Info);
+        let e1 = bus.emit(
+            "shim-a",
+            EventType::Custom {
+                event_name: "x".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Info,
+        );
+        let e2 = bus.emit(
+            "shim-a",
+            EventType::Custom {
+                event_name: "y".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Info,
+        );
+        let e3 = bus.emit(
+            "shim-b",
+            EventType::Custom {
+                event_name: "z".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Info,
+        );
 
         assert_eq!(e1.sequence, 1);
         assert_eq!(e2.sequence, 2);
@@ -343,9 +359,23 @@ mod tests {
     fn test_bus_sequence_for_source() {
         let bus = ShimBus::new();
         assert_eq!(bus.sequence_for("shim-a"), 0);
-        bus.emit("shim-a", EventType::Custom { event_name: "x".into(), payload: serde_json::json!(null) }, Severity::Info);
+        bus.emit(
+            "shim-a",
+            EventType::Custom {
+                event_name: "x".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Info,
+        );
         assert_eq!(bus.sequence_for("shim-a"), 1);
-        bus.emit("shim-a", EventType::Custom { event_name: "y".into(), payload: serde_json::json!(null) }, Severity::Info);
+        bus.emit(
+            "shim-a",
+            EventType::Custom {
+                event_name: "y".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Info,
+        );
         assert_eq!(bus.sequence_for("shim-a"), 2);
     }
 
@@ -389,9 +419,23 @@ mod tests {
         let mut sub = BusSubscriber::new(rx, vec![], Severity::Warning);
 
         // Info event should be filtered out
-        bus.emit("shim", EventType::Custom { event_name: "x".into(), payload: serde_json::json!(null) }, Severity::Info);
+        bus.emit(
+            "shim",
+            EventType::Custom {
+                event_name: "x".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Info,
+        );
         // Warning should pass
-        bus.emit("shim", EventType::Custom { event_name: "y".into(), payload: serde_json::json!(null) }, Severity::Warning);
+        bus.emit(
+            "shim",
+            EventType::Custom {
+                event_name: "y".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Warning,
+        );
 
         let evt = sub.recv().await.unwrap();
         assert_eq!(evt.severity, Severity::Warning);

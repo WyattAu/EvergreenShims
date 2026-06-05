@@ -396,8 +396,7 @@ impl AuthShim {
     /// Returns `{salt_hex}:{hash_hex}`.
     pub fn hash_password(password: &str) -> String {
         let salt = Uuid::new_v4().as_bytes().to_vec();
-        let mut mac =
-            HmacSha256::new_from_slice(&salt).expect("HMAC can take key of any size");
+        let mut mac = HmacSha256::new_from_slice(&salt).expect("HMAC can take key of any size");
         mac.update(password.as_bytes());
         let result = mac.finalize();
         format!("{}:{}", hex_encode(&salt), hex_encode(&result.into_bytes()))
@@ -571,7 +570,11 @@ mod tests {
         let tampered = format!("{}.tampered_{}", parts[0], parts[1]);
         let result = shim.validate_token(&tampered);
         assert!(!result.authenticated);
-        assert!(result.reason.as_deref().unwrap().contains("verification failed"));
+        assert!(result
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("verification failed"));
     }
 
     #[test]
@@ -647,7 +650,11 @@ mod tests {
 
         let result = shim.validate_api_key("key-wrong", "wrong-key");
         assert!(!result.authenticated);
-        assert!(result.reason.as_ref().unwrap().contains("verification failed"));
+        assert!(result
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("verification failed"));
     }
 
     #[test]

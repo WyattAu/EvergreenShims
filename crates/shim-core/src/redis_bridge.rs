@@ -14,8 +14,8 @@ use tokio::sync::broadcast;
 use tracing::{error, info};
 
 use crate::bus::ShimBus;
-use crate::event::ShimEvent;
 use crate::error::{Error, Result};
+use crate::event::ShimEvent;
 
 /// Redis stream key prefix for shim events.
 const STREAM_PREFIX: &str = "evergreen:shimbus:events";
@@ -60,7 +60,9 @@ impl RedisBridge {
 
     /// Initialize the consumer group (idempotent).
     pub fn init_group(&self) -> Result<()> {
-        let mut conn = self.conn.get_connection()
+        let mut conn = self
+            .conn
+            .get_connection()
             .map_err(|e| Error::Connection(format!("redis connection: {}", e)))?;
 
         // XGROUP CREATE is idempotent if MKSTREAM + 0
@@ -74,7 +76,10 @@ impl RedisBridge {
 
         match result {
             Ok(_) => {
-                info!("redis bridge: consumer group '{}' created on '{}'", CONSUMER_GROUP, self.stream_key);
+                info!(
+                    "redis bridge: consumer group '{}' created on '{}'",
+                    CONSUMER_GROUP, self.stream_key
+                );
                 Ok(())
             }
             Err(e) => {
@@ -91,7 +96,9 @@ impl RedisBridge {
 
     /// Publish a `ShimEvent` to the Redis stream.
     pub fn publish(&self, event: &ShimEvent) -> Result<()> {
-        let mut conn = self.conn.get_connection()
+        let mut conn = self
+            .conn
+            .get_connection()
             .map_err(|e| Error::Connection(format!("redis connection: {}", e)))?;
 
         let json = serde_json::to_string(event)
@@ -118,7 +125,9 @@ impl RedisBridge {
     /// This runs as a long-lived task. It polls every `poll_interval_ms`.
     pub async fn start_consuming(self: Arc<Self>, poll_interval_ms: u64) -> Result<()> {
         // Get connection on current thread, then wrap in Send-safe wrapper
-        let conn = self.conn.get_connection()
+        let conn = self
+            .conn
+            .get_connection()
             .map_err(|e| Error::Connection(format!("redis connection: {}", e)))?;
 
         let conn = Arc::new(parking_lot::Mutex::new(conn));

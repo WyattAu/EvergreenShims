@@ -237,7 +237,7 @@ impl CostShim {
             .ok()?;
 
         let elapsed_secs = (now - period_start).num_seconds().max(1) as f64;
-        let total_period_secs = (period_end - period_start).num_seconds() as f64;
+        let _total_period_secs = (period_end - period_start).num_seconds() as f64;
         let rate = budget.spent / elapsed_secs;
         let projected_monthly = rate * 30.0 * 86400.0;
 

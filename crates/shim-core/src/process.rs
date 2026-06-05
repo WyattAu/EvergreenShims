@@ -105,13 +105,15 @@ impl ChildProcess {
     /// Stop the child process gracefully.
     pub async fn stop(&mut self) -> Result<()> {
         if let Some(pid) = self.pid {
-            tracing::info!("Stopping child process PID {} (type: {})", pid, self.db_type);
+            tracing::info!(
+                "Stopping child process PID {} (type: {})",
+                pid,
+                self.db_type
+            );
             self.state = ProcessState::Stopping;
 
-            let shutdown_mgr = ShutdownManager::new(
-                self.db_type.clone(),
-                self.config.shutdown_timeout_secs,
-            );
+            let shutdown_mgr =
+                ShutdownManager::new(self.db_type.clone(), self.config.shutdown_timeout_secs);
 
             let result = shutdown_mgr.shutdown(pid).await?;
 

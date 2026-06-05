@@ -282,7 +282,7 @@ impl EncryptionShim {
                 use aes_gcm::KeyInit;
                 let cipher = aes_gcm::Aes256Gcm::new(&key_array);
                 let nonce = aes_gcm::Nonce::from_slice(&payload.nonce);
-                aad.extend_from_slice(&payload.key_id.as_bytes());
+                aad.extend_from_slice(payload.key_id.as_bytes());
                 cipher
                     .decrypt(
                         nonce,
@@ -297,7 +297,7 @@ impl EncryptionShim {
                 use chacha20poly1305::aead::{Aead, NewAead, Payload};
                 let cipher = chacha20poly1305::ChaCha20Poly1305::new(&key_array);
                 let nonce = chacha20poly1305::Nonce::from_slice(&payload.nonce);
-                aad.extend_from_slice(&payload.key_id.as_bytes());
+                aad.extend_from_slice(payload.key_id.as_bytes());
                 cipher
                     .decrypt(
                         nonce,
@@ -446,9 +446,9 @@ mod tests {
     fn test_random_bytes_length() {
         // Verify buffer allocation works for key and nonce sizes.
         // Avoids getrandom calls which can fail on headless CI runners.
-        let b = vec![0u8; 32];
+        let b = [0u8; 32];
         assert_eq!(b.len(), 32);
-        let b2 = vec![0u8; 12];
+        let b2 = [0u8; 12];
         assert_eq!(b2.len(), 12);
     }
 
@@ -466,118 +466,131 @@ mod tests {
 
     #[test]
     fn test_new_with_env_key() {
-        std::env::set_var(
-            "ENCRYPTION_KEY",
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        temp_env::with_vars(
+            [
+                (
+                    "ENCRYPTION_KEY",
+                    Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+                ),
+                ("ENCRYPTION_KEY_ID", Some("test-key")),
+                ("ENCRYPTION_METHOD", Some("aes-gcm")),
+            ],
+            || {
+                let shim = EncryptionShim::new();
+                assert_eq!(shim.method, EncryptionMethod::AesGcm);
+                assert_eq!(shim.active_key_id.as_deref(), Some("test-key"));
+                assert!(shim.keys.contains_key("test-key"));
+            },
         );
-        std::env::set_var("ENCRYPTION_KEY_ID", "test-key");
-        std::env::set_var("ENCRYPTION_METHOD", "aes-gcm");
-
-        let shim = EncryptionShim::new();
-        assert_eq!(shim.method, EncryptionMethod::AesGcm);
-        assert_eq!(shim.active_key_id.as_deref(), Some("test-key"));
-        assert!(shim.keys.contains_key("test-key"));
-
-        std::env::remove_var("ENCRYPTION_KEY");
-        std::env::remove_var("ENCRYPTION_KEY_ID");
-        std::env::remove_var("ENCRYPTION_METHOD");
     }
 
     #[tokio::test]
     async fn test_aes_gcm_roundtrip() {
-        std::env::set_var(
-            "ENCRYPTION_KEY",
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        temp_env::with_vars(
+            [(
+                "ENCRYPTION_KEY",
+                Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            )],
+            || {
+                let mut shim = EncryptionShim::new();
+
+                let plaintext = b"hello world, this is a secret message";
+                let fixed_nonce = [1u8; 12];
+                let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
+                assert_eq!(encrypted.method, "aes-gcm");
+                assert_eq!(encrypted.nonce.len(), NONCE_SIZE);
+                assert_eq!(encrypted.tag.len(), 16);
+                assert!(!encrypted.ciphertext.is_empty());
+
+                let decrypted = shim.decrypt(&encrypted).unwrap();
+                assert_eq!(decrypted, plaintext);
+                assert_eq!(shim.encryptions_total, 1);
+                assert_eq!(shim.decryptions_total, 1);
+            },
         );
-        let mut shim = EncryptionShim::new();
-        std::env::remove_var("ENCRYPTION_KEY");
-
-        let plaintext = b"hello world, this is a secret message";
-        let fixed_nonce = [1u8; 12];
-        let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
-        assert_eq!(encrypted.method, "aes-gcm");
-        assert_eq!(encrypted.nonce.len(), NONCE_SIZE);
-        assert_eq!(encrypted.tag.len(), 16);
-        assert!(!encrypted.ciphertext.is_empty());
-
-        let decrypted = shim.decrypt(&encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
-        assert_eq!(shim.encryptions_total, 1);
-        assert_eq!(shim.decryptions_total, 1);
     }
 
     #[tokio::test]
     async fn test_chacha20_roundtrip() {
-        std::env::set_var("ENCRYPTION_METHOD", "chacha20");
-        std::env::set_var(
-            "ENCRYPTION_KEY",
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        temp_env::with_vars(
+            [
+                ("ENCRYPTION_METHOD", Some("chacha20")),
+                (
+                    "ENCRYPTION_KEY",
+                    Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+                ),
+            ],
+            || {
+                let mut shim = EncryptionShim::new();
+
+                let plaintext = b"chacha20 test data";
+                let fixed_nonce = [2u8; 12];
+                let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
+                assert_eq!(encrypted.method, "chacha20");
+
+                let decrypted = shim.decrypt(&encrypted).unwrap();
+                assert_eq!(decrypted, plaintext);
+            },
         );
-        let mut shim = EncryptionShim::new();
-        std::env::remove_var("ENCRYPTION_METHOD");
-        std::env::remove_var("ENCRYPTION_KEY");
-
-        let plaintext = b"chacha20 test data";
-        let fixed_nonce = [2u8; 12];
-        let encrypted = shim.encrypt(plaintext, Some(&fixed_nonce)).unwrap();
-        assert_eq!(encrypted.method, "chacha20");
-
-        let decrypted = shim.decrypt(&encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
     }
 
     #[tokio::test]
     async fn test_decryption_wrong_key_fails() {
-        std::env::set_var(
-            "ENCRYPTION_KEY",
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        temp_env::with_vars(
+            [(
+                "ENCRYPTION_KEY",
+                Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            )],
+            || {
+                let mut shim = EncryptionShim::new();
+
+                // Encrypt with current key
+                let fixed_nonce = [3u8; 12];
+                let encrypted = shim.encrypt(b"secret", Some(&fixed_nonce)).unwrap();
+
+                // Create a payload with wrong key ID
+                let mut bad_payload = encrypted.clone();
+                bad_payload.key_id = "nonexistent".to_string();
+
+                let result = shim.decrypt(&bad_payload);
+                assert!(result.is_err());
+            },
         );
-        let mut shim = EncryptionShim::new();
-
-        // Encrypt with current key
-        let fixed_nonce = [3u8; 12];
-        let encrypted = shim.encrypt(b"secret", Some(&fixed_nonce)).unwrap();
-
-        // Create a payload with wrong key ID
-        let mut bad_payload = encrypted.clone();
-        bad_payload.key_id = "nonexistent".to_string();
-
-        let result = shim.decrypt(&bad_payload);
-        assert!(result.is_err());
-        std::env::remove_var("ENCRYPTION_KEY");
     }
 
     #[tokio::test]
     async fn test_key_rotation() {
-        std::env::set_var(
-            "ENCRYPTION_KEY",
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        temp_env::with_vars(
+            [(
+                "ENCRYPTION_KEY",
+                Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            )],
+            || {
+                let mut shim = EncryptionShim::new();
+
+                let fixed_nonce1 = [4u8; 12];
+                let encrypted = shim.encrypt(b"data", Some(&fixed_nonce1)).unwrap();
+                assert_eq!(encrypted.key_id, "default");
+
+                // Rotate key
+                shim.rotate_key(
+                    "key-v2".to_string(),
+                    hex::decode("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+                        .unwrap(),
+                )
+                .unwrap();
+
+                // Old data still decrypts with rotated key
+                let decrypted = shim.decrypt(&encrypted).unwrap();
+                assert_eq!(decrypted, b"data");
+                assert_eq!(shim.decryption_key_rotation_hits, 1);
+
+                // New encryption uses new key
+                let fixed_nonce2 = [5u8; 12];
+                let encrypted2 = shim.encrypt(b"data2", Some(&fixed_nonce2)).unwrap();
+                assert_eq!(encrypted2.key_id, "key-v2");
+            },
         );
-        let mut shim = EncryptionShim::new();
-
-        let fixed_nonce1 = [4u8; 12];
-        let encrypted = shim.encrypt(b"data", Some(&fixed_nonce1)).unwrap();
-        assert_eq!(encrypted.key_id, "default");
-
-        // Rotate key
-        shim.rotate_key(
-            "key-v2".to_string(),
-            hex::decode("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
-                .unwrap(),
-        )
-        .unwrap();
-
-        // Old data still decrypts with rotated key
-        let decrypted = shim.decrypt(&encrypted).unwrap();
-        assert_eq!(decrypted, b"data");
-        assert_eq!(shim.decryption_key_rotation_hits, 1);
-
-        // New encryption uses new key
-        let fixed_nonce2 = [5u8; 12];
-        let encrypted2 = shim.encrypt(b"data2", Some(&fixed_nonce2)).unwrap();
-        assert_eq!(encrypted2.key_id, "key-v2");
-
-        std::env::remove_var("ENCRYPTION_KEY");
     }
 
     #[tokio::test]

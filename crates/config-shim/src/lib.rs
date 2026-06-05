@@ -42,6 +42,7 @@ pub struct ReloadEvent {
 /// Monitors a config file for content changes (SHA-256 hash comparison),
 /// optionally validates the new config, backs up the previous version,
 /// and sends a signal (default SIGHUP) to the child process.
+#[allow(dead_code)]
 pub struct ConfigShim {
     config_path: PathBuf,
     watch_enabled: bool,
@@ -134,6 +135,7 @@ impl ConfigShim {
     }
 
     /// Create backup of current config file.
+    #[allow(dead_code)]
     async fn backup(&self) -> anyhow::Result<Option<PathBuf>> {
         if !self.keep_backup {
             return Ok(None);
@@ -150,6 +152,7 @@ impl ConfigShim {
     }
 
     /// Send reload signal to child process.
+    #[allow(dead_code)]
     async fn send_signal(&self) -> anyhow::Result<()> {
         let guard = self.child_pid.lock().await;
         if let Some(pid) = *guard {
@@ -163,6 +166,7 @@ impl ConfigShim {
     }
 
     /// Reload configuration (validate → backup → hash check → signal).
+    #[allow(dead_code)]
     async fn reload(&mut self) -> anyhow::Result<ReloadEvent> {
         let old_hash = self.last_hash.clone().unwrap_or_default();
         let new_hash = Self::file_hash(&self.config_path).await.ok_or_else(|| {

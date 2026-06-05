@@ -29,8 +29,8 @@ pub struct ConfigWatcher {
 impl ConfigWatcher {
     /// Create a new config watcher, loading initial config from the given path.
     pub fn new(path: impl AsRef<Path>) -> Self {
-        let config = Config::from_file(path.as_ref().to_str().unwrap_or("shim.toml"))
-            .unwrap_or_default();
+        let config =
+            Config::from_file(path.as_ref().to_str().unwrap_or("shim.toml")).unwrap_or_default();
         Self {
             path: path.as_ref().to_path_buf(),
             config: Arc::new(RwLock::new(config)),
@@ -40,8 +40,8 @@ impl ConfigWatcher {
 
     /// Create with custom debounce interval.
     pub fn with_debounce(path: impl AsRef<Path>, debounce: Duration) -> Self {
-        let config = Config::from_file(path.as_ref().to_str().unwrap_or("shim.toml"))
-            .unwrap_or_default();
+        let config =
+            Config::from_file(path.as_ref().to_str().unwrap_or("shim.toml")).unwrap_or_default();
         Self {
             path: path.as_ref().to_path_buf(),
             config: Arc::new(RwLock::new(config)),
@@ -66,7 +66,9 @@ impl ConfigWatcher {
         std::thread::Builder::new()
             .name("config-watcher".into())
             .spawn(move || {
-                use notify::{Config as NotifyConfig, Event, RecommendedWatcher, RecursiveMode, Watcher};
+                use notify::{
+                    Config as NotifyConfig, Event, RecommendedWatcher, RecursiveMode, Watcher,
+                };
 
                 let (tx, rx) = std::sync::mpsc::channel();
                 let mut fs_watcher = match RecommendedWatcher::new(tx, NotifyConfig::default()) {
@@ -88,7 +90,10 @@ impl ConfigWatcher {
 
                 loop {
                     match rx.recv() {
-                        Ok(Ok(Event { kind: notify::EventKind::Modify(_), .. })) => {
+                        Ok(Ok(Event {
+                            kind: notify::EventKind::Modify(_),
+                            ..
+                        })) => {
                             if last_reload.elapsed() < debounce {
                                 continue;
                             }

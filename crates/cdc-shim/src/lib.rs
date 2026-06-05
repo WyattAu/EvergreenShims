@@ -97,6 +97,7 @@ pub struct CdcStats {
 }
 
 /// CDC shim.
+#[allow(dead_code)]
 pub struct CdcShim {
     output: String,
     tables: Vec<String>,
@@ -449,9 +450,11 @@ impl Capability for CdcShim {
     async fn init(&mut self, _config: &Config) -> Result<()> {
         // Initialize HTTP client for webhook output
         if self.output == "webhook" {
-            self.http_client = Some(reqwest::Client::builder().build().map_err(|e| {
-                anyhow::anyhow!("Failed to create HTTP client: {}", e)
-            })?);
+            self.http_client = Some(
+                reqwest::Client::builder()
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?,
+            );
         }
 
         tracing::info!(

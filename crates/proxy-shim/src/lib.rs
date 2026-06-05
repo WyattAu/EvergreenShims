@@ -348,8 +348,7 @@ impl ProxyShim {
     pub fn set_rate_limit(&self, config: RateLimitConfig) {
         let mut state = self.state.write();
         let burst = config.burst;
-        state.token_bucket =
-            Some(TokenBucket::new(config.max_requests_per_sec as f64, burst));
+        state.token_bucket = Some(TokenBucket::new(config.max_requests_per_sec as f64, burst));
         state.rate_limit = Some(config);
     }
 
@@ -421,7 +420,9 @@ impl ProxyShim {
         let state = self.state.read();
         PoolStats {
             active: state.connections_active,
-            idle: state.connections_total.saturating_sub(state.connections_active),
+            idle: state
+                .connections_total
+                .saturating_sub(state.connections_active),
             total: state.connections_total,
             waiters: 0,
         }
@@ -461,8 +462,7 @@ impl Capability for ProxyShim {
         };
 
         tokio::spawn(async move {
-            let mut circuit_timer =
-                tokio::time::interval(Duration::from_secs(circuit_reset_secs));
+            let mut circuit_timer = tokio::time::interval(Duration::from_secs(circuit_reset_secs));
 
             loop {
                 tokio::select! {

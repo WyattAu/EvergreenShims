@@ -20,3 +20,6 @@ prometheus.workspace = true
 sha2.workspace = true
 cron.workspace = true
 redis.workspace = true
+
+[dev-dependencies]
+temp-env.workspace = true

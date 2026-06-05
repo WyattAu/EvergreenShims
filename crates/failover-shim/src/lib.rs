@@ -52,20 +52,15 @@ use shim_core::{Capability, Config, EventType, Metric, Result, Severity, ShimBus
 use tokio::sync::watch;
 
 /// Connector type for failover detection.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum FailoverConnector {
     /// Basic TCP connectivity check (default).
+    #[default]
     Tcp,
     /// PostgreSQL Patroni cluster monitoring via psql.
     Patroni,
     /// Redis Sentinel master tracking.
     RedisSentinel,
-}
-
-impl Default for FailoverConnector {
-    fn default() -> Self {
-        Self::Tcp
-    }
 }
 
 /// Failover state.
@@ -277,20 +272,14 @@ impl FailoverShim {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3),
             webhook: std::env::var("FAILOVER_WEBHOOK").ok(),
-            db_type: std::env::var("FAILOVER_DB_TYPE")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            db_type: std::env::var("FAILOVER_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
             connector,
             // Patroni
-            db_host: std::env::var("FAILOVER_DB_HOST")
-                .unwrap_or_else(|_| "127.0.0.1".to_string()),
-            db_port: std::env::var("FAILOVER_DB_PORT")
-                .unwrap_or_else(|_| "5432".to_string()),
-            db_user: std::env::var("FAILOVER_DB_USER")
-                .unwrap_or_else(|_| "postgres".to_string()),
-            db_password: std::env::var("FAILOVER_DB_PASSWORD")
-                .unwrap_or_default(),
-            db_name: std::env::var("FAILOVER_DB_NAME")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            db_host: std::env::var("FAILOVER_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
+            db_port: std::env::var("FAILOVER_DB_PORT").unwrap_or_else(|_| "5432".to_string()),
+            db_user: std::env::var("FAILOVER_DB_USER").unwrap_or_else(|_| "postgres".to_string()),
+            db_password: std::env::var("FAILOVER_DB_PASSWORD").unwrap_or_default(),
+            db_name: std::env::var("FAILOVER_DB_NAME").unwrap_or_else(|_| "postgres".to_string()),
             lag_threshold_secs: std::env::var("FAILOVER_LAG_THRESHOLD_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -388,8 +377,7 @@ impl FailoverShim {
         sentinel_url: &str,
         master_name: &str,
     ) -> RedisSentinelCheckResult {
-        let client =
-            redis::Client::open(sentinel_url).map_err(|e| format!("Client error: {}", e));
+        let client = redis::Client::open(sentinel_url).map_err(|e| format!("Client error: {}", e));
 
         let client = match client {
             Ok(c) => c,
@@ -534,13 +522,12 @@ impl Capability for FailoverShim {
         }
 
         if self.primary == self.replica {
-            tracing::error!("Primary and replica addresses are identical — failover is meaningless");
+            tracing::error!(
+                "Primary and replica addresses are identical — failover is meaningless"
+            );
         }
 
-        self.shared
-            .current_primary
-            .lock()
-            .clone_from(&self.primary);
+        self.shared.current_primary.lock().clone_from(&self.primary);
 
         tracing::info!(
             "FailoverShim initialized (connector={:?}, primary={}, replica={}, interval={}s, threshold={}, db_type={})",
@@ -826,6 +813,7 @@ impl Capability for FailoverShim {
 
 impl FailoverShim {
     /// Handle a generic TCP check result and trigger failover if needed.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_check_result(
         shared: &SharedState,
         bus: &Option<ShimBus>,
@@ -845,43 +833,43 @@ impl FailoverShim {
                 *consecutive_primary_healthy += 1;
                 tracing::debug!(
                     "Promoted primary {} healthy ({}/10 checks for failback)",
-                    cur, *consecutive_primary_healthy
+                    cur,
+                    *consecutive_primary_healthy
                 );
 
-                if *consecutive_primary_healthy >= 10 {
-                    if check_database(original_primary).await {
-                        tracing::info!(
-                            "FAILOVER SHIM: Failing back to original primary {}",
-                            original_primary
-                        );
+                if *consecutive_primary_healthy >= 10 && check_database(original_primary).await {
+                    tracing::info!(
+                        "FAILOVER SHIM: Failing back to original primary {}",
+                        original_primary
+                    );
 
-                        if let Some(webhook_url) = webhook {
-                            let client = reqwest::Client::new();
-                            let payload = serde_json::json!({
-                                "text": format!("FAILOVER SHIM: Failing back to original primary {}", original_primary),
-                            });
-                            if let Err(e) = client.post(webhook_url).json(&payload).send().await {
-                                tracing::error!("Webhook POST failed: {}", e);
-                            }
+                    if let Some(webhook_url) = webhook {
+                        let client = reqwest::Client::new();
+                        let payload = serde_json::json!({
+                            "text": format!("FAILOVER SHIM: Failing back to original primary {}", original_primary),
+                        });
+                        if let Err(e) = client.post(webhook_url).json(&payload).send().await {
+                            tracing::error!("Webhook POST failed: {}", e);
                         }
-
-                        if let Some(ref bus) = bus {
-                            bus.emit(
-                                "failover-shim",
-                                EventType::FailoverCompleted {
-                                    promoted: original_primary.to_string(),
-                                },
-                                Severity::Notice,
-                            );
-                        }
-
-                        *shared.current_primary.lock() = original_primary.to_string();
-                        shared.set_state(FailoverState::Recovered);
-                        *consecutive_primary_healthy = 0;
-                        tracing::info!("Failback complete. Primary: {}", original_primary);
                     }
+
+                    if let Some(ref bus) = bus {
+                        bus.emit(
+                            "failover-shim",
+                            EventType::FailoverCompleted {
+                                promoted: original_primary.to_string(),
+                            },
+                            Severity::Notice,
+                        );
+                    }
+
+                    *shared.current_primary.lock() = original_primary.to_string();
+                    shared.set_state(FailoverState::Recovered);
+                    *consecutive_primary_healthy = 0;
+                    tracing::info!("Failback complete. Primary: {}", original_primary);
                 }
-            } else if cur_state == FailoverState::Suspect || cur_state == FailoverState::FailingOver {
+            } else if cur_state == FailoverState::Suspect || cur_state == FailoverState::FailingOver
+            {
                 tracing::info!("Primary {} recovered", cur);
                 shared.set_state(FailoverState::Healthy);
                 *consecutive_primary_healthy = 0;
@@ -893,7 +881,9 @@ impl FailoverShim {
             let failures = shared.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
             tracing::warn!(
                 "Health check failed for {} ({}/{})",
-                cur, failures, failure_threshold
+                cur,
+                failures,
+                failure_threshold
             );
 
             if failures >= failure_threshold {
@@ -975,15 +965,11 @@ impl PatroniMonitor {
     /// Create a new PatroniMonitor from environment variables.
     pub fn from_env() -> Self {
         Self {
-            db_host: std::env::var("FAILOVER_DB_HOST")
-                .unwrap_or_else(|_| "localhost".to_string()),
-            db_port: std::env::var("FAILOVER_DB_PORT")
-                .unwrap_or_else(|_| "5432".to_string()),
-            db_user: std::env::var("FAILOVER_DB_USER")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            db_host: std::env::var("FAILOVER_DB_HOST").unwrap_or_else(|_| "localhost".to_string()),
+            db_port: std::env::var("FAILOVER_DB_PORT").unwrap_or_else(|_| "5432".to_string()),
+            db_user: std::env::var("FAILOVER_DB_USER").unwrap_or_else(|_| "postgres".to_string()),
             db_password: std::env::var("FAILOVER_DB_PASSWORD").unwrap_or_default(),
-            db_name: std::env::var("FAILOVER_DB_NAME")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            db_name: std::env::var("FAILOVER_DB_NAME").unwrap_or_else(|_| "postgres".to_string()),
             check_interval_secs: std::env::var("FAILOVER_CHECK_INTERVAL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -1126,7 +1112,9 @@ impl PatroniMonitor {
 
         tracing::info!(
             "PatroniMonitor started (host={}, interval={}s, lag_threshold={}s)",
-            self.db_host, self.check_interval_secs, self.lag_threshold_secs
+            self.db_host,
+            self.check_interval_secs,
+            self.lag_threshold_secs
         );
     }
 
@@ -1286,7 +1274,9 @@ impl RedisSentinelMonitor {
 
         tracing::info!(
             "RedisSentinelMonitor started (sentinel={}, master={}, interval={}s)",
-            self.sentinel_url, self.master_name, self.check_interval_secs
+            self.sentinel_url,
+            self.master_name,
+            self.check_interval_secs
         );
     }
 
@@ -1400,9 +1390,9 @@ mod tests {
 
     #[test]
     fn test_parse_replication_lag_invalid() {
-        assert_eq!(parse_replication_lag(""), None);
-        assert_eq!(parse_replication_lag("NULL"), None);
-        assert_eq!(parse_replication_lag("not_a_number"), None);
+        assert_eq!(parse_replication_lag(""), None::<f64>);
+        assert_eq!(parse_replication_lag("NULL"), None::<f64>);
+        assert_eq!(parse_replication_lag("not_a_number"), None::<f64>);
     }
 
     #[test]
@@ -1422,49 +1412,46 @@ mod tests {
 
     #[test]
     fn test_patroni_config_from_env() {
-        std::env::set_var("FAILOVER_CONNECTOR", "patroni");
-        std::env::set_var("FAILOVER_DB_HOST", "pg-primary.internal");
-        std::env::set_var("FAILOVER_DB_PORT", "5433");
-        std::env::set_var("FAILOVER_DB_USER", "admin");
-        std::env::set_var("FAILOVER_DB_PASSWORD", "secret123");
-        std::env::set_var("FAILOVER_DB_NAME", "mydb");
-        std::env::set_var("FAILOVER_LAG_THRESHOLD_SECS", "15.5");
-        std::env::set_var("FAILOVER_CHECK_INTERVAL_SECS", "20");
-
-        let shim = FailoverShim::new();
-        assert_eq!(shim.connector(), &FailoverConnector::Patroni);
-        assert_eq!(shim.db_host(), "pg-primary.internal");
-        assert_eq!(shim.db_port(), "5433");
-        assert_eq!(shim.db_user(), "admin");
-        assert_eq!(shim.db_password(), "secret123");
-        assert_eq!(shim.db_name(), "mydb");
-        assert_eq!(shim.lag_threshold_secs(), 15.5);
-        assert_eq!(shim.check_interval_secs(), 20);
-
-        std::env::remove_var("FAILOVER_CONNECTOR");
-        std::env::remove_var("FAILOVER_DB_HOST");
-        std::env::remove_var("FAILOVER_DB_PORT");
-        std::env::remove_var("FAILOVER_DB_USER");
-        std::env::remove_var("FAILOVER_DB_PASSWORD");
-        std::env::remove_var("FAILOVER_DB_NAME");
-        std::env::remove_var("FAILOVER_LAG_THRESHOLD_SECS");
-        std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
+        temp_env::with_vars(
+            [
+                ("FAILOVER_CONNECTOR", Some("patroni")),
+                ("FAILOVER_DB_HOST", Some("pg-primary.internal")),
+                ("FAILOVER_DB_PORT", Some("5433")),
+                ("FAILOVER_DB_USER", Some("admin")),
+                ("FAILOVER_DB_PASSWORD", Some("secret123")),
+                ("FAILOVER_DB_NAME", Some("mydb")),
+                ("FAILOVER_LAG_THRESHOLD_SECS", Some("15.5")),
+                ("FAILOVER_CHECK_INTERVAL_SECS", Some("20")),
+            ],
+            || {
+                let shim = FailoverShim::new();
+                assert_eq!(shim.connector(), &FailoverConnector::Patroni);
+                assert_eq!(shim.db_host(), "pg-primary.internal");
+                assert_eq!(shim.db_port(), "5433");
+                assert_eq!(shim.db_user(), "admin");
+                assert_eq!(shim.db_password(), "secret123");
+                assert_eq!(shim.db_name(), "mydb");
+                assert_eq!(shim.lag_threshold_secs(), 15.5);
+                assert_eq!(shim.check_interval_secs(), 20);
+            },
+        );
     }
 
     #[test]
     fn test_redis_sentinel_config_from_env() {
-        std::env::set_var("FAILOVER_CONNECTOR", "redis-sentinel");
-        std::env::set_var("REDIS_SENTINEL_URL", "redis://sentinel.prod:26379");
-        std::env::set_var("REDIS_SENTINEL_MASTER", "prod-master");
-
-        let shim = FailoverShim::new();
-        assert_eq!(shim.connector(), &FailoverConnector::RedisSentinel);
-        assert_eq!(shim.redis_sentinel_url(), "redis://sentinel.prod:26379");
-        assert_eq!(shim.redis_sentinel_master(), "prod-master");
-
-        std::env::remove_var("FAILOVER_CONNECTOR");
-        std::env::remove_var("REDIS_SENTINEL_URL");
-        std::env::remove_var("REDIS_SENTINEL_MASTER");
+        temp_env::with_vars(
+            [
+                ("FAILOVER_CONNECTOR", Some("redis-sentinel")),
+                ("REDIS_SENTINEL_URL", Some("redis://sentinel.prod:26379")),
+                ("REDIS_SENTINEL_MASTER", Some("prod-master")),
+            ],
+            || {
+                let shim = FailoverShim::new();
+                assert_eq!(shim.connector(), &FailoverConnector::RedisSentinel);
+                assert_eq!(shim.redis_sentinel_url(), "redis://sentinel.prod:26379");
+                assert_eq!(shim.redis_sentinel_master(), "prod-master");
+            },
+        );
     }
 
     #[test]
@@ -1487,37 +1474,32 @@ mod tests {
 
     #[test]
     fn test_patroni_monitor_from_env() {
-        std::env::set_var("FAILOVER_DB_HOST", "pg-cluster.internal");
-        std::env::set_var("FAILOVER_DB_PORT", "5433");
-        std::env::set_var("FAILOVER_DB_USER", "admin");
-        std::env::set_var("FAILOVER_DB_PASSWORD", "secret");
-        std::env::set_var("FAILOVER_DB_NAME", "mydb");
-        std::env::set_var("FAILOVER_CHECK_INTERVAL_SECS", "15");
-        std::env::set_var("FAILOVER_LAG_THRESHOLD_SECS", "20.5");
-
-        let monitor = PatroniMonitor::from_env();
-        assert_eq!(monitor.db_host(), "pg-cluster.internal");
-        assert_eq!(monitor.db_port(), "5433");
-        assert_eq!(monitor.db_user(), "admin");
-        assert_eq!(monitor.db_password(), "secret");
-        assert_eq!(monitor.db_name, "mydb");
-        assert_eq!(monitor.check_interval_secs(), 15);
-        assert_eq!(monitor.lag_threshold_secs(), 20.5);
-
-        std::env::remove_var("FAILOVER_DB_HOST");
-        std::env::remove_var("FAILOVER_DB_PORT");
-        std::env::remove_var("FAILOVER_DB_USER");
-        std::env::remove_var("FAILOVER_DB_PASSWORD");
-        std::env::remove_var("FAILOVER_DB_NAME");
-        std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
-        std::env::remove_var("FAILOVER_LAG_THRESHOLD_SECS");
+        temp_env::with_vars(
+            [
+                ("FAILOVER_DB_HOST", Some("pg-cluster.internal")),
+                ("FAILOVER_DB_PORT", Some("5433")),
+                ("FAILOVER_DB_USER", Some("admin")),
+                ("FAILOVER_DB_PASSWORD", Some("secret")),
+                ("FAILOVER_DB_NAME", Some("mydb")),
+                ("FAILOVER_CHECK_INTERVAL_SECS", Some("15")),
+                ("FAILOVER_LAG_THRESHOLD_SECS", Some("20.5")),
+            ],
+            || {
+                let monitor = PatroniMonitor::from_env();
+                assert_eq!(monitor.db_host(), "pg-cluster.internal");
+                assert_eq!(monitor.db_port(), "5433");
+                assert_eq!(monitor.db_user(), "admin");
+                assert_eq!(monitor.db_password(), "secret");
+                assert_eq!(monitor.db_name, "mydb");
+                assert_eq!(monitor.check_interval_secs(), 15);
+                assert_eq!(monitor.lag_threshold_secs(), 20.5);
+            },
+        );
     }
 
     #[test]
     fn test_patroni_monitor_explicit() {
-        let monitor = PatroniMonitor::new(
-            "10.0.0.1", "5433", "admin", "pass", "testdb", 15, 20.5,
-        );
+        let monitor = PatroniMonitor::new("10.0.0.1", "5433", "admin", "pass", "testdb", 15, 20.5);
         assert_eq!(monitor.db_host(), "10.0.0.1");
         assert_eq!(monitor.db_port(), "5433");
         assert_eq!(monitor.db_user(), "admin");
@@ -1529,45 +1511,49 @@ mod tests {
 
     #[test]
     fn test_patroni_monitor_defaults() {
-        std::env::remove_var("FAILOVER_DB_HOST");
-        std::env::remove_var("FAILOVER_DB_PORT");
-        std::env::remove_var("FAILOVER_DB_USER");
-        std::env::remove_var("FAILOVER_DB_PASSWORD");
-        std::env::remove_var("FAILOVER_DB_NAME");
-        std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
-        std::env::remove_var("FAILOVER_LAG_THRESHOLD_SECS");
-
-        let monitor = PatroniMonitor::from_env();
-        assert_eq!(monitor.db_host(), "localhost");
-        assert_eq!(monitor.db_port(), "5432");
-        assert_eq!(monitor.db_user(), "postgres");
-        assert_eq!(monitor.db_password(), "");
-        assert_eq!(monitor.db_name, "postgres");
-        assert_eq!(monitor.check_interval_secs(), 10);
-        assert_eq!(monitor.lag_threshold_secs(), 30.0);
+        temp_env::with_vars(
+            [
+                ("FAILOVER_DB_HOST", None::<&str>),
+                ("FAILOVER_DB_PORT", None::<&str>),
+                ("FAILOVER_DB_USER", None::<&str>),
+                ("FAILOVER_DB_PASSWORD", None::<&str>),
+                ("FAILOVER_DB_NAME", None::<&str>),
+                ("FAILOVER_CHECK_INTERVAL_SECS", None::<&str>),
+                ("FAILOVER_LAG_THRESHOLD_SECS", None::<&str>),
+            ],
+            || {
+                let monitor = PatroniMonitor::from_env();
+                assert_eq!(monitor.db_host(), "localhost");
+                assert_eq!(monitor.db_port(), "5432");
+                assert_eq!(monitor.db_user(), "postgres");
+                assert_eq!(monitor.db_password(), "");
+                assert_eq!(monitor.db_name, "postgres");
+                assert_eq!(monitor.check_interval_secs(), 10);
+                assert_eq!(monitor.lag_threshold_secs(), 30.0);
+            },
+        );
     }
 
     #[test]
     fn test_redis_sentinel_monitor_from_env() {
-        std::env::set_var("REDIS_SENTINEL_URL", "redis://sentinel.prod:26379");
-        std::env::set_var("REDIS_SENTINEL_MASTER", "prod-master");
-        std::env::set_var("FAILOVER_CHECK_INTERVAL_SECS", "7");
-
-        let monitor = RedisSentinelMonitor::from_env();
-        assert_eq!(monitor.sentinel_url(), "redis://sentinel.prod:26379");
-        assert_eq!(monitor.master_name(), "prod-master");
-        assert_eq!(monitor.check_interval_secs(), 7);
-
-        std::env::remove_var("REDIS_SENTINEL_URL");
-        std::env::remove_var("REDIS_SENTINEL_MASTER");
-        std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
+        temp_env::with_vars(
+            [
+                ("REDIS_SENTINEL_URL", Some("redis://sentinel.prod:26379")),
+                ("REDIS_SENTINEL_MASTER", Some("prod-master")),
+                ("FAILOVER_CHECK_INTERVAL_SECS", Some("7")),
+            ],
+            || {
+                let monitor = RedisSentinelMonitor::from_env();
+                assert_eq!(monitor.sentinel_url(), "redis://sentinel.prod:26379");
+                assert_eq!(monitor.master_name(), "prod-master");
+                assert_eq!(monitor.check_interval_secs(), 7);
+            },
+        );
     }
 
     #[test]
     fn test_redis_sentinel_monitor_explicit() {
-        let monitor = RedisSentinelMonitor::new(
-            "redis://sentinel.prod:26379", "prod-master", 7,
-        );
+        let monitor = RedisSentinelMonitor::new("redis://sentinel.prod:26379", "prod-master", 7);
         assert_eq!(monitor.sentinel_url(), "redis://sentinel.prod:26379");
         assert_eq!(monitor.master_name(), "prod-master");
         assert_eq!(monitor.check_interval_secs(), 7);
@@ -1575,13 +1561,18 @@ mod tests {
 
     #[test]
     fn test_redis_sentinel_monitor_defaults() {
-        std::env::remove_var("REDIS_SENTINEL_URL");
-        std::env::remove_var("REDIS_SENTINEL_MASTER");
-        std::env::remove_var("FAILOVER_CHECK_INTERVAL_SECS");
-
-        let monitor = RedisSentinelMonitor::from_env();
-        assert_eq!(monitor.sentinel_url(), "redis://localhost:26379");
-        assert_eq!(monitor.master_name(), "mymaster");
-        assert_eq!(monitor.check_interval_secs(), 5);
+        temp_env::with_vars(
+            [
+                ("REDIS_SENTINEL_URL", None::<&str>),
+                ("REDIS_SENTINEL_MASTER", None::<&str>),
+                ("FAILOVER_CHECK_INTERVAL_SECS", None::<&str>),
+            ],
+            || {
+                let monitor = RedisSentinelMonitor::from_env();
+                assert_eq!(monitor.sentinel_url(), "redis://localhost:26379");
+                assert_eq!(monitor.master_name(), "mymaster");
+                assert_eq!(monitor.check_interval_secs(), 5);
+            },
+        );
     }
 }

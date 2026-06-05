@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use prometheus::{
-    Encoder, Gauge, GaugeVec, IntCounter, IntCounterVec, Opts, Registry, TextEncoder,
-    Histogram, HistogramOpts,
+    Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntCounterVec, Opts, Registry,
+    TextEncoder,
 };
-use tracing::{error, info};
+use tracing::info;
 
 use crate::error::Result;
 
@@ -53,51 +53,79 @@ impl ShimMetrics {
     pub fn new() -> Self {
         let registry = Registry::new();
 
-        let events_published = IntCounter::with_opts(
-            Opts::new("shim_events_published_total", "Total events published on the bus"),
-        ).unwrap();
-        let events_dropped = IntCounter::with_opts(
-            Opts::new("shim_events_dropped_total", "Total events dropped due to lagged receivers"),
-        ).unwrap();
-        let bus_subscribers = Gauge::with_opts(
-            Opts::new("shim_bus_subscribers", "Number of active bus subscribers"),
-        ).unwrap();
-        let health_status = Gauge::with_opts(
-            Opts::new("shim_health_status", "Health status: 1=healthy, 0=unhealthy"),
-        ).unwrap();
-        let health_checks_total = IntCounter::with_opts(
-            Opts::new("shim_health_checks_total", "Total health check evaluations"),
-        ).unwrap();
-        let uptime_seconds = Gauge::with_opts(
-            Opts::new("shim_uptime_seconds", "Uptime in seconds"),
-        ).unwrap();
+        let events_published = IntCounter::with_opts(Opts::new(
+            "shim_events_published_total",
+            "Total events published on the bus",
+        ))
+        .unwrap();
+        let events_dropped = IntCounter::with_opts(Opts::new(
+            "shim_events_dropped_total",
+            "Total events dropped due to lagged receivers",
+        ))
+        .unwrap();
+        let bus_subscribers = Gauge::with_opts(Opts::new(
+            "shim_bus_subscribers",
+            "Number of active bus subscribers",
+        ))
+        .unwrap();
+        let health_status = Gauge::with_opts(Opts::new(
+            "shim_health_status",
+            "Health status: 1=healthy, 0=unhealthy",
+        ))
+        .unwrap();
+        let health_checks_total = IntCounter::with_opts(Opts::new(
+            "shim_health_checks_total",
+            "Total health check evaluations",
+        ))
+        .unwrap();
+        let uptime_seconds =
+            Gauge::with_opts(Opts::new("shim_uptime_seconds", "Uptime in seconds")).unwrap();
         let errors_total = IntCounterVec::new(
             Opts::new("shim_errors_total", "Total errors by type"),
             &["error_type"],
-        ).unwrap();
+        )
+        .unwrap();
         let operation_duration_seconds = Histogram::with_opts(
-            HistogramOpts::new("shim_operation_duration_seconds", "Operation duration in seconds")
-                .buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
-        ).unwrap();
+            HistogramOpts::new(
+                "shim_operation_duration_seconds",
+                "Operation duration in seconds",
+            )
+            .buckets(vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ]),
+        )
+        .unwrap();
         let events_by_source = IntCounterVec::new(
             Opts::new("shim_events_by_source_total", "Events by source shim"),
             &["source"],
-        ).unwrap();
+        )
+        .unwrap();
         let events_handled = IntCounterVec::new(
             Opts::new("shim_events_handled_total", "Events handled by handler"),
             &["handler"],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Register all metrics
-        registry.register(Box::new(events_published.clone())).unwrap();
+        registry
+            .register(Box::new(events_published.clone()))
+            .unwrap();
         registry.register(Box::new(events_dropped.clone())).unwrap();
-        registry.register(Box::new(bus_subscribers.clone())).unwrap();
+        registry
+            .register(Box::new(bus_subscribers.clone()))
+            .unwrap();
         registry.register(Box::new(health_status.clone())).unwrap();
-        registry.register(Box::new(health_checks_total.clone())).unwrap();
+        registry
+            .register(Box::new(health_checks_total.clone()))
+            .unwrap();
         registry.register(Box::new(uptime_seconds.clone())).unwrap();
         registry.register(Box::new(errors_total.clone())).unwrap();
-        registry.register(Box::new(operation_duration_seconds.clone())).unwrap();
-        registry.register(Box::new(events_by_source.clone())).unwrap();
+        registry
+            .register(Box::new(operation_duration_seconds.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(events_by_source.clone()))
+            .unwrap();
         registry.register(Box::new(events_handled.clone())).unwrap();
 
         Self {
@@ -151,10 +179,7 @@ impl Default for ShimMetrics {
 /// Start a Prometheus metrics HTTP server using axum.
 ///
 /// Serves `/metrics` (Prometheus text format) and `/healthz` (JSON status).
-pub async fn start_metrics_server(
-    addr: SocketAddr,
-    metrics: Arc<ShimMetrics>,
-) -> Result<()> {
+pub async fn start_metrics_server(addr: SocketAddr, metrics: Arc<ShimMetrics>) -> Result<()> {
     use axum::{routing::get, Router};
 
     let app = Router::new()
@@ -172,9 +197,7 @@ pub async fn start_metrics_server(
     Ok(())
 }
 
-async fn metrics_handler(
-    State(metrics): State<Arc<ShimMetrics>>,
-) -> axum::response::Response {
+async fn metrics_handler(State(metrics): State<Arc<ShimMetrics>>) -> axum::response::Response {
     let body = metrics.export();
     axum::response::Response::builder()
         .status(200)
@@ -183,9 +206,7 @@ async fn metrics_handler(
         .unwrap()
 }
 
-async fn healthz_handler(
-    State(metrics): State<Arc<ShimMetrics>>,
-) -> axum::response::Response {
+async fn healthz_handler(State(metrics): State<Arc<ShimMetrics>>) -> axum::response::Response {
     let healthy = metrics.health_status.get() > 0.5;
     let status = serde_json::json!({
         "status": if healthy { "healthy" } else { "unhealthy" },
@@ -320,8 +341,7 @@ mod tests {
             if !line.is_empty() && !line.starts_with('#') {
                 // Should be a metric line: name{labels} value [timestamp]
                 assert!(
-                    line.chars().next().unwrap().is_alphabetic()
-                        || line.starts_with('_'),
+                    line.chars().next().unwrap().is_alphabetic() || line.starts_with('_'),
                     "Invalid prometheus line: {}",
                     line
                 );
@@ -354,8 +374,11 @@ mod tests {
 
         // Use raw TCP to avoid reqwest TLS issues
         let mut stream = tokio::net::TcpStream::connect(actual_addr).await.unwrap();
-        use tokio::io::{AsyncWriteExt, AsyncReadExt};
-        stream.write_all(b"GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n").await.unwrap();
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        stream
+            .write_all(b"GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
         let mut buf = vec![0u8; 4096];
         let n = stream.read(&mut buf).await.unwrap();
         let response = String::from_utf8_lossy(&buf[..n]);

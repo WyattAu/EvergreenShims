@@ -148,8 +148,7 @@ impl ReplicationShim {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.trim().to_string())
                 .collect(),
-            mode: std::env::var("REPLICATION_MODE")
-                .unwrap_or_else(|_| "asynchronous".to_string()),
+            mode: std::env::var("REPLICATION_MODE").unwrap_or_else(|_| "asynchronous".to_string()),
             check_secs: std::env::var("REPLICATION_CHECK_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -334,12 +333,18 @@ impl ReplicationShim {
 
         let output = Command::new("psql")
             .args([
-                "-h", &self.db_host,
-                "-p", &self.db_port.to_string(),
-                "-U", &self.db_user,
-                "-d", &self.db_name,
-                "-t", "-A",
-                "-c", query,
+                "-h",
+                &self.db_host,
+                "-p",
+                &self.db_port.to_string(),
+                "-U",
+                &self.db_user,
+                "-d",
+                &self.db_name,
+                "-t",
+                "-A",
+                "-c",
+                query,
             ])
             .env("PGPASSWORD", &self.db_password)
             .output()
@@ -357,7 +362,10 @@ impl ReplicationShim {
         }
 
         let lsn = parts[0].to_string();
-        let segment = parts.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        let segment = parts
+            .get(1)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
 
         Ok(WalPosition {
             lsn,
@@ -377,12 +385,18 @@ impl ReplicationShim {
 
         let output = Command::new("psql")
             .args([
-                "-h", host,
-                "-p", port,
-                "-U", &self.db_user,
-                "-d", &self.db_name,
-                "-t", "-A",
-                "-c", query,
+                "-h",
+                host,
+                "-p",
+                port,
+                "-U",
+                &self.db_user,
+                "-d",
+                &self.db_name,
+                "-t",
+                "-A",
+                "-c",
+                query,
             ])
             .env("PGPASSWORD", &self.db_password)
             .output()
@@ -486,11 +500,7 @@ impl Capability for ReplicationShim {
         }
 
         let primary = self.primary.clone();
-        let replicas: Vec<String> = self
-            .replica_status
-            .keys()
-            .cloned()
-            .collect();
+        let replicas: Vec<String> = self.replica_status.keys().cloned().collect();
         let check_secs = self.check_secs;
         let shared = Arc::clone(&self.shared);
         let bus = self.bus.clone();
@@ -919,24 +929,24 @@ mod tests {
 
     #[test]
     fn test_env_db_fields() {
-        std::env::set_var("REPLICATION_DB_HOST", "pg-primary.local");
-        std::env::set_var("REPLICATION_DB_PORT", "5433");
-        std::env::set_var("REPLICATION_DB_USER", "repl_user");
-        std::env::set_var("REPLICATION_DB_PASSWORD", "secret");
-        std::env::set_var("REPLICATION_DB_NAME", "mydb");
-        std::env::set_var("REPLICATION_LAG_THRESHOLD_BYTES", "2097152");
-        let shim = ReplicationShim::new();
-        assert_eq!(shim.db_host, "pg-primary.local");
-        assert_eq!(shim.db_port, 5433);
-        assert_eq!(shim.db_user, "repl_user");
-        assert_eq!(shim.db_password, "secret");
-        assert_eq!(shim.db_name, "mydb");
-        assert_eq!(shim.lag_threshold_bytes, 2_097_152);
-        std::env::remove_var("REPLICATION_DB_HOST");
-        std::env::remove_var("REPLICATION_DB_PORT");
-        std::env::remove_var("REPLICATION_DB_USER");
-        std::env::remove_var("REPLICATION_DB_PASSWORD");
-        std::env::remove_var("REPLICATION_DB_NAME");
-        std::env::remove_var("REPLICATION_LAG_THRESHOLD_BYTES");
+        temp_env::with_vars(
+            [
+                ("REPLICATION_DB_HOST", Some("pg-primary.local")),
+                ("REPLICATION_DB_PORT", Some("5433")),
+                ("REPLICATION_DB_USER", Some("repl_user")),
+                ("REPLICATION_DB_PASSWORD", Some("secret")),
+                ("REPLICATION_DB_NAME", Some("mydb")),
+                ("REPLICATION_LAG_THRESHOLD_BYTES", Some("2097152")),
+            ],
+            || {
+                let shim = ReplicationShim::new();
+                assert_eq!(shim.db_host, "pg-primary.local");
+                assert_eq!(shim.db_port, 5433);
+                assert_eq!(shim.db_user, "repl_user");
+                assert_eq!(shim.db_password, "secret");
+                assert_eq!(shim.db_name, "mydb");
+                assert_eq!(shim.lag_threshold_bytes, 2_097_152);
+            },
+        );
     }
 }

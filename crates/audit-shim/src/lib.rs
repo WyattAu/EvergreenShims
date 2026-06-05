@@ -152,11 +152,7 @@ impl AuditShim {
     }
 
     /// Create a shim with explicit configuration (for testing).
-    pub fn with_config(
-        database: &str,
-        log_dir: PathBuf,
-        max_entries: usize,
-    ) -> Self {
+    pub fn with_config(database: &str, log_dir: PathBuf, max_entries: usize) -> Self {
         let mut shim = Self::new();
         shim.database = database.to_string();
         shim.log_dir = log_dir;
@@ -208,7 +204,11 @@ impl AuditShim {
                         entries.push(entry);
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to parse audit entry from {}: {}", path.display(), e);
+                        tracing::warn!(
+                            "Failed to parse audit entry from {}: {}",
+                            path.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -420,9 +420,7 @@ impl AuditShim {
                     }
                 }
                 if let Some(ref since_dt) = since_dt {
-                    if let Ok(entry_dt) =
-                        chrono::DateTime::parse_from_rfc3339(&e.timestamp)
-                    {
+                    if let Ok(entry_dt) = chrono::DateTime::parse_from_rfc3339(&e.timestamp) {
                         if entry_dt.with_timezone(&chrono::Utc) < *since_dt {
                             return false;
                         }
@@ -518,11 +516,9 @@ impl Capability for AuditShim {
         }
 
         // Create shared HTTP client once
-        self.http_client = Some(
-            reqwest::Client::builder()
-                .build()
-                .map_err(|e| shim_core::Error::Config(format!("Failed to create HTTP client: {}", e)))?,
-        );
+        self.http_client = Some(reqwest::Client::builder().build().map_err(|e| {
+            shim_core::Error::Config(format!("Failed to create HTTP client: {}", e))
+        })?);
 
         // Ensure log directory exists
         fs::create_dir_all(&self.log_dir).await?;
@@ -863,12 +859,11 @@ mod tests {
         shim.log.push(new_entry);
         assert_eq!(shim.entry_count(), 2);
 
-        let cutoff: chrono::DateTime<chrono::Utc> =
-            chrono::NaiveDate::from_ymd_opt(2025, 3, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap()
-                .and_utc();
+        let cutoff: chrono::DateTime<chrono::Utc> = chrono::NaiveDate::from_ymd_opt(2025, 3, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
         shim.clear_log_before(cutoff);
         assert_eq!(shim.entry_count(), 1);
         assert_eq!(shim.log[0].timestamp, "2025-06-01T10:00:00Z");
@@ -1011,17 +1006,7 @@ mod tests {
 
         // Write 7 entries — should rotate after the 6th push (log.len() > 5)
         for i in 0..7 {
-            let entry = shim.create_entry(
-                "SELECT",
-                None,
-                None,
-                i,
-                None,
-                None,
-                None,
-                true,
-                None,
-            );
+            let entry = shim.create_entry("SELECT", None, None, i, None, None, None, true, None);
             shim.log_entry(entry).await.unwrap();
         }
 
@@ -1076,8 +1061,7 @@ mod tests {
                     let mut buf = vec![0u8; 4096];
                     let _n = stream.read(&mut buf).await.unwrap_or(0);
                     counter.fetch_add(1, Ordering::SeqCst);
-                    let resp =
-                        b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\n{\"ok\":true}";
+                    let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\n{\"ok\":true}";
                     let _ = stream.write_all(resp).await;
                 });
             }

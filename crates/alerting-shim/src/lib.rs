@@ -219,11 +219,7 @@ impl AlertingShim {
             .collect()
     }
 
-    async fn send_webhook(
-        &self,
-        webhook: &WebhookConfig,
-        alert: &Alert,
-    ) -> anyhow::Result<()> {
+    async fn send_webhook(&self, webhook: &WebhookConfig, alert: &Alert) -> anyhow::Result<()> {
         let client = self
             .http_client
             .as_ref()
@@ -463,17 +459,25 @@ mod tests {
         assert_eq!(shim.alerts_deduplicated, 1);
     }
 
-    #[tokio::test]
-    async fn test_process_alert_route() {
-        std::env::set_var(
-            "ALERTING_WEBHOOKS",
-            r##"[{"name":"w1","url":"http://localhost/webhook","channel":"#ops","min_severity":"info","headers":{}},{"name":"w2","url":"http://localhost/pager","channel":"#critical","min_severity":"critical","headers":{}}]"##,
+    #[test]
+    fn test_process_alert_route() {
+        temp_env::with_vars(
+            [(
+                "ALERTING_WEBHOOKS",
+                Some(
+                    r##"[{"name":"w1","url":"http://localhost/webhook","channel":"#ops","min_severity":"info","headers":{}},{"name":"w2","url":"http://localhost/pager","channel":"#critical","min_severity":"critical","headers":{}}]"##,
+                ),
+            )],
+            || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let mut shim = AlertingShim::new();
+                    let alert = make_alert("route-test", Severity::Info);
+                    let count = shim.process_alert(alert).await.unwrap();
+                    assert_eq!(count, 1);
+                });
+            },
         );
-        let mut shim = AlertingShim::new();
-        let alert = make_alert("route-test", Severity::Info);
-        let count = shim.process_alert(alert).await.unwrap();
-        assert_eq!(count, 1);
-        std::env::remove_var("ALERTING_WEBHOOKS");
     }
 
     #[test]
@@ -516,38 +520,42 @@ mod tests {
 
     #[test]
     fn test_route_filters_by_severity() {
-        std::env::set_var(
-            "ALERTING_WEBHOOKS",
-            r##"[{"name":"info-ch","url":"http://x","channel":"#info","min_severity":"info","headers":{}},{"name":"crit-ch","url":"http://y","channel":"#crit","min_severity":"critical","headers":{}}]"##,
+        temp_env::with_vars(
+            [(
+                "ALERTING_WEBHOOKS",
+                Some(
+                    r##"[{"name":"info-ch","url":"http://x","channel":"#info","min_severity":"info","headers":{}},{"name":"crit-ch","url":"http://y","channel":"#crit","min_severity":"critical","headers":{}}]"##,
+                ),
+            )],
+            || {
+                let shim = AlertingShim::new();
+
+                let info_alert = Alert {
+                    id: "1".into(),
+                    title: "t".into(),
+                    message: "m".into(),
+                    severity: Severity::Info,
+                    source: "s".into(),
+                    labels: HashMap::new(),
+                    timestamp: Utc::now(),
+                };
+                let info_routes = shim.route(&info_alert);
+                assert_eq!(info_routes.len(), 1);
+                assert_eq!(info_routes[0].name, "info-ch");
+
+                let crit_alert = Alert {
+                    id: "2".into(),
+                    title: "t".into(),
+                    message: "m".into(),
+                    severity: Severity::Critical,
+                    source: "s".into(),
+                    labels: HashMap::new(),
+                    timestamp: Utc::now(),
+                };
+                let crit_routes = shim.route(&crit_alert);
+                assert_eq!(crit_routes.len(), 2);
+            },
         );
-        let shim = AlertingShim::new();
-
-        let info_alert = Alert {
-            id: "1".into(),
-            title: "t".into(),
-            message: "m".into(),
-            severity: Severity::Info,
-            source: "s".into(),
-            labels: HashMap::new(),
-            timestamp: Utc::now(),
-        };
-        let info_routes = shim.route(&info_alert);
-        assert_eq!(info_routes.len(), 1);
-        assert_eq!(info_routes[0].name, "info-ch");
-
-        let crit_alert = Alert {
-            id: "2".into(),
-            title: "t".into(),
-            message: "m".into(),
-            severity: Severity::Critical,
-            source: "s".into(),
-            labels: HashMap::new(),
-            timestamp: Utc::now(),
-        };
-        let crit_routes = shim.route(&crit_alert);
-        assert_eq!(crit_routes.len(), 2);
-
-        std::env::remove_var("ALERTING_WEBHOOKS");
     }
 
     #[tokio::test]

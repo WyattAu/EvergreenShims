@@ -86,9 +86,9 @@ type TaskHandler = Arc<
     dyn Fn(
             String,
             Vec<String>,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
-        > + Send
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
+        + Send
         + Sync,
 >;
 
@@ -147,7 +147,11 @@ impl SchedulerShim {
 
     pub fn set_handler<F>(&mut self, handler: F)
     where
-        F: Fn(String, Vec<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
+        F: Fn(
+                String,
+                Vec<String>,
+            )
+                -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
             + Send
             + Sync
             + 'static,
@@ -313,12 +317,11 @@ impl SchedulerShim {
                 // Sleep until fire time, or shutdown
                 let now = Utc::now();
                 if fire_time > now {
-                    let sleep_duration = (fire_time - now)
-                        .to_std()
-                        .unwrap_or(Duration::from_secs(1));
-                    let jitter = Duration::from_secs(fastrand::u64(0..=MAX_JITTER_SECS.min(
-                        sleep_duration.as_secs() / 4,
-                    )));
+                    let sleep_duration =
+                        (fire_time - now).to_std().unwrap_or(Duration::from_secs(1));
+                    let jitter = Duration::from_secs(fastrand::u64(
+                        0..=MAX_JITTER_SECS.min(sleep_duration.as_secs() / 4),
+                    ));
                     tokio::select! {
                         _ = shutdown_rx.changed() => break,
                         _ = tokio::time::sleep(sleep_duration + jitter) => {}
@@ -661,28 +664,36 @@ mod tests {
 
     #[test]
     fn test_load_tasks_from_env() {
-        std::env::remove_var("SCHEDULER_TASKS");
-        std::env::set_var(
-            "SCHEDULER_TASKS",
-            r#"[{"name":"t1","schedule":"0 * * * * *","command":"echo","enabled":true,"timeout_secs":60,"retry":{"max_retries":2,"base_delay_secs":5,"max_delay_secs":60}}]"#,
+        temp_env::with_vars(
+            [(
+                "SCHEDULER_TASKS",
+                Some(
+                    r#"[{"name":"t1","schedule":"0 * * * * *","command":"echo","enabled":true,"timeout_secs":60,"retry":{"max_retries":2,"base_delay_secs":5,"max_delay_secs":60}}]"#,
+                ),
+            )],
+            || {
+                let shim = SchedulerShim::new();
+                assert_eq!(shim.tasks.len(), 1);
+                assert_eq!(shim.tasks[0].name, "t1");
+            },
         );
-        let shim = SchedulerShim::new();
-        assert_eq!(shim.tasks.len(), 1);
-        assert_eq!(shim.tasks[0].name, "t1");
-        std::env::remove_var("SCHEDULER_TASKS");
     }
 
     #[test]
     fn test_disabled_tasks_filtered() {
-        std::env::remove_var("SCHEDULER_TASKS");
-        std::env::set_var(
-            "SCHEDULER_TASKS",
-            r#"[{"name":"active","schedule":"0 * * * * *","command":"echo","enabled":true},{"name":"inactive","schedule":"0 * * * * *","command":"echo","enabled":false}]"#,
+        temp_env::with_vars(
+            [(
+                "SCHEDULER_TASKS",
+                Some(
+                    r#"[{"name":"active","schedule":"0 * * * * *","command":"echo","enabled":true},{"name":"inactive","schedule":"0 * * * * *","command":"echo","enabled":false}]"#,
+                ),
+            )],
+            || {
+                let shim = SchedulerShim::new();
+                assert_eq!(shim.tasks.len(), 1);
+                assert_eq!(shim.tasks[0].name, "active");
+            },
         );
-        let shim = SchedulerShim::new();
-        assert_eq!(shim.tasks.len(), 1);
-        assert_eq!(shim.tasks[0].name, "active");
-        std::env::remove_var("SCHEDULER_TASKS");
     }
 
     #[tokio::test]

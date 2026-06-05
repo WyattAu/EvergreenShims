@@ -33,25 +33,18 @@ pub enum Severity {
 pub enum EventType {
     // ── Health / Failover ─────────────────────────────────────────────
     /// Health status changed (healthy → unhealthy or vice versa).
-    HealthStatusChanged {
-        previous: String,
-        current: String,
-    },
+    HealthStatusChanged { previous: String, current: String },
     /// Failover was triggered — primary down, promoting replica.
     FailoverTriggered {
         old_primary: String,
         new_primary: String,
     },
     /// Failover completed — new primary is serving traffic.
-    FailoverCompleted {
-        promoted: String,
-    },
+    FailoverCompleted { promoted: String },
 
     // ── Backup / Encryption ───────────────────────────────────────────
     /// Backup started.
-    BackupStarted {
-        name: String,
-    },
+    BackupStarted { name: String },
     /// Backup completed successfully.
     BackupCompleted {
         name: String,
@@ -59,35 +52,19 @@ pub enum EventType {
         checksum: String,
     },
     /// Backup failed.
-    BackupFailed {
-        name: String,
-        reason: String,
-    },
+    BackupFailed { name: String, reason: String },
     /// Encryption key rotation completed.
-    EncryptionKeyRotated {
-        key_id: String,
-        algorithm: String,
-    },
+    EncryptionKeyRotated { key_id: String, algorithm: String },
 
     // ── Replication / Migration ───────────────────────────────────────
     /// Replication lag exceeded threshold.
-    ReplicationLagWarning {
-        lag_ms: u64,
-        threshold_ms: u64,
-    },
+    ReplicationLagWarning { lag_ms: u64, threshold_ms: u64 },
     /// Migration started.
-    MigrationStarted {
-        version: String,
-    },
+    MigrationStarted { version: String },
     /// Migration completed.
-    MigrationCompleted {
-        version: String,
-    },
+    MigrationCompleted { version: String },
     /// Migration failed.
-    MigrationFailed {
-        version: String,
-        reason: String,
-    },
+    MigrationFailed { version: String, reason: String },
 
     // ── Audit / Compliance ────────────────────────────────────────────
     /// Audit event recorded (typically fan-in — all shims emit audit events).
@@ -110,21 +87,13 @@ pub enum EventType {
         days_remaining: u32,
     },
     /// TLS certificate auto-renewed.
-    TlsCertRenewed {
-        cert_path: String,
-    },
+    TlsCertRenewed { cert_path: String },
     /// Auth token expired or was revoked.
-    AuthTokenRevoked {
-        token_id: String,
-        reason: String,
-    },
+    AuthTokenRevoked { token_id: String, reason: String },
 
     // ── Scheduler / Queue ─────────────────────────────────────────────
     /// Scheduled task fired.
-    SchedulerTaskFired {
-        task_name: String,
-        schedule: String,
-    },
+    SchedulerTaskFired { task_name: String, schedule: String },
     /// Queue job failed (sent to DLQ).
     QueueJobFailed {
         job_id: String,
@@ -134,22 +103,13 @@ pub enum EventType {
 
     // ── Cache / Proxy ─────────────────────────────────────────────────
     /// Cache hit rate dropped below threshold.
-    CacheHitRateLow {
-        hit_rate: f64,
-        threshold: f64,
-    },
+    CacheHitRateLow { hit_rate: f64, threshold: f64 },
     /// Circuit breaker state changed.
-    CircuitBreakerTripped {
-        service: String,
-        state: String,
-    },
+    CircuitBreakerTripped { service: String, state: String },
 
     // ── CDC / Sharding ────────────────────────────────────────────────
     /// CDC event batch committed.
-    CdcBatchCommitted {
-        table: String,
-        event_count: u32,
-    },
+    CdcBatchCommitted { table: String, event_count: u32 },
     /// Shard rebalancing started.
     ShardRebalanceStarted {
         from_shard: String,
@@ -171,14 +131,9 @@ pub enum EventType {
 
     // ── Chaos ─────────────────────────────────────────────────────────
     /// Chaos experiment started.
-    ChaosExperimentStarted {
-        experiment: String,
-    },
+    ChaosExperimentStarted { experiment: String },
     /// Chaos experiment completed.
-    ChaosExperimentCompleted {
-        experiment: String,
-        result: String,
-    },
+    ChaosExperimentCompleted { experiment: String, result: String },
 
     // ── Generic ───────────────────────────────────────────────────────
     /// Custom event — fallback for domain-specific extensions.
@@ -399,10 +354,38 @@ mod tests {
 
     #[test]
     fn test_is_alertable() {
-        let info = ShimEvent::new("x", EventType::Custom { event_name: "test".into(), payload: serde_json::json!(null) }, Severity::Info);
-        let warn = ShimEvent::new("x", EventType::Custom { event_name: "test".into(), payload: serde_json::json!(null) }, Severity::Warning);
-        let err = ShimEvent::new("x", EventType::Custom { event_name: "test".into(), payload: serde_json::json!(null) }, Severity::Error);
-        let crit = ShimEvent::new("x", EventType::Custom { event_name: "test".into(), payload: serde_json::json!(null) }, Severity::Critical);
+        let info = ShimEvent::new(
+            "x",
+            EventType::Custom {
+                event_name: "test".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Info,
+        );
+        let warn = ShimEvent::new(
+            "x",
+            EventType::Custom {
+                event_name: "test".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Warning,
+        );
+        let err = ShimEvent::new(
+            "x",
+            EventType::Custom {
+                event_name: "test".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Error,
+        );
+        let crit = ShimEvent::new(
+            "x",
+            EventType::Custom {
+                event_name: "test".into(),
+                payload: serde_json::json!(null),
+            },
+            Severity::Critical,
+        );
         assert!(!info.is_alertable());
         assert!(warn.is_alertable());
         assert!(err.is_alertable());

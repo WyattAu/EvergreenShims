@@ -137,12 +137,9 @@ impl StartupProbe {
 ///
 /// Uses `tokio::process::Command` to execute `pg_isready -h <host> -p <port>`.
 pub fn postgres_startup_probe(host: &str, port: u16) -> StartupProbe {
-    StartupProbe::new(
-        format!("pg_isready -h {} -p {}", host, port),
-        5,
-    )
-    .with_max_retries(30)
-    .with_retry_delay_secs(1)
+    StartupProbe::new(format!("pg_isready -h {} -p {}", host, port), 5)
+        .with_max_retries(30)
+        .with_retry_delay_secs(1)
 }
 
 /// Create a Redis startup probe that runs `redis-cli ping`.
@@ -152,12 +149,9 @@ pub fn redis_startup_probe(addr: &str) -> StartupProbe {
     // Parse host:port from addr
     let parts: Vec<&str> = addr.split(':').collect();
     let port = parts.get(1).unwrap_or(&"6379");
-    StartupProbe::new(
-        format!("redis-cli -p {} ping", port),
-        3,
-    )
-    .with_max_retries(30)
-    .with_retry_delay_secs(1)
+    StartupProbe::new(format!("redis-cli -p {} ping", port), 3)
+        .with_max_retries(30)
+        .with_retry_delay_secs(1)
 }
 
 /// Create a startup probe from environment variables.
@@ -168,8 +162,7 @@ pub fn redis_startup_probe(addr: &str) -> StartupProbe {
 /// - `FAILOVER_DB_HOST` / `FAILOVER_DB_PORT`: for postgres probe
 /// - `REDIS_SENTINEL_URL` / hardcoded redis port: for redis probe
 pub fn startup_probe_from_env() -> StartupProbe {
-    let probe_type = std::env::var("STARTUP_PROBE_TYPE")
-        .unwrap_or_else(|_| "tcp".to_string());
+    let probe_type = std::env::var("STARTUP_PROBE_TYPE").unwrap_or_else(|_| "tcp".to_string());
     let timeout_secs = std::env::var("STARTUP_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -177,34 +170,29 @@ pub fn startup_probe_from_env() -> StartupProbe {
 
     match probe_type.as_str() {
         "postgres" | "pg" => {
-            let host = std::env::var("FAILOVER_DB_HOST")
-                .unwrap_or_else(|_| "localhost".to_string());
+            let host =
+                std::env::var("FAILOVER_DB_HOST").unwrap_or_else(|_| "localhost".to_string());
             let port: u16 = std::env::var("FAILOVER_DB_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(5432);
-            postgres_startup_probe(&host, port)
-                .with_retry_delay_secs(1)
+            postgres_startup_probe(&host, port).with_retry_delay_secs(1)
         }
         "redis" => {
             let port: u16 = 6379;
-            redis_startup_probe(&format!("localhost:{}", port))
-                .with_retry_delay_secs(1)
+            redis_startup_probe(&format!("localhost:{}", port)).with_retry_delay_secs(1)
         }
         _ => {
             // TCP probe
-            let host = std::env::var("FAILOVER_DB_HOST")
-                .unwrap_or_else(|_| "localhost".to_string());
+            let host =
+                std::env::var("FAILOVER_DB_HOST").unwrap_or_else(|_| "localhost".to_string());
             let port: u16 = std::env::var("FAILOVER_DB_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(5432);
-            StartupProbe::new(
-                format!("tcp:{}:{}", host, port),
-                timeout_secs,
-            )
-            .with_max_retries(30)
-            .with_retry_delay_secs(1)
+            StartupProbe::new(format!("tcp:{}:{}", host, port), timeout_secs)
+                .with_max_retries(30)
+                .with_retry_delay_secs(1)
         }
     }
 }
@@ -225,12 +213,7 @@ async fn execute_health_cmd(cmd: &str, timeout_secs: u64) -> HealthStatus {
 
     // Handle TCP checks (with timeout)
     if let Some(addr) = cmd.strip_prefix("tcp:") {
-        return match tokio::time::timeout(
-            timeout,
-            tokio::net::TcpStream::connect(addr),
-        )
-        .await
-        {
+        return match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr)).await {
             Ok(Ok(_)) => HealthStatus::Healthy,
             Ok(Err(_)) => HealthStatus::Unhealthy,
             Err(_) => HealthStatus::Unhealthy,
@@ -450,33 +433,42 @@ mod tests {
 
     #[test]
     fn test_startup_probe_from_env_tcp() {
-        std::env::remove_var("STARTUP_PROBE_TYPE");
-        std::env::remove_var("STARTUP_TIMEOUT_SECS");
-        let probe = startup_probe_from_env();
-        assert!(probe.check_cmd.contains("tcp:"));
+        temp_env::with_vars(
+            [
+                ("STARTUP_PROBE_TYPE", None::<&str>),
+                ("STARTUP_TIMEOUT_SECS", None::<&str>),
+            ],
+            || {
+                let probe = startup_probe_from_env();
+                assert!(probe.check_cmd.contains("tcp:"));
+            },
+        );
     }
 
     #[test]
     fn test_startup_probe_from_env_postgres() {
-        std::env::set_var("STARTUP_PROBE_TYPE", "postgres");
-        std::env::set_var("FAILOVER_DB_HOST", "pg.internal");
-        std::env::set_var("FAILOVER_DB_PORT", "5433");
-        let probe = startup_probe_from_env();
-        assert!(probe.check_cmd.contains("pg_isready"));
-        assert!(probe.check_cmd.contains("pg.internal"));
-        assert!(probe.check_cmd.contains("5433"));
-        std::env::remove_var("STARTUP_PROBE_TYPE");
-        std::env::remove_var("FAILOVER_DB_HOST");
-        std::env::remove_var("FAILOVER_DB_PORT");
+        temp_env::with_vars(
+            [
+                ("STARTUP_PROBE_TYPE", Some("postgres")),
+                ("FAILOVER_DB_HOST", Some("pg.internal")),
+                ("FAILOVER_DB_PORT", Some("5433")),
+            ],
+            || {
+                let probe = startup_probe_from_env();
+                assert!(probe.check_cmd.contains("pg_isready"));
+                assert!(probe.check_cmd.contains("pg.internal"));
+                assert!(probe.check_cmd.contains("5433"));
+            },
+        );
     }
 
     #[test]
     fn test_startup_probe_from_env_redis() {
-        std::env::set_var("STARTUP_PROBE_TYPE", "redis");
-        let probe = startup_probe_from_env();
-        assert!(probe.check_cmd.contains("redis-cli"));
-        assert!(probe.check_cmd.contains("ping"));
-        std::env::remove_var("STARTUP_PROBE_TYPE");
+        temp_env::with_vars([("STARTUP_PROBE_TYPE", Some("redis"))], || {
+            let probe = startup_probe_from_env();
+            assert!(probe.check_cmd.contains("redis-cli"));
+            assert!(probe.check_cmd.contains("ping"));
+        });
     }
 
     #[tokio::test]

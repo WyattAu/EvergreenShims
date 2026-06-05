@@ -67,6 +67,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shim-core",
+ "temp-env",
  "tempfile",
  "tokio",
  "tracing",
@@ -338,6 +339,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shim-core",
+ "temp-env",
  "tokio",
  "tracing",
 ]
@@ -841,6 +843,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shim-core",
+ "temp-env",
  "tempfile",
  "tokio",
  "tracing",
@@ -947,6 +950,7 @@ dependencies = [
  "serde_json",
  "sharding-shim",
  "shim-core",
+ "temp-env",
  "tempfile",
  "tls-shim",
  "tokio",
@@ -967,6 +971,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shim-core",
+ "temp-env",
  "tokio",
  "tracing",
 ]
@@ -1770,6 +1775,7 @@ dependencies = [
  "serde_json",
  "shim-core",
  "sqlx",
+ "temp-env",
  "tokio",
  "tracing",
 ]
@@ -2160,6 +2166,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shim-core",
+ "temp-env",
  "tempfile",
  "tokio",
  "tracing",
@@ -2315,6 +2322,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shim-core",
+ "temp-env",
  "tokio",
  "tracing",
 ]
@@ -2481,6 +2489,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shim-core",
+ "temp-env",
  "tempfile",
  "tokio",
  "tracing",
@@ -2643,6 +2652,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "temp-env",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2979,6 +2989,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "temp-env"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96374855068f47402c3121c6eed88d29cb1de8f3ab27090e273e420bdabcf050"
+dependencies = [
+ "parking_lot",
 ]
 
 [[package]]

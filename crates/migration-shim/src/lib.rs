@@ -144,21 +144,18 @@ impl MigrationShim {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/migrations")),
             database: std::env::var("MIGRATION_DATABASE").unwrap_or_default(),
-            db_host: std::env::var("MIGRATION_DB_HOST")
-                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            db_host: std::env::var("MIGRATION_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             db_port: std::env::var("MIGRATION_DB_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(5432),
-            db_user: std::env::var("MIGRATION_DB_USER")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            db_user: std::env::var("MIGRATION_DB_USER").unwrap_or_else(|_| "postgres".to_string()),
             db_password: std::env::var("MIGRATION_DB_PASSWORD").unwrap_or_default(),
             db_url: std::env::var("MIGRATION_DB_URL").ok(),
             auto_migrate: std::env::var("MIGRATION_AUTO_MIGRATE")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
-            db_type: std::env::var("MIGRATION_DB_TYPE")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            db_type: std::env::var("MIGRATION_DB_TYPE").unwrap_or_else(|_| "postgres".to_string()),
             current_version: 0,
             migrations_applied: 0,
             migrations_rolled_back: 0,
@@ -223,11 +220,16 @@ impl MigrationShim {
     async fn execute_sql_via_psql(&self, sql: &str) -> anyhow::Result<()> {
         let output = tokio::process::Command::new("psql")
             .args([
-                "-h", &self.db_host,
-                "-p", &self.db_port.to_string(),
-                "-U", &self.db_user,
-                "-d", &self.database,
-                "-c", sql,
+                "-h",
+                &self.db_host,
+                "-p",
+                &self.db_port.to_string(),
+                "-U",
+                &self.db_user,
+                "-d",
+                &self.database,
+                "-c",
+                sql,
             ])
             .env("PGPASSWORD", &self.db_password)
             .output()
@@ -311,10 +313,7 @@ impl MigrationShim {
                     .await?;
             }
             _ => {
-                let sql = format!(
-                    "DELETE FROM schema_migrations WHERE version = {}",
-                    version
-                );
+                let sql = format!("DELETE FROM schema_migrations WHERE version = {}", version);
                 self.execute_sql_via_psql(&sql).await?;
             }
         }
@@ -509,11 +508,7 @@ impl MigrationShim {
                 }
             }
             if let Err(e) = self.delete_migration_record(version).await {
-                tracing::error!(
-                    "Failed to delete migration record v{}: {}",
-                    version,
-                    e
-                );
+                tracing::error!("Failed to delete migration record v{}: {}", version, e);
             }
         }
 
@@ -540,12 +535,11 @@ impl MigrationShim {
             return Err(MigrationError::MissingDownMigration { version: 0 });
         }
 
-        let record = self
-            .applied_records
-            .remove(&self.current_version)
-            .ok_or(MigrationError::MissingDownMigration {
+        let record = self.applied_records.remove(&self.current_version).ok_or(
+            MigrationError::MissingDownMigration {
                 version: self.current_version,
-            })?;
+            },
+        )?;
 
         let prev_version = self
             .applied_records
@@ -589,10 +583,7 @@ impl MigrationShim {
         let mut migrations = Vec::new();
 
         if !self.dir.exists() {
-            tracing::warn!(
-                "Migration directory does not exist: {}",
-                self.dir.display()
-            );
+            tracing::warn!("Migration directory does not exist: {}", self.dir.display());
             return Ok(migrations);
         }
 
@@ -746,10 +737,7 @@ impl Capability for MigrationShim {
     fn metrics(&self) -> Vec<Metric> {
         let mut metrics = vec![
             Metric::new("migration_current_version", self.current_version as f64),
-            Metric::new(
-                "migration_applied_total",
-                self.migrations_applied as f64,
-            ),
+            Metric::new("migration_applied_total", self.migrations_applied as f64),
             Metric::new(
                 "migration_rolled_back_total",
                 self.migrations_rolled_back as f64,
@@ -1040,13 +1028,19 @@ mod tests {
 
     #[test]
     fn test_env_db_url() {
-        std::env::set_var("MIGRATION_DB_URL", "postgres://user:pass@host:5432/db");
-        let shim = MigrationShim::new();
-        assert_eq!(
-            shim.connection_string(),
-            "postgres://user:pass@host:5432/db"
+        temp_env::with_vars(
+            [(
+                "MIGRATION_DB_URL",
+                Some("postgres://user:pass@host:5432/db"),
+            )],
+            || {
+                let shim = MigrationShim::new();
+                assert_eq!(
+                    shim.connection_string(),
+                    "postgres://user:pass@host:5432/db"
+                );
+            },
         );
-        std::env::remove_var("MIGRATION_DB_URL");
     }
 
     #[test]

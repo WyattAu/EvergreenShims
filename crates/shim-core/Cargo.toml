@@ -34,3 +34,4 @@ redis = { workspace = true, optional = true }
 [dev-dependencies]
 tempfile.workspace = true
 pretty_assertions.workspace = true
+temp-env.workspace = true
