@@ -64,7 +64,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Database (ring-free: uses aws-lc-rs for musl static builds)
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls-aws-lc-rs"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "mysql"] }
 deadpool-postgres = "0.14"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 

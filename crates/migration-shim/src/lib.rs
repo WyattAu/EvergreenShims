@@ -209,7 +209,7 @@ impl MigrationShim {
                 sqlx::query(create_sql).execute(&pool).await?;
             }
             _ => {
-                self.execute_sql_via_psql(create_sql).await?;
+                self.execute_sql_postgres(create_sql).await?;
             }
         }
         tracing::info!("schema_migrations table ensured");
@@ -242,6 +242,14 @@ impl MigrationShim {
         Ok(())
     }
 
+    /// Execute a SQL statement against PostgreSQL using sqlx.
+    async fn execute_sql_postgres(&self, sql: &str) -> anyhow::Result<()> {
+        let cs = self.connection_string();
+        let pool = sqlx::PgPool::connect(&cs).await?;
+        sqlx::query(sql).execute(&pool).await?;
+        Ok(())
+    }
+
     /// Execute a SQL statement against the configured database.
     async fn execute_sql(&self, sql: &str) -> anyhow::Result<()> {
         if !self.has_db() {
@@ -256,7 +264,7 @@ impl MigrationShim {
                 sqlx::query(sql).execute(&pool).await?;
             }
             _ => {
-                self.execute_sql_via_psql(sql).await?;
+                self.execute_sql_postgres(sql).await?;
             }
         }
         Ok(())
@@ -291,7 +299,7 @@ impl MigrationShim {
                     .await?;
             }
             _ => {
-                self.execute_sql_via_psql(&sql).await?;
+                self.execute_sql_postgres(&sql).await?;
             }
         }
         Ok(())
@@ -314,7 +322,7 @@ impl MigrationShim {
             }
             _ => {
                 let sql = format!("DELETE FROM schema_migrations WHERE version = {}", version);
-                self.execute_sql_via_psql(&sql).await?;
+                self.execute_sql_postgres(&sql).await?;
             }
         }
         Ok(())

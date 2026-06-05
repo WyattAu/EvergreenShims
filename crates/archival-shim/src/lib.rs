@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 
+use aws_sdk_s3::Client as S3Client;
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::watch;
@@ -98,6 +99,12 @@ pub struct ArchivalShim {
     retention_rules: HashMap<String, RetentionRule>,
     archive_log: Vec<ArchivedRecord>,
     record_counter: u64,
+    // S3 configuration
+    s3_region: String,
+    s3_endpoint: Option<String>,
+    s3_prefix: String,
+    s3_force_path_style: bool,
+    s3_server_side_encryption: bool,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
 
@@ -158,6 +165,17 @@ impl ArchivalShim {
             retention_rules: HashMap::new(),
             archive_log: Vec::new(),
             record_counter: 0,
+            s3_region: std::env::var("ARCHIVAL_S3_REGION")
+                .unwrap_or_else(|_| "us-east-1".to_string()),
+            s3_endpoint: std::env::var("ARCHIVAL_S3_ENDPOINT").ok(),
+            s3_prefix: std::env::var("ARCHIVAL_S3_PREFIX")
+                .unwrap_or_else(|_| "archives".to_string()),
+            s3_force_path_style: std::env::var("ARCHIVAL_S3_FORCE_PATH_STYLE")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            s3_server_side_encryption: std::env::var("ARCHIVAL_S3_SSE")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(true),
             shutdown_tx: None,
         }
     }
@@ -316,6 +334,83 @@ impl ArchivalShim {
         } else {
             false
         }
+    }
+
+    /// Build an S3 client from the current configuration.
+    #[allow(dead_code)]
+    async fn build_s3_client(&self) -> anyhow::Result<S3Client> {
+        let mut config_loader =
+            aws_config::from_env().region(aws_config::Region::new(self.s3_region.clone()));
+
+        if let Some(endpoint) = &self.s3_endpoint {
+            config_loader = config_loader.endpoint_url(endpoint);
+        }
+
+        let sdk_config = config_loader.load().await;
+
+        let mut s3_config = aws_sdk_s3::config::Builder::from(&sdk_config);
+        if self.s3_force_path_style {
+            s3_config = s3_config.force_path_style(true);
+        }
+
+        Ok(S3Client::from_conf(s3_config.build()))
+    }
+
+    /// Upload data to S3.
+    ///
+    /// Key format: `{s3_prefix}/{table}/{record_id}.dat`
+    /// Returns the S3 URI on success.
+    #[allow(dead_code)]
+    async fn upload_to_s3(
+        &self,
+        table: &str,
+        record_id: &str,
+        data: &[u8],
+    ) -> anyhow::Result<String> {
+        let client = self.build_s3_client().await?;
+
+        let key = format!("{}/{}/{}.dat", self.s3_prefix, table, record_id);
+
+        let mut put_req = client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .body(data.to_vec().into());
+
+        if self.s3_server_side_encryption {
+            put_req =
+                put_req.server_side_encryption(aws_sdk_s3::types::ServerSideEncryption::Aes256);
+        }
+
+        put_req = put_req.content_type("application/octet-stream");
+
+        put_req
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("S3 upload failed: {}/{}: {}", self.bucket, key, e))?;
+
+        let s3_uri = format!("s3://{}/{}", self.bucket, key);
+        tracing::info!("S3 archive upload: {} bytes -> {}", data.len(), s3_uri);
+
+        Ok(s3_uri)
+    }
+
+    /// Delete an archive from S3.
+    #[allow(dead_code)]
+    async fn delete_from_s3(&self, table: &str, record_id: &str) -> anyhow::Result<()> {
+        let client = self.build_s3_client().await?;
+        let key = format!("{}/{}/{}.dat", self.s3_prefix, table, record_id);
+
+        client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("S3 delete failed: {}/{}: {}", self.bucket, key, e))?;
+
+        tracing::info!("S3 archive delete: s3://{}/{}", self.bucket, key);
+        Ok(())
     }
 
     /// Purge expired archives.
