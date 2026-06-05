@@ -62,3 +62,35 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.variant }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  scan:
+    name: Scan ${{ matrix.variant }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    strategy:
+      matrix:
+        include:
+          - variant: health-shim
+          - variant: db-shim
+          - variant: cache-shim
+          - variant: evergreen-shim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.variant }}:latest
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
