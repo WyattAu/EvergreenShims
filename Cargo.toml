@@ -96,6 +96,7 @@ futures = "0.3"
 pin-project = "0.4"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
+parking_lot = "0.12"
 regex = "1"
 
 # Testing (used by individual crates)

@@ -9,6 +9,7 @@ description = "Core types and traits for EvergreenShims"
 [features]
 default = ["http"]
 http = ["dep:reqwest"]
+redis-bus = ["dep:redis"]
 
 [dependencies]
 anyhow.workspace = true
@@ -24,7 +25,9 @@ chrono.workspace = true
 uuid.workspace = true
 dirs.workspace = true
 nix.workspace = true
+parking_lot.workspace = true
 reqwest = { workspace = true, optional = true }
+redis = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
