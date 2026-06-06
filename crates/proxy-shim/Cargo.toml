@@ -17,3 +17,5 @@ serde_json.workspace = true
 chrono.workspace = true
 prometheus.workspace = true
 parking_lot.workspace = true
+deadpool-postgres = "0.14"
+tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }

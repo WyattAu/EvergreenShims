@@ -571,6 +571,60 @@ impl ProxyShim {
             }
         }
     }
+
+    // =========================================================================
+    // Real Connection Pool
+    // =========================================================================
+
+    /// Create a connection pool for a PostgreSQL backend.
+    ///
+    /// Uses deadpool-postgres for production-grade connection pooling.
+    #[allow(dead_code)]
+    pub async fn create_pg_pool(
+        &self,
+        host: &str,
+        port: u16,
+        user: &str,
+        password: &str,
+        database: &str,
+    ) -> anyhow::Result<deadpool_postgres::Pool> {
+        let cfg = deadpool_postgres::Config {
+            host: Some(host.to_string()),
+            port: Some(port),
+            user: Some(user.to_string()),
+            password: Some(password.to_string()),
+            dbname: Some(database.to_string()),
+            pool: Some(deadpool_postgres::PoolConfig::new(
+                self.state.read().max_connections as usize,
+            )),
+            ..Default::default()
+        };
+
+        let pool = cfg.create_pool(
+            Some(deadpool_postgres::Runtime::Tokio1),
+            tokio_postgres::NoTls,
+        )?;
+
+        tracing::info!(
+            "Created PostgreSQL connection pool: {}:{}/{} (max={})",
+            host,
+            port,
+            database,
+            self.state.read().max_connections
+        );
+
+        Ok(pool)
+    }
+
+    /// Get a connection from the pool and return it when done.
+    #[allow(dead_code)]
+    pub async fn get_connection(
+        pool: &deadpool_postgres::Pool,
+    ) -> anyhow::Result<deadpool_postgres::Object> {
+        pool.get()
+            .await
+            .map_err(|e| anyhow::anyhow!("Pool connection failed: {}", e))
+    }
 }
 
 impl Default for ProxyShim {
