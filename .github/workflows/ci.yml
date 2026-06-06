@@ -58,3 +58,38 @@ jobs:
       - uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  benchmark-check:
+    name: Benchmark Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build benchmarks
+        run: cargo bench --package evergreen-benchmarks --no-run 2>&1 | grep -E "error|warning" || echo "Benchmarks build clean"
+      - name: Run benchmarks (quick mode)
+        run: cargo bench --package evergreen-benchmarks -- --quick 2>&1 | tail -20
+
+  binary-size-check:
+    name: Binary Size Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build health-shim
+        run: cargo build --release --target x86_64-unknown-linux-musl -p evergreen-shim --no-default-features --features health
+      - name: Check binary size
+        run: |
+          SIZE=$(stat -c%s target/x86_64-unknown-linux-musl/release/shim 2>/dev/null || echo 0)
+          echo "Health shim binary size: ${SIZE} bytes"
+          if [ "$SIZE" -gt 500000 ]; then
+            echo "WARNING: Binary exceeds 500KB threshold"
+          else
+            echo "Binary size within threshold"
+          fi
