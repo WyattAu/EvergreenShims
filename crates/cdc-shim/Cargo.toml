@@ -17,3 +17,4 @@ serde_json.workspace = true
 chrono.workspace = true
 prometheus.workspace = true
 reqwest.workspace = true
+sqlx.workspace = true
