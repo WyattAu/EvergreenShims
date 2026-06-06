@@ -46,29 +46,50 @@ impl ElasticsearchShim {
         }
     }
 
-    /// Check Elasticsearch cluster health.
+    /// Check Elasticsearch cluster health with retry.
     pub async fn check_health(&mut self) -> anyhow::Result<EsHealth> {
         self.health_checks += 1;
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()?;
+        let max_retries = 3;
+        let mut last_error = None;
 
-        let url = format!("{}/_cluster/health", self.url);
-        let resp: serde_json::Value = client.get(&url).send().await?.json().await?;
+        for attempt in 0..max_retries {
+            if let Ok(client) = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+            {
+                let url = format!("{}/_cluster/health", self.url);
+                if let Ok(resp) = client.get(&url).send().await {
+                    if let Ok(val) = resp.json::<serde_json::Value>().await {
+                        return Ok(EsHealth {
+                            status: val["status"].as_str().unwrap_or("unknown").to_string(),
+                            cluster_name: val["cluster_name"]
+                                .as_str()
+                                .unwrap_or("unknown")
+                                .to_string(),
+                            node_count: val["number_of_nodes"].as_u64().unwrap_or(0) as u32,
+                            active_shards: val["active_shards"].as_u64().unwrap_or(0) as u32,
+                            relocating_shards: val["relocating_shards"].as_u64().unwrap_or(0)
+                                as u32,
+                            initializing_shards: val["initializing_shards"].as_u64().unwrap_or(0)
+                                as u32,
+                            unassigned_shards: val["unassigned_shards"].as_u64().unwrap_or(0)
+                                as u32,
+                        });
+                    }
+                }
+            }
 
-        Ok(EsHealth {
-            status: resp["status"].as_str().unwrap_or("unknown").to_string(),
-            cluster_name: resp["cluster_name"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string(),
-            node_count: resp["number_of_nodes"].as_u64().unwrap_or(0) as u32,
-            active_shards: resp["active_shards"].as_u64().unwrap_or(0) as u32,
-            relocating_shards: resp["relocating_shards"].as_u64().unwrap_or(0) as u32,
-            initializing_shards: resp["initializing_shards"].as_u64().unwrap_or(0) as u32,
-            unassigned_shards: resp["unassigned_shards"].as_u64().unwrap_or(0) as u32,
-        })
+            last_error = Some(anyhow::anyhow!(
+                "ES health check failed on attempt {}",
+                attempt + 1
+            ));
+            if attempt < max_retries - 1 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Health check failed after retries")))
     }
 
     /// Create a snapshot repository.

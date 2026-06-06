@@ -72,38 +72,55 @@ impl MongoShim {
         }
     }
 
-    /// Check MongoDB health via serverStatus.
+    /// Check MongoDB health via serverStatus with retry.
     pub async fn check_health(&mut self) -> anyhow::Result<MongoHealth> {
         self.health_checks += 1;
 
-        let output = tokio::process::Command::new("mongosh")
-            .args([
-                &self.uri,
-                "--eval",
-                "JSON.stringify(db.serverStatus())",
-                "--quiet",
-            ])
-            .output()
-            .await?;
+        let max_retries = 3;
+        let mut last_error = None;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("mongosh failed: {}", stderr);
+        for attempt in 0..max_retries {
+            let output = tokio::process::Command::new("mongosh")
+                .args([
+                    &self.uri,
+                    "--eval",
+                    "JSON.stringify(db.serverStatus())",
+                    "--quiet",
+                ])
+                .output()
+                .await;
+
+            match output {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let status: serde_json::Value = serde_json::from_str(&stdout)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse serverStatus: {}", e))?;
+
+                    return Ok(MongoHealth {
+                        ok: status["ok"].as_f64().unwrap_or(0.0) == 1.0,
+                        version: status["version"].as_str().unwrap_or("unknown").to_string(),
+                        connections: status["connections"]["current"].as_u64().unwrap_or(0) as u32,
+                        uptime_secs: status["uptime"].as_u64().unwrap_or(0),
+                    });
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    last_error = Some(anyhow::anyhow!("mongosh failed: {}", stderr));
+                }
+                Err(e) => {
+                    last_error = Some(anyhow::anyhow!("mongosh execution failed: {}", e));
+                }
+            }
+
+            if attempt < max_retries - 1 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let status: serde_json::Value = serde_json::from_str(&stdout)
-            .map_err(|e| anyhow::anyhow!("Failed to parse serverStatus: {}", e))?;
-
-        Ok(MongoHealth {
-            ok: status["ok"].as_f64().unwrap_or(0.0) == 1.0,
-            version: status["version"].as_str().unwrap_or("unknown").to_string(),
-            connections: status["connections"]["current"].as_u64().unwrap_or(0) as u32,
-            uptime_secs: status["uptime"].as_u64().unwrap_or(0),
-        })
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Health check failed after retries")))
     }
 
-    /// Backup a MongoDB database using mongodump.
+    /// Backup a MongoDB database using mongodump with retry.
     pub async fn backup(&mut self) -> anyhow::Result<MongoBackup> {
         if self.database.is_empty() {
             anyhow::bail!("MONGO_DATABASE not set");
