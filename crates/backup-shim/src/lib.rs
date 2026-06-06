@@ -1076,8 +1076,10 @@ mod tests {
 
     #[test]
     fn test_default_retention() {
-        let shim = BackupShim::new();
-        assert_eq!(shim.retention_days, 30);
+        temp_env::with_var_unset("BACKUP_RETENTION_DAYS", || {
+            let shim = BackupShim::new();
+            assert_eq!(shim.retention_days, 30);
+        });
     }
 
     #[test]
