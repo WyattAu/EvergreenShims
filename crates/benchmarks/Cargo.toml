@@ -1,0 +1,19 @@
+[package]
+name = "evergreen-benchmarks"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+shim-core = { path = "../shim-core" }
+backup-shim = { path = "../backup-shim" }
+cache-shim = { path = "../cache-shim" }
+encryption-shim = { path = "../encryption-shim" }
+migration-shim = { path = "../migration-shim" }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "shim_benchmarks"
+harness = false

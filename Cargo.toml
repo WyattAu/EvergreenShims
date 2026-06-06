@@ -30,6 +30,7 @@ members = [
     "crates/dynamodb-shim",
     "crates/elasticsearch-shim",
     "crates/cassandra-shim",
+    "crates/benchmarks",
 ]
 resolver = "2"
 
@@ -72,6 +73,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "mysql"] }
 deadpool-postgres = "0.14"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+criterion = { version = "0.5", features = ["html_reports"] }
 
 # AWS/Cloud
 aws-config = { version = "1", features = ["behavior-version-latest"] }
