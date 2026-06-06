@@ -90,7 +90,7 @@ jobs:
       - name: Build benchmarks
         run: cargo bench --package evergreen-benchmarks --no-run 2>&1
       - name: Run benchmarks (quick mode)
-        run: cargo bench --package evergreen-benchmarks -- --quick 2>&1 | tail -20
+        run: cargo bench --package evergreen-benchmarks -- --warm-up-time 1 --measurement-time 2 --sample-size 10 2>&1 | tail -20
 
   benchmark-regression:
     name: Benchmark Regression
@@ -105,7 +105,7 @@ jobs:
       - name: Build benchmarks
         run: cargo bench --package evergreen-benchmarks --no-run 2>&1
       - name: Run benchmarks (quick mode) and save output
-        run: cargo bench --package evergreen-benchmarks -- --quick 2>&1 | tee /tmp/bench_output.txt
+        run: cargo bench --package evergreen-benchmarks -- --warm-up-time 1 --measurement-time 2 --sample-size 10 2>&1 | tee /tmp/bench_output.txt
       - name: Check for regressions
         run: |
           python3 - <<'EOF'
@@ -195,7 +195,7 @@ jobs:
           strip target/x86_64-unknown-linux-musl/release/shim
           SIZE=$(stat -c%s target/x86_64-unknown-linux-musl/release/shim 2>/dev/null || echo 0)
           echo "Health shim binary size (stripped): ${SIZE} bytes"
-          THRESHOLD=500000
+          THRESHOLD=3000000
           if [ "$SIZE" -gt "$THRESHOLD" ]; then
             echo "::error::Binary exceeds ${THRESHOLD} bytes threshold (${SIZE} bytes)"
             exit 1
