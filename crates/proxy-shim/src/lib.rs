@@ -427,6 +427,150 @@ impl ProxyShim {
             waiters: 0,
         }
     }
+
+    // =========================================================================
+    // Real TCP Proxy
+    // =========================================================================
+
+    /// Start the TCP proxy server.
+    ///
+    /// Listens on the configured address, accepts connections, and forwards
+    /// traffic to backends using the selected load balancing strategy.
+    #[allow(dead_code)]
+    pub async fn start_tcp_proxy(&self) -> anyhow::Result<()> {
+        let listen_addr =
+            std::env::var("PROXY_LISTEN").unwrap_or_else(|_| "0.0.0.0:5432".to_string());
+
+        let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
+        tracing::info!("TCP proxy listening on {}", listen_addr);
+
+        let state = self.state.clone();
+        let backends = {
+            let s = state.read();
+            s.backends
+                .iter()
+                .map(|b| b.addr.clone())
+                .collect::<Vec<_>>()
+        };
+
+        loop {
+            let (client_stream, client_addr) = listener.accept().await?;
+            tracing::debug!("Connection from {}", client_addr);
+
+            let state = state.clone();
+            let backends = backends.clone();
+            let _circuit_threshold = { state.read().circuit_threshold };
+            let _retry_attempts = { state.read().retry_attempts };
+            let connect_timeout_ms = { state.read().connect_timeout * 1000 };
+
+            tokio::spawn(async move {
+                // Select backend
+                let backend = {
+                    let mut s = state.write();
+                    Self::select_backend_static(&mut s, &backends)
+                };
+
+                let backend = match backend {
+                    Some(b) => b,
+                    None => {
+                        tracing::warn!("No healthy backend for connection from {}", client_addr);
+                        return;
+                    }
+                };
+
+                // Connect to backend
+                let backend_stream = match tokio::time::timeout(
+                    Duration::from_millis(connect_timeout_ms),
+                    tokio::net::TcpStream::connect(&backend),
+                )
+                .await
+                {
+                    Ok(Ok(stream)) => stream,
+                    Ok(Err(e)) => {
+                        tracing::error!("Backend connect failed ({}): {}", backend, e);
+                        Self::record_failure_static(&state);
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::error!(
+                            "Backend connect timeout ({}): {}ms",
+                            backend,
+                            connect_timeout_ms
+                        );
+                        Self::record_failure_static(&state);
+                        return;
+                    }
+                };
+
+                // Bidirectional forwarding
+                Self::pipe_streams(client_stream, backend_stream).await;
+            });
+        }
+    }
+
+    /// Select backend using round-robin.
+    fn select_backend_static(state: &mut ProxyState, backends: &[String]) -> Option<String> {
+        if backends.is_empty() {
+            return None;
+        }
+
+        let healthy: Vec<(usize, u32)> = state
+            .backends
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.healthy)
+            .map(|(i, b)| (i, b.weight))
+            .collect();
+
+        if healthy.is_empty() {
+            return None;
+        }
+
+        let total_weight: u32 = healthy.iter().map(|(_, w)| *w).sum();
+        if total_weight == 0 {
+            return None;
+        }
+
+        let mut remaining = (state.rr_index as u32) % total_weight;
+        for &(idx, weight) in &healthy {
+            if remaining < weight {
+                state.rr_index = (state.rr_index + 1) % total_weight as usize;
+                return Some(state.backends[idx].addr.clone());
+            }
+            remaining -= weight;
+        }
+
+        state.rr_index = (state.rr_index + 1) % total_weight as usize;
+        Some(state.backends[healthy[0].0].addr.clone())
+    }
+
+    /// Record a connection failure.
+    fn record_failure_static(state: &Arc<RwLock<ProxyState>>) {
+        let mut s = state.write();
+        s.circuit_failures += 1;
+    }
+
+    /// Pipe data bidirectionally between two TCP streams.
+    async fn pipe_streams(mut client: tokio::net::TcpStream, mut backend: tokio::net::TcpStream) {
+        let (mut cr, mut cw) = client.split();
+        let (mut br, mut bw) = backend.split();
+
+        let client_to_backend = tokio::io::copy(&mut cr, &mut bw);
+        let backend_to_client = tokio::io::copy(&mut br, &mut cw);
+
+        tokio::select! {
+            result = client_to_backend => {
+                if let Err(e) = result {
+                    tracing::debug!("Client->Backend stream ended: {}", e);
+                }
+            }
+            result = backend_to_client => {
+                if let Err(e) = result {
+                    tracing::debug!("Backend->Client stream ended: {}", e);
+                }
+            }
+        }
+    }
 }
 
 impl Default for ProxyShim {
