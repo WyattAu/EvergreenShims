@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Pre-push hook for EvergreenShims
+# Runs a lightweight smoke test before pushing to remote.
+# Full CI/CD pipeline runs on the server; this catches obvious breakage.
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+step() { echo -e "${YELLOW}>>> $1${NC}"; }
+pass() { echo -e "${GREEN}PASS: $1${NC}"; }
+fail() { echo -e "${RED}FAIL: $1${NC}"; exit 1; }
+
+START_TIME=$(date +%s)
+
+# Step 1: Quick compile check
+step "Running cargo check..."
+if ! cargo check --workspace 2>/dev/null; then
+    fail "Workspace does not compile."
+fi
+pass "Compile check"
+
+# Step 2: Run unit tests (quiet mode for speed)
+step "Running unit tests..."
+if ! cargo test --workspace --lib -- --quiet 2>/dev/null; then
+    fail "Unit tests failed."
+fi
+pass "Unit tests"
+
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+echo -e "${GREEN}Pre-push checks passed in ${DURATION}s.${NC}"

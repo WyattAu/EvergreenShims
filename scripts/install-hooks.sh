@@ -14,4 +14,8 @@ fi
 
 git config core.hooksPath "$HOOKS_DIR"
 echo "Git hooks configured: core.hooksPath = $HOOKS_DIR"
-echo "Pre-commit hook will run: fmt check, clippy, unit tests"
+echo ""
+echo "Installed hooks:"
+echo "  pre-commit:  fmt check, clippy, unit tests, secret scanning, unwrap detection, dead_code check"
+echo "  commit-msg:  Conventional Commits format enforcement"
+echo "  pre-push:    compile check, unit tests"
