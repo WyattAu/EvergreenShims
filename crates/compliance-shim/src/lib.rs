@@ -234,6 +234,332 @@ impl ComplianceShim {
     pub fn meets_threshold(&self, threshold: f64) -> bool {
         self.compliance_score >= threshold
     }
+
+    /// Generate CIS/STIG checks for the configured database type.
+    ///
+    /// Rules are data-driven: each database type has a fixed set of checks
+    /// based on CIS benchmarks and STIG requirements.
+    pub fn generate_cis_checks(&self) -> Vec<ComplianceCheck> {
+        match self.db_type.as_str() {
+            "postgres" => self.postgres_cis_rules(),
+            "mariadb" | "mysql" => self.mariadb_cis_rules(),
+            "redis" => self.redis_stig_rules(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// PostgreSQL CIS Benchmark rules (12 checks).
+    fn postgres_cis_rules(&self) -> Vec<ComplianceCheck> {
+        vec![
+            ComplianceCheck {
+                id: "CIS-POSTGRES-001".to_string(),
+                description: "Superuser access restricted to named admin accounts".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Critical,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Restrict superuser access. Review pg_roles for shared accounts."
+                    .to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-002".to_string(),
+                description: "Password authentication uses SCRAM-SHA-256".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::High,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set password_encryption = 'scram-sha-256' in postgresql.conf."
+                    .to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-003".to_string(),
+                description: "Log connections and disconnections enabled".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set log_connections = on and log_disconnections = on.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-004".to_string(),
+                description: "Failed login attempts are logged".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set log_failed_login_attempts > 0 in postgresql.conf.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-005".to_string(),
+                description: "SSL enabled for client connections".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::High,
+                passed: false,
+                evidence: String::new(),
+                remediation:
+                    "Set ssl = on in postgresql.conf. Update pg_hba.conf to require hostssl."
+                        .to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-006".to_string(),
+                description: "pg_hba.conf does not use trust authentication".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Critical,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Replace trust entries with scram-sha-256 or cert.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-007".to_string(),
+                description: "Data directory permissions are 0700".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::High,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Run: chmod 0700 $(pg_config --pkglibdir)/../data".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-008".to_string(),
+                description: "Log line prefix includes user and database".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set log_line_prefix = '%m [%p] %q%u@%d ' in postgresql.conf."
+                    .to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-009".to_string(),
+                description: "Statement timeout configured".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set statement_timeout = 60000 (60s) in postgresql.conf.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-010".to_string(),
+                description: "Idle-in-transaction timeout configured".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set idle_in_transaction_session_timeout = 60000 in postgresql.conf."
+                    .to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-011".to_string(),
+                description: "Max connections is reasonable (< 500)".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Low,
+                passed: false,
+                evidence: String::new(),
+                remediation:
+                    "Set max_connections based on available memory. Use PgBouncer for pooling."
+                        .to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-POSTGRES-012".to_string(),
+                description: "Shared buffers tuned for workload".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Low,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set shared_buffers to ~25% of system RAM for dedicated servers."
+                    .to_string(),
+            },
+        ]
+    }
+
+    /// MariaDB/MySQL CIS Benchmark rules (8 checks).
+    fn mariadb_cis_rules(&self) -> Vec<ComplianceCheck> {
+        vec![
+            ComplianceCheck {
+                id: "CIS-MYSQL-001".to_string(),
+                description: "Anonymous accounts removed".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Critical,
+                passed: false,
+                evidence: String::new(),
+                remediation: "DELETE FROM mysql.user WHERE User=''; FLUSH PRIVILEGES;".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-MYSQL-002".to_string(),
+                description: "Root login restricted to localhost".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Critical,
+                passed: false,
+                evidence: String::new(),
+                remediation: "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1','::1');".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-MYSQL-003".to_string(),
+                description: "SHA-256 password authentication plugin".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::High,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set default_authentication_plugin = 'caching_sha2_password' in my.cnf.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-MYSQL-004".to_string(),
+                description: "Local-infile disabled".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::High,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set local_infile = 0 in my.cnf.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-MYSQL-005".to_string(),
+                description: "Symbolic-links disabled".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set symbolic-links = 0 in my.cnf.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-MYSQL-006".to_string(),
+                description: "SQL mode includes strict settings".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION'.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-MYSQL-007".to_string(),
+                description: "Audit logging enabled".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Install and configure the audit_log plugin.".to_string(),
+            },
+            ComplianceCheck {
+                id: "CIS-MYSQL-008".to_string(),
+                description: "Max connections is reasonable (< 500)".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Low,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set max_connections based on available memory.".to_string(),
+            },
+        ]
+    }
+
+    /// Redis STIG rules (8 checks).
+    fn redis_stig_rules(&self) -> Vec<ComplianceCheck> {
+        vec![
+            ComplianceCheck {
+                id: "STIG-REDIS-001".to_string(),
+                description: "Redis requires authentication".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Critical,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set requirepass in redis.conf or use ACLs.".to_string(),
+            },
+            ComplianceCheck {
+                id: "STIG-REDIS-002".to_string(),
+                description: "Redis not bound to all interfaces".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::High,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set bind to specific interfaces: bind 127.0.0.1 <internal-ip>"
+                    .to_string(),
+            },
+            ComplianceCheck {
+                id: "STIG-REDIS-003".to_string(),
+                description: "Dangerous commands renamed".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::High,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Rename FLUSHALL, FLUSHDB, DEBUG, CONFIG commands.".to_string(),
+            },
+            ComplianceCheck {
+                id: "STIG-REDIS-004".to_string(),
+                description: "Protected mode enabled".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::High,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set protected-mode yes in redis.conf.".to_string(),
+            },
+            ComplianceCheck {
+                id: "STIG-REDIS-005".to_string(),
+                description: "TLS configured for transit encryption".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Configure tls-port, tls-cert-file, tls-key-file in redis.conf."
+                    .to_string(),
+            },
+            ComplianceCheck {
+                id: "STIG-REDIS-006".to_string(),
+                description: "maxmemory configured".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set maxmemory to a reasonable limit based on available RAM."
+                    .to_string(),
+            },
+            ComplianceCheck {
+                id: "STIG-REDIS-007".to_string(),
+                description: "maxmemory-policy set".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Low,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set maxmemory-policy to allkeys-lru or volatile-lru.".to_string(),
+            },
+            ComplianceCheck {
+                id: "STIG-REDIS-008".to_string(),
+                description: "Dangerous Lua commands restricted".to_string(),
+                benchmark: self.benchmark.clone(),
+                severity: Severity::Medium,
+                passed: false,
+                evidence: String::new(),
+                remediation: "Set lua-time-limit and restrict eval via ACLs.".to_string(),
+            },
+        ]
+    }
+
+    /// Load rules from a TOML file for custom compliance checks.
+    #[allow(dead_code)]
+    pub fn load_rules_from_file(path: &str) -> anyhow::Result<Vec<ComplianceCheck>> {
+        let content = std::fs::read_to_string(path)?;
+        let rules: Vec<RuleTOML> = toml::from_str(&content)?;
+        Ok(rules.into_iter().map(|r| r.into_check()).collect())
+    }
+}
+
+/// TOML rule definition for custom checks.
+#[derive(Deserialize)]
+struct RuleTOML {
+    id: String,
+    description: String,
+    severity: String,
+    remediation: String,
+}
+
+impl RuleTOML {
+    fn into_check(self) -> ComplianceCheck {
+        ComplianceCheck {
+            id: self.id,
+            description: self.description,
+            benchmark: "custom".to_string(),
+            severity: self.severity.parse().unwrap_or(Severity::Medium),
+            passed: false,
+            evidence: String::new(),
+            remediation: self.remediation,
+        }
+    }
 }
 
 impl Default for ComplianceShim {
