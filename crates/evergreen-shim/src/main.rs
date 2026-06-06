@@ -274,6 +274,36 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
         capabilities.push(Box::new(cost_shim::CostShim::new()));
     }
 
+    #[cfg(feature = "mongodb")]
+    {
+        tracing::info!("Enabling MongoDB shim");
+        capabilities.push(Box::new(mongodb_shim::MongoShim::new()));
+    }
+
+    #[cfg(feature = "cockroachdb")]
+    {
+        tracing::info!("Enabling CockroachDB shim");
+        capabilities.push(Box::new(cockroachdb_shim::CrdbShim::new()));
+    }
+
+    #[cfg(feature = "dynamodb")]
+    {
+        tracing::info!("Enabling DynamoDB shim");
+        capabilities.push(Box::new(dynamodb_shim::DynamoShim::new()));
+    }
+
+    #[cfg(feature = "elasticsearch")]
+    {
+        tracing::info!("Enabling Elasticsearch shim");
+        capabilities.push(Box::new(elasticsearch_shim::ElasticsearchShim::new()));
+    }
+
+    #[cfg(feature = "cassandra")]
+    {
+        tracing::info!("Enabling Cassandra shim");
+        capabilities.push(Box::new(cassandra_shim::CassandraShim::new()));
+    }
+
     // Initialize capabilities
     for cap in &mut capabilities {
         cap.init(&config).await?;

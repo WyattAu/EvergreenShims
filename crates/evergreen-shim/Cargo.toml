@@ -36,6 +36,11 @@ queue = ["dep:queue-shim"]
 alerting = ["dep:alerting-shim"]
 chaos = ["dep:chaos-shim"]
 cost = ["dep:cost-shim"]
+mongodb = ["dep:mongodb-shim"]
+cockroachdb = ["dep:cockroachdb-shim"]
+dynamodb = ["dep:dynamodb-shim"]
+elasticsearch = ["dep:elasticsearch-shim"]
+cassandra = ["dep:cassandra-shim"]
 
 # Pre-built combos
 db-shim = ["health", "vault", "backup", "migration", "audit"]
@@ -43,7 +48,7 @@ proxy-combo = ["health", "audit", "tls"]
 ha-shim = ["health", "failover", "replication"]
 cache-shim-combo = ["health", "cache"]
 infra = ["health", "vault", "backup", "migration", "audit", "config", "failover", "replication", "tls", "auth", "scheduler"]
-full = ["health", "vault", "backup", "migration", "audit", "proxy", "tls", "config", "failover", "replication", "cache", "cdc", "sharding", "archival", "auth", "encryption", "compliance", "scheduler", "queue", "alerting", "chaos", "cost"]
+full = ["health", "vault", "backup", "migration", "audit", "proxy", "tls", "config", "failover", "replication", "cache", "cdc", "sharding", "archival", "auth", "encryption", "compliance", "scheduler", "queue", "alerting", "chaos", "cost", "mongodb", "cockroachdb", "dynamodb", "elasticsearch", "cassandra"]
 
 [dependencies]
 shim-core = { path = "../shim-core", default-features = false }
@@ -69,6 +74,11 @@ queue-shim = { path = "../queue-shim", optional = true }
 alerting-shim = { path = "../alerting-shim", optional = true }
 chaos-shim = { path = "../chaos-shim", optional = true }
 cost-shim = { path = "../cost-shim", optional = true }
+mongodb-shim = { path = "../mongodb-shim", optional = true }
+cockroachdb-shim = { path = "../cockroachdb-shim", optional = true }
+dynamodb-shim = { path = "../dynamodb-shim", optional = true }
+elasticsearch-shim = { path = "../elasticsearch-shim", optional = true }
+cassandra-shim = { path = "../cassandra-shim", optional = true }
 anyhow.workspace = true
 tokio.workspace = true
 clap.workspace = true
