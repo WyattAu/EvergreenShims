@@ -2262,6 +2262,7 @@ dependencies = [
  "prometheus",
  "serde_json",
  "shim-core",
+ "temp-env",
  "tokio",
  "tower",
  "tracing",

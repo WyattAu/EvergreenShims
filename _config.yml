@@ -19,3 +19,13 @@ exclude:
   - scripts/
   - .githooks/
   - tests/
+  - benches/
+  - .github/
+  - .knowledge_graph/
+  - .patterns/
+  - .adrs/
+  - .reports/
+  - CHANGELOG.md
+  - VERSION.md
+  - ROADMAP.md
+  - CODE_OF_CONDUCT.md

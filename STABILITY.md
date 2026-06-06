@@ -34,7 +34,6 @@ Each shim crate exposes:
 | `Capability::start()` | Method | Stable |
 | `Capability::stop()` | Method | Stable |
 | `Capability::metrics()` | Method | Stable |
-| `metrics()` method | Method | Stable |
 | `*::from_env()` | Constructor | Stable |
 
 ### Configuration

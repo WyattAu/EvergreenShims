@@ -23,6 +23,8 @@ The pre-commit hook enforces:
 1. `cargo fmt --all -- --check` (auto-formats on failure)
 2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. `cargo test --workspace --lib` (unit tests only)
+4. Secret scanning (hardcoded credentials detection)
+5. unwrap() detection in library code (warning only)
 
 ## Adding a Shim
 
@@ -39,11 +41,12 @@ use shim_core::{Capability, Config, Metric, Result, ShimBus};
 
 pub struct MyShim;
 
+#[async_trait::async_trait]
 impl Capability for MyShim {
     fn name(&self) -> &str { "my-shim" }
-    fn init(&mut self, _config: &Config) -> Result<()> { Ok(()) }
-    fn start(&mut self) -> Result<()> { Ok(()) }
-    fn stop(&mut self) -> Result<()> { Ok(()) }
+    async fn init(&mut self, _config: &Config) -> Result<()> { Ok(()) }
+    async fn start(&mut self) -> Result<()> { Ok(()) }
+    async fn stop(&mut self) -> Result<()> { Ok(()) }
     fn metrics(&self) -> Vec<Metric> { vec![] }
     fn set_bus(&mut self, _bus: ShimBus) {}
 }
@@ -69,6 +72,8 @@ capabilities.push(Box::new(my_shim::MyShim));
 
 5. Add to the appropriate preset feature set in `Cargo.toml`.
 
+6. Add unit tests (minimum: defaults, env overrides, capability name, metrics).
+
 ## Commit Convention
 
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
@@ -87,6 +92,7 @@ chore(ci): add security audit job
 - `cargo clippy --workspace -- -D warnings` for linting
 - Document all public API items with `///` doc comments
 - No `unwrap()` in library code -- use `anyhow::Result` with context
+- No `unsafe` code unless absolutely necessary (requires ADR justification)
 
 ## Pull Requests
 

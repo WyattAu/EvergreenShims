@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pre-commit hook for EvergreenShims
-# Runs formatting check, clippy lint, and quick unit tests before allowing commit.
+# Enforces: formatting, clippy, unit tests, secret scanning, dead code.
 #
 # Install: git config core.hooksPath .githooks
 # Or run: ./scripts/install-hooks.sh
@@ -15,6 +15,8 @@ NC='\033[0m'
 step() { echo -e "${YELLOW}>>> $1${NC}"; }
 pass() { echo -e "${GREEN}PASS: $1${NC}"; }
 fail() { echo -e "${RED}FAIL: $1${NC}"; exit 1; }
+
+START_TIME=$(date +%s)
 
 # Stage all modified files so fmt/clippy see the actual code
 git diff --cached --name-only --diff-filter=ACM -- '*.rs' '*.toml' | head -1 > /dev/null 2>&1 || true
@@ -47,4 +49,53 @@ if ! cargo test --workspace --lib -- --quiet 2>/dev/null; then
 fi
 pass "Unit tests"
 
-echo -e "${GREEN}All pre-commit checks passed.${NC}"
+# Step 4: Secret scanning (hardcoded credentials in staged files)
+step "Scanning for hardcoded secrets..."
+# Only scan config/env files for credential patterns (Rust source files have field names, not values)
+CONFIG_FILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.toml' '*.yml' '*.yaml' '*.env' '*.env.*' '*.cfg' '*.ini' 2>/dev/null || true)
+SECRET_PATTERNS=(
+    'password\s*=\s*"[^"]{8,}"'
+    'secret\s*=\s*"[^"]{8,}"'
+    'api_key\s*=\s*"[^"]{8,}"'
+    'token\s*=\s*"[^"]{8,}"'
+)
+SECRET_FOUND=false
+for pattern in "${SECRET_PATTERNS[@]}"; do
+    if echo "$CONFIG_FILES" | xargs grep -lE "$pattern" 2>/dev/null | head -1 > /dev/null 2>&1; then
+        echo -e "${RED}Potential secret found matching: ${pattern}${NC}"
+        SECRET_FOUND=true
+    fi
+done
+# Check for private keys in any staged file (excluding .githooks which contains scan patterns)
+ALL_FILES=$(git diff --cached --name-only --diff-filter=ACM -- ':!.githooks/' 2>/dev/null || true)
+if echo "$ALL_FILES" | xargs grep -l 'BEGIN.*PRIVATE KEY' 2>/dev/null | head -1 > /dev/null 2>&1; then
+    echo -e "${RED}Private key detected in staged files${NC}"
+    SECRET_FOUND=true
+fi
+if [ "$SECRET_FOUND" = true ]; then
+    fail "Hardcoded secrets detected. Use environment variables or a secrets manager."
+fi
+pass "Secret scanning"
+
+# Step 5: Check for accidental unwrap() in library code
+step "Checking for unwrap() in library code..."
+UNWRAP_FOUND=false
+for f in $(git diff --cached --name-only --diff-filter=ACM -- '*.rs' 2>/dev/null); do
+    # Skip test files, benchmarks, and main.rs (binary entry points)
+    if echo "$f" | grep -qE '(tests/|test_|benches/|main\.rs)'; then
+        continue
+    fi
+    if grep -n '\.unwrap()' "$f" 2>/dev/null | grep -v '#\[cfg(test)\]' | grep -v '//.*unwrap' | head -1 > /dev/null 2>&1; then
+        echo -e "${YELLOW}Warning: unwrap() found in $f${NC}"
+        grep -n '\.unwrap()' "$f" 2>/dev/null | grep -v '#\[cfg(test)\]' | grep -v '//.*unwrap' | head -5
+        UNWRAP_FOUND=true
+    fi
+done
+if [ "$UNWRAP_FOUND" = true ]; then
+    echo -e "${YELLOW}unwrap() detected in library code. Prefer ? operator or context(). Continuing...${NC}"
+fi
+pass "unwrap() check"
+
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+echo -e "${GREEN}All pre-commit checks passed in ${DURATION}s.${NC}"

@@ -10,18 +10,24 @@ on:
       - 'Dockerfile.shim-image'
   workflow_dispatch:
 
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
 env:
   REGISTRY: ghcr.io
-  # GHCR requires lowercase; github.repository_owner may have uppercase
   OWNER: wyattau/evergreenshim
 
 jobs:
   build:
     name: Build ${{ matrix.variant }} (${{ matrix.features }})
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
@@ -72,8 +78,7 @@ jobs:
     name: Scan ${{ matrix.variant }}
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      security-events: write
+    timeout-minutes: 10
     strategy:
       matrix:
         include:
@@ -104,6 +109,7 @@ jobs:
     name: Sign Images
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       packages: write
       id-token: write

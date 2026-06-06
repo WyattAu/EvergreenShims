@@ -239,4 +239,123 @@ mod tests {
         let shim = CassandraShim::new();
         assert_eq!(shim.name(), "cassandra");
     }
+
+    #[test]
+    fn test_cassandra_default_trait() {
+        let shim = CassandraShim::default();
+        assert_eq!(shim.name(), "cassandra");
+        assert_eq!(shim.host(), "localhost");
+        assert_eq!(shim.port(), 9042);
+    }
+
+    #[test]
+    fn test_cassandra_jmx_port_default() {
+        temp_env::with_vars([("CASSANDRA_JMX_PORT", None::<&str>)], || {
+            let shim = CassandraShim::new();
+            assert_eq!(shim.jmx_port, 7199);
+        });
+    }
+
+    #[test]
+    fn test_cassandra_jmx_port_override() {
+        temp_env::with_vars([("CASSANDRA_JMX_PORT", Some("7200"))], || {
+            let shim = CassandraShim::new();
+            assert_eq!(shim.jmx_port, 7200);
+        });
+    }
+
+    #[test]
+    fn test_cassandra_invalid_port_falls_back() {
+        temp_env::with_vars([("CASSANDRA_PORT", Some("not_a_port"))], || {
+            let shim = CassandraShim::new();
+            assert_eq!(shim.port(), 9042);
+        });
+    }
+
+    #[test]
+    fn test_cassandra_invalid_jmx_port_falls_back() {
+        temp_env::with_vars([("CASSANDRA_JMX_PORT", Some("invalid"))], || {
+            let shim = CassandraShim::new();
+            assert_eq!(shim.jmx_port, 7199);
+        });
+    }
+
+    #[test]
+    fn test_cassandra_init_and_start_stop() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = CassandraShim::new();
+            let config = Config::default();
+
+            let init_result = shim.init(&config).await;
+            assert!(init_result.is_ok());
+
+            let start_result = shim.start().await;
+            assert!(start_result.is_ok());
+            assert!(shim.shutdown_tx.is_some());
+
+            let stop_result = shim.stop().await;
+            assert!(stop_result.is_ok());
+            assert!(shim.shutdown_tx.is_none());
+        });
+    }
+
+    #[test]
+    fn test_cassandra_stop_without_start() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = CassandraShim::new();
+            let result = shim.stop().await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_cassandra_metrics_after_init() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = CassandraShim::new();
+            let config = Config::default();
+            let _ = shim.init(&config).await;
+
+            let metrics = shim.metrics();
+            assert_eq!(metrics.len(), 1);
+            assert_eq!(metrics[0].name, "cassandra_health_checks_total");
+            assert_eq!(metrics[0].value, 0.0);
+        });
+    }
+
+    #[test]
+    fn test_cassandra_health_serialize() {
+        let health = CassandraHealth {
+            ok: true,
+            cluster_name: "prod-cluster".to_string(),
+            node_count: 6,
+            live_nodes: 6,
+            datacenter_count: 2,
+            version: "4.1.0".to_string(),
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        let parsed: CassandraHealth = serde_json::from_str(&json).unwrap();
+        assert!(parsed.ok);
+        assert_eq!(parsed.node_count, 6);
+        assert_eq!(parsed.datacenter_count, 2);
+    }
+
+    #[test]
+    fn test_cassandra_node_serialize() {
+        let node = CassandraNode {
+            address: "10.0.0.1".to_string(),
+            datacenter: "us-east-1".to_string(),
+            rack: "rack-1".to_string(),
+            status: "UN".to_string(),
+            state: "Normal".to_string(),
+            load: "256.00 KiB".to_string(),
+            tokens: 256,
+        };
+        let json = serde_json::to_string(&node).unwrap();
+        let parsed: CassandraNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.address, "10.0.0.1");
+        assert_eq!(parsed.tokens, 256);
+    }
 }

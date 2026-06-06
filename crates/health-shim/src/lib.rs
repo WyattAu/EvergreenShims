@@ -79,3 +79,58 @@ impl Capability for HealthShim {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shim_core::{Config, HealthConfig};
+
+    #[test]
+    fn test_health_shim_new() {
+        let shim = HealthShim::new();
+        assert_eq!(shim.name(), "health");
+        assert!(shim.checker.is_none());
+        assert_eq!(shim.listen, "0.0.0.0:9101");
+    }
+
+    #[test]
+    fn test_health_shim_default_trait() {
+        let shim = HealthShim::default();
+        assert_eq!(shim.name(), "health");
+        assert!(shim.checker.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_health_shim_init() {
+        let mut shim = HealthShim::new();
+        let config = Config {
+            health: HealthConfig {
+                liveness_cmd: "echo ok".to_string(),
+                readiness_cmd: "echo ready".to_string(),
+                listen: "127.0.0.1:9999".to_string(),
+                interval_secs: 5,
+                timeout_secs: 3,
+            },
+            ..Default::default()
+        };
+
+        let result = shim.init(&config).await;
+        assert!(result.is_ok());
+        assert!(shim.checker.is_some());
+        assert_eq!(shim.listen, "127.0.0.1:9999");
+    }
+
+    #[tokio::test]
+    async fn test_health_shim_stop_without_start() {
+        let mut shim = HealthShim::new();
+        let result = shim.stop().await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_health_shim_metrics_empty() {
+        let shim = HealthShim::new();
+        let metrics = shim.metrics();
+        assert!(metrics.is_empty());
+    }
+}

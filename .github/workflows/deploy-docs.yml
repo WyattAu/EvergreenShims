@@ -6,6 +6,8 @@ on:
     paths:
       - 'docs/**'
       - 'README.md'
+      - '_config.yml'
+      - 'index.md'
   workflow_dispatch:
 
 permissions:
@@ -21,6 +23,7 @@ jobs:
   build:
     name: Build Pages
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +43,7 @@ jobs:
     name: Deploy to GitHub Pages
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

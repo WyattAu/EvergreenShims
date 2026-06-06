@@ -307,4 +307,131 @@ mod tests {
         let shim = MongoShim::default();
         assert_eq!(shim.name(), "mongodb");
     }
+
+    #[test]
+    fn test_mongo_shim_backup_dir_default() {
+        temp_env::with_vars([("MONGO_BACKUP_DIR", None::<&str>)], || {
+            let shim = MongoShim::new();
+            assert_eq!(shim.backup_dir, "/tmp/mongo-backups");
+        });
+    }
+
+    #[test]
+    fn test_mongo_shim_backup_cmd_default() {
+        temp_env::with_vars([("MONGO_BACKUP_CMD", None::<&str>)], || {
+            let shim = MongoShim::new();
+            assert_eq!(shim.backup_cmd, "mongodump");
+        });
+    }
+
+    #[test]
+    fn test_mongo_shim_retention_default() {
+        temp_env::with_vars([("MONGO_RETENTION_DAYS", None::<&str>)], || {
+            let shim = MongoShim::new();
+            assert_eq!(shim.retention_days, 30);
+        });
+    }
+
+    #[test]
+    fn test_mongo_shim_invalid_retention_falls_back() {
+        temp_env::with_vars([("MONGO_RETENTION_DAYS", Some("not_a_number"))], || {
+            let shim = MongoShim::new();
+            assert_eq!(shim.retention_days, 30);
+        });
+    }
+
+    #[test]
+    fn test_mongo_shim_init_and_start_stop() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = MongoShim::new();
+            let config = Config::default();
+
+            let init_result = shim.init(&config).await;
+            assert!(init_result.is_ok());
+
+            let start_result = shim.start().await;
+            assert!(start_result.is_ok());
+            assert!(shim.shutdown_tx.is_some());
+
+            let stop_result = shim.stop().await;
+            assert!(stop_result.is_ok());
+            assert!(shim.shutdown_tx.is_none());
+        });
+    }
+
+    #[test]
+    fn test_mongo_shim_stop_without_start() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = MongoShim::new();
+            let result = shim.stop().await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[tokio::test]
+    async fn test_mongo_backup_missing_database() {
+        // Directly create a shim with empty database
+        let mut shim = MongoShim {
+            database: String::new(),
+            ..MongoShim::new()
+        };
+        let result = shim.backup().await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("MONGO_DATABASE not set"));
+    }
+
+    #[test]
+    fn test_mongo_health_serialize() {
+        let health = MongoHealth {
+            ok: true,
+            version: "7.0.0".to_string(),
+            connections: 42,
+            uptime_secs: 86400,
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        let parsed: MongoHealth = serde_json::from_str(&json).unwrap();
+        assert!(parsed.ok);
+        assert_eq!(parsed.version, "7.0.0");
+        assert_eq!(parsed.connections, 42);
+    }
+
+    #[test]
+    fn test_mongo_backup_serialize() {
+        let backup = MongoBackup {
+            path: "/tmp/backups/mydb".to_string(),
+            size_bytes: 1024,
+            timestamp: "20240101_120000".to_string(),
+            database: "mydb".to_string(),
+            success: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&backup).unwrap();
+        let parsed: MongoBackup = serde_json::from_str(&json).unwrap();
+        assert!(parsed.success);
+        assert_eq!(parsed.size_bytes, 1024);
+    }
+
+    #[test]
+    fn test_mongo_shim_metrics_after_init() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = MongoShim::new();
+            let config = Config::default();
+            let _ = shim.init(&config).await;
+
+            let metrics = shim.metrics();
+            assert_eq!(metrics.len(), 3);
+            assert_eq!(metrics[0].name, "mongo_health_checks_total");
+            assert_eq!(metrics[0].value, 0.0);
+            assert_eq!(metrics[1].name, "mongo_backup_success_total");
+            assert_eq!(metrics[1].value, 0.0);
+            assert_eq!(metrics[2].name, "mongo_backup_failure_total");
+            assert_eq!(metrics[2].value, 0.0);
+        });
+    }
 }

@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -14,6 +21,7 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -23,6 +31,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,6 +41,7 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -42,6 +52,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -53,6 +64,7 @@ jobs:
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2.0.0
@@ -62,18 +74,20 @@ jobs:
   benchmark-check:
     name: Benchmark Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build benchmarks
-        run: cargo bench --package evergreen-benchmarks --no-run 2>&1 | grep -E "error|warning" || echo "Benchmarks build clean"
+        run: cargo bench --package evergreen-benchmarks --no-run 2>&1
       - name: Run benchmarks (quick mode)
         run: cargo bench --package evergreen-benchmarks -- --quick 2>&1 | tail -20
 
   binary-size-check:
     name: Binary Size Check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -88,8 +102,9 @@ jobs:
         run: |
           SIZE=$(stat -c%s target/x86_64-unknown-linux-musl/release/shim 2>/dev/null || echo 0)
           echo "Health shim binary size: ${SIZE} bytes"
-          if [ "$SIZE" -gt 500000 ]; then
-            echo "WARNING: Binary exceeds 500KB threshold"
-          else
-            echo "Binary size within threshold"
+          THRESHOLD=500000
+          if [ "$SIZE" -gt "$THRESHOLD" ]; then
+            echo "::error::Binary exceeds ${THRESHOLD} bytes threshold (${SIZE} bytes)"
+            exit 1
           fi
+          echo "Binary size within threshold"

@@ -34,7 +34,7 @@ Capabilities:
 | `db-shim` | health + vault + backup + migration + audit | ~1MB | Database containers |
 | `proxy-shim` | health + audit + tls | ~700KB | Reverse proxies |
 | `ha-shim` | health + failover + replication | ~800KB | HA database clusters |
-| `full-shim` | all 22 shims | ~3MB | Full operational stack |
+| `full-shim` | all 27 shims | ~3MB | Full operational stack |
 
 ## Quick Start
 
@@ -96,6 +96,16 @@ chmod +x /app/shim
 | [queue-shim](crates/queue-shim/) | Job enqueue/dequeue, DLQ, worker pool |
 | [alerting-shim](crates/alerting-shim/) | Severity routing, deduplication, webhook dispatch |
 
+### Database-Specific
+
+| Shim | Description |
+|------|-------------|
+| [mongodb-shim](crates/mongodb-shim/) | MongoDB health checks (mongosh), backup (mongodump) |
+| [cockroachdb-shim](crates/cockroachdb-shim/) | CockroachDB topology awareness, cluster health |
+| [dynamodb-shim](crates/dynamodb-shim/) | DynamoDB table monitoring, backup exports |
+| [elasticsearch-shim](crates/elasticsearch-shim/) | Elasticsearch cluster health, snapshot management |
+| [cassandra-shim](crates/cassandra-shim/) | Cassandra cluster monitoring via nodetool |
+
 ## Configuration
 
 12-factor: environment variables override TOML config file (`/etc/shim/config.toml`).
@@ -132,7 +142,7 @@ See [docs/building.md](docs/building.md) for full build instructions.
 
 ## Testing
 
-491 tests across 25 crates. Three tiers:
+577 tests across 30 crates. Three tiers:
 
 1. **Unit tests**: Per-crate, run with `cargo test --workspace`
 2. **Integration tests**: Docker Compose with PostgreSQL, MariaDB, Redis, Vault, MinIO

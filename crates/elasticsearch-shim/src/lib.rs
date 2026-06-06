@@ -225,4 +225,90 @@ mod tests {
         let shim = ElasticsearchShim::new();
         assert_eq!(shim.name(), "elasticsearch");
     }
+
+    #[test]
+    fn test_es_default_trait() {
+        let shim = ElasticsearchShim::default();
+        assert_eq!(shim.name(), "elasticsearch");
+        assert_eq!(shim.url(), "http://localhost:9200");
+    }
+
+    #[test]
+    fn test_es_snapshot_repo_default() {
+        temp_env::with_vars([("ES_SNAPSHOT_REPO", None::<&str>)], || {
+            let shim = ElasticsearchShim::new();
+            assert_eq!(shim.snapshot_repo(), "");
+        });
+    }
+
+    #[test]
+    fn test_es_snapshot_repo_override() {
+        temp_env::with_vars([("ES_SNAPSHOT_REPO", Some("my-repo"))], || {
+            let shim = ElasticsearchShim::new();
+            assert_eq!(shim.snapshot_repo(), "my-repo");
+        });
+    }
+
+    #[test]
+    fn test_es_init_and_start_stop() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = ElasticsearchShim::new();
+            let config = Config::default();
+
+            let init_result = shim.init(&config).await;
+            assert!(init_result.is_ok());
+
+            let start_result = shim.start().await;
+            assert!(start_result.is_ok());
+            assert!(shim.shutdown_tx.is_some());
+
+            let stop_result = shim.stop().await;
+            assert!(stop_result.is_ok());
+            assert!(shim.shutdown_tx.is_none());
+        });
+    }
+
+    #[test]
+    fn test_es_stop_without_start() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = ElasticsearchShim::new();
+            let result = shim.stop().await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_es_metrics_after_init() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = ElasticsearchShim::new();
+            let config = Config::default();
+            let _ = shim.init(&config).await;
+
+            let metrics = shim.metrics();
+            assert_eq!(metrics.len(), 1);
+            assert_eq!(metrics[0].name, "es_health_checks_total");
+            assert_eq!(metrics[0].value, 0.0);
+        });
+    }
+
+    #[test]
+    fn test_es_health_serialize() {
+        let health = EsHealth {
+            status: "green".to_string(),
+            cluster_name: "prod-cluster".to_string(),
+            node_count: 5,
+            active_shards: 15,
+            relocating_shards: 0,
+            initializing_shards: 0,
+            unassigned_shards: 0,
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        let parsed: EsHealth = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.status, "green");
+        assert_eq!(parsed.node_count, 5);
+        assert_eq!(parsed.active_shards, 15);
+    }
 }

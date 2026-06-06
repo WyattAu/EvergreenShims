@@ -8,7 +8,7 @@ EvergreenShims implements a PID 1 shim pattern: a single Rust binary wraps a chi
 
 ```
 evergreen-shims/
-  Cargo.toml                    Workspace root (25 members)
+  Cargo.toml                    Workspace root (30 members)
   crates/
     shim-core/                  Shared types, Capability trait, bus, events, metrics
     health-shim/                Health probes, Prometheus metrics, process mgmt
@@ -33,8 +33,14 @@ evergreen-shims/
     alerting-shim/              Alert routing and dedup
     chaos-shim/                 Fault injection
     cost-shim/                  Resource tracking per tenant
+    mongodb-shim/               MongoDB health, backup
+    cockroachdb-shim/           CockroachDB topology, health
+    dynamodb-shim/              DynamoDB monitoring
+    elasticsearch-shim/         Elasticsearch cluster health
+    cassandra-shim/             Cassandra cluster monitoring
     evergreen-shim/             Unified binary (feature-gated)
     integration-tests/          Cross-shim integration tests
+    benchmarks/                 Criterion performance benchmarks
   tests/                        Docker Compose infrastructure
   docs/                         Documentation
   .github/workflows/            CI/CD pipelines
@@ -61,7 +67,7 @@ capabilities.push(Box::new(VaultShim::new()));
 |  (Capability trait, Config, ShimBus, Events,      |
 |   Metrics, Shutdown, Process, HotReload, Signals) |
 +--------------------------------------------------+
-|  health | vault | backup | migration | ... (22)   |
+|  health | vault | backup | migration | ... (27)   |
 +--------------------------------------------------+
 |  evergreen-shim (unified binary, feature-gated)   |
 +--------------------------------------------------+

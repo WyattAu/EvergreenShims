@@ -71,3 +71,122 @@ impl HealthChecker {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shim_core::CommandHealthCheck;
+
+    /// A mock health check that always returns a configurable status.
+    struct MockHealthCheck {
+        liveness_status: HealthStatus,
+        readiness_status: HealthStatus,
+    }
+
+    #[async_trait::async_trait]
+    impl HealthCheck for MockHealthCheck {
+        async fn liveness(&self) -> HealthStatus {
+            self.liveness_status.clone()
+        }
+        async fn readiness(&self) -> HealthStatus {
+            self.readiness_status.clone()
+        }
+    }
+
+    #[test]
+    fn test_checker_new_defaults_to_unknown() {
+        let check = Box::new(MockHealthCheck {
+            liveness_status: HealthStatus::Healthy,
+            readiness_status: HealthStatus::Healthy,
+        });
+        let checker = HealthChecker::new(check);
+        assert_eq!(*checker.last_liveness(), HealthStatus::Unknown);
+        assert_eq!(*checker.last_readiness(), HealthStatus::Unknown);
+    }
+
+    #[tokio::test]
+    async fn test_checker_liveness_updates_status() {
+        let check = Box::new(MockHealthCheck {
+            liveness_status: HealthStatus::Healthy,
+            readiness_status: HealthStatus::Unknown,
+        });
+        let mut checker = HealthChecker::new(check);
+        let status = checker.check_liveness().await;
+        assert_eq!(status, HealthStatus::Healthy);
+        assert_eq!(*checker.last_liveness(), HealthStatus::Healthy);
+    }
+
+    #[tokio::test]
+    async fn test_checker_readiness_updates_status() {
+        let check = Box::new(MockHealthCheck {
+            liveness_status: HealthStatus::Unknown,
+            readiness_status: HealthStatus::Unhealthy,
+        });
+        let mut checker = HealthChecker::new(check);
+        let status = checker.check_readiness().await;
+        assert_eq!(status, HealthStatus::Unhealthy);
+        assert_eq!(*checker.last_readiness(), HealthStatus::Unhealthy);
+    }
+
+    #[test]
+    fn test_checker_metrics_unknown_values() {
+        let check = Box::new(MockHealthCheck {
+            liveness_status: HealthStatus::Healthy,
+            readiness_status: HealthStatus::Unhealthy,
+        });
+        let checker = HealthChecker::new(check);
+
+        // Before any checks, both are Unknown -> 0.0
+        let metrics = checker.metrics();
+        assert_eq!(metrics.len(), 2);
+        assert_eq!(metrics[0].name, "health_liveness");
+        assert_eq!(metrics[0].value, 0.0);
+        assert_eq!(metrics[1].name, "health_readiness");
+        assert_eq!(metrics[1].value, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_checker_metrics_after_checks() {
+        let check = Box::new(MockHealthCheck {
+            liveness_status: HealthStatus::Healthy,
+            readiness_status: HealthStatus::Healthy,
+        });
+        let mut checker = HealthChecker::new(check);
+
+        checker.check_liveness().await;
+        checker.check_readiness().await;
+
+        let metrics = checker.metrics();
+        assert_eq!(metrics.len(), 2);
+        assert_eq!(metrics[0].value, 1.0); // liveness healthy
+        assert_eq!(metrics[1].value, 1.0); // readiness healthy
+    }
+
+    #[tokio::test]
+    async fn test_checker_metrics_unhealthy() {
+        let check = Box::new(MockHealthCheck {
+            liveness_status: HealthStatus::Unhealthy,
+            readiness_status: HealthStatus::Unhealthy,
+        });
+        let mut checker = HealthChecker::new(check);
+
+        checker.check_liveness().await;
+        checker.check_readiness().await;
+
+        let metrics = checker.metrics();
+        assert_eq!(metrics[0].value, 0.0); // liveness unhealthy
+        assert_eq!(metrics[1].value, 0.0); // readiness unhealthy
+    }
+
+    #[test]
+    fn test_command_health_check_construction() {
+        let check = CommandHealthCheck {
+            liveness_cmd: "echo ok".to_string(),
+            readiness_cmd: "echo ready".to_string(),
+            timeout_secs: 5,
+        };
+        assert_eq!(check.liveness_cmd, "echo ok");
+        assert_eq!(check.readiness_cmd, "echo ready");
+        assert_eq!(check.timeout_secs, 5);
+    }
+}

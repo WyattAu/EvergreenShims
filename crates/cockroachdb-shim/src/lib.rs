@@ -306,4 +306,136 @@ mod tests {
         let shim = CrdbShim::new();
         assert_eq!(shim.name(), "cockroachdb");
     }
+
+    #[test]
+    fn test_crdb_default_trait() {
+        let shim = CrdbShim::default();
+        assert_eq!(shim.name(), "cockroachdb");
+        assert_eq!(shim.host(), "localhost");
+        assert_eq!(shim.port(), 26257);
+    }
+
+    #[test]
+    fn test_crdb_password_connection_string() {
+        temp_env::with_vars(
+            [
+                ("CRDB_HOST", Some("secure-host")),
+                ("CRDB_PORT", Some("26257")),
+                ("CRDB_USER", Some("admin")),
+                ("CRDB_PASSWORD", Some("secret")),
+                ("CRDB_DATABASE", Some("mydb")),
+                ("CRDB_URL", None::<&str>),
+            ],
+            || {
+                let shim = CrdbShim::new();
+                let cs = shim.connection_string();
+                assert!(cs.starts_with("postgresql://admin:secret@secure-host:26257/mydb"));
+            },
+        );
+    }
+
+    #[test]
+    fn test_crdb_no_password_connection_string() {
+        temp_env::with_vars(
+            [
+                ("CRDB_HOST", Some("open-host")),
+                ("CRDB_PORT", Some("26257")),
+                ("CRDB_USER", Some("root")),
+                ("CRDB_PASSWORD", None::<&str>),
+                ("CRDB_DATABASE", Some("defaultdb")),
+                ("CRDB_URL", None::<&str>),
+            ],
+            || {
+                let shim = CrdbShim::new();
+                let cs = shim.connection_string();
+                assert_eq!(cs, "postgresql://root@open-host:26257/defaultdb");
+            },
+        );
+    }
+
+    #[test]
+    fn test_crdb_invalid_port_falls_back() {
+        temp_env::with_vars([("CRDB_PORT", Some("not_a_port"))], || {
+            let shim = CrdbShim::new();
+            assert_eq!(shim.port(), 26257);
+        });
+    }
+
+    #[test]
+    fn test_crdb_init_and_start_stop() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = CrdbShim::new();
+            let config = Config::default();
+
+            let init_result = shim.init(&config).await;
+            assert!(init_result.is_ok());
+
+            let start_result = shim.start().await;
+            assert!(start_result.is_ok());
+            assert!(shim.shutdown_tx.is_some());
+
+            let stop_result = shim.stop().await;
+            assert!(stop_result.is_ok());
+            assert!(shim.shutdown_tx.is_none());
+        });
+    }
+
+    #[test]
+    fn test_crdb_stop_without_start() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = CrdbShim::new();
+            let result = shim.stop().await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_crdb_metrics_after_init() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = CrdbShim::new();
+            let config = Config::default();
+            let _ = shim.init(&config).await;
+
+            let metrics = shim.metrics();
+            assert_eq!(metrics.len(), 2);
+            assert_eq!(metrics[0].name, "crdb_health_checks_total");
+            assert_eq!(metrics[0].value, 0.0);
+            assert_eq!(metrics[1].name, "crdb_topology_queries_total");
+            assert_eq!(metrics[1].value, 0.0);
+        });
+    }
+
+    #[test]
+    fn test_crdb_health_serialize() {
+        let health = CrdbHealth {
+            ok: true,
+            node_count: 3,
+            live_nodes: 3,
+            version: "23.1.0".to_string(),
+            uptime_secs: 1000,
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        let parsed: CrdbHealth = serde_json::from_str(&json).unwrap();
+        assert!(parsed.ok);
+        assert_eq!(parsed.node_count, 3);
+    }
+
+    #[test]
+    fn test_crdb_node_serialize() {
+        let node = CrdbNode {
+            node_id: 1,
+            address: "node1:26257".to_string(),
+            locality: "region=us-east-1".to_string(),
+            is_live: true,
+            ranges: 40,
+            leases: 40,
+        };
+        let json = serde_json::to_string(&node).unwrap();
+        let parsed: CrdbNode = serde_json::from_str(&json).unwrap();
+        assert!(parsed.is_live);
+        assert_eq!(parsed.ranges, 40);
+    }
 }

@@ -32,7 +32,7 @@ Rust-native shims for self-managing container images. Single binary, multiple ca
 | `db-shim` | health + vault + backup + migration + audit | ~1MB | Database containers |
 | `proxy-shim` | health + audit + tls | ~700KB | Reverse proxies |
 | `ha-shim` | health + failover + replication | ~800KB | HA database clusters |
-| `full-shim` | all 22 shims | ~3MB | Full operational stack |
+| `full-shim` | all 27 shims | ~3MB | Full operational stack |
 
 ## Container Images
 
@@ -44,6 +44,10 @@ docker pull ghcr.io/wyattau/evergreenshim/db-shim:latest
 docker pull ghcr.io/wyattau/evergreenshim/cache-shim:latest
 docker pull ghcr.io/wyattau/evergreenshim/evergreen-shim:latest
 ```
+
+## Test Coverage
+
+577 tests across 30 crates. Unit, integration, and chaos test tiers.
 
 ## License
 

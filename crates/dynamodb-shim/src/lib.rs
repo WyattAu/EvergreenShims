@@ -214,4 +214,107 @@ mod tests {
         let shim = DynamoShim::new();
         assert_eq!(shim.name(), "dynamodb");
     }
+
+    #[test]
+    fn test_dynamo_default_trait() {
+        let shim = DynamoShim::default();
+        assert_eq!(shim.name(), "dynamodb");
+        assert_eq!(shim.region(), "us-east-1");
+    }
+
+    #[test]
+    fn test_dynamo_endpoint_default_none() {
+        temp_env::with_vars([("DYNAMODB_ENDPOINT", None::<&str>)], || {
+            let shim = DynamoShim::new();
+            assert!(shim.endpoint.is_none());
+        });
+    }
+
+    #[test]
+    fn test_dynamo_endpoint_override() {
+        temp_env::with_vars(
+            [("DYNAMODB_ENDPOINT", Some("http://localhost:4566"))],
+            || {
+                let shim = DynamoShim::new();
+                assert_eq!(shim.endpoint.as_deref(), Some("http://localhost:4566"));
+            },
+        );
+    }
+
+    #[test]
+    fn test_dynamo_init_and_start_stop() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = DynamoShim::new();
+            let config = Config::default();
+
+            let init_result = shim.init(&config).await;
+            assert!(init_result.is_ok());
+
+            let start_result = shim.start().await;
+            assert!(start_result.is_ok());
+            assert!(shim.shutdown_tx.is_some());
+
+            let stop_result = shim.stop().await;
+            assert!(stop_result.is_ok());
+            assert!(shim.shutdown_tx.is_none());
+        });
+    }
+
+    #[test]
+    fn test_dynamo_stop_without_start() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = DynamoShim::new();
+            let result = shim.stop().await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_dynamo_metrics_after_init() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut shim = DynamoShim::new();
+            let config = Config::default();
+            let _ = shim.init(&config).await;
+
+            let metrics = shim.metrics();
+            assert_eq!(metrics.len(), 2);
+            assert_eq!(metrics[0].name, "dynamo_health_checks_total");
+            assert_eq!(metrics[0].value, 0.0);
+            assert_eq!(metrics[1].name, "dynamo_backup_exports_total");
+            assert_eq!(metrics[1].value, 0.0);
+        });
+    }
+
+    #[test]
+    fn test_dynamo_health_serialize() {
+        let health = DynamoHealth {
+            ok: true,
+            table_count: 5,
+            tables: vec!["users".to_string(), "orders".to_string()],
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        let parsed: DynamoHealth = serde_json::from_str(&json).unwrap();
+        assert!(parsed.ok);
+        assert_eq!(parsed.tables.len(), 2);
+    }
+
+    #[test]
+    fn test_dynamo_table_info_serialize() {
+        let info = DynamoTableInfo {
+            table_name: "users".to_string(),
+            item_count: 1000,
+            table_size_bytes: 65536,
+            status: "Active".to_string(),
+            billing_mode: "PAY_PER_REQUEST".to_string(),
+            read_capacity: 0,
+            write_capacity: 0,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: DynamoTableInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.table_name, "users");
+        assert_eq!(parsed.item_count, 1000);
+    }
 }
