@@ -99,3 +99,33 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
+
+  sign:
+    name: Sign Images
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      id-token: write
+    strategy:
+      matrix:
+        include:
+          - variant: health-shim
+          - variant: db-shim
+          - variant: cache-shim
+          - variant: evergreen-shim
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign image with cosign
+        run: |
+          cosign sign --yes ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.variant }}:latest
+          cosign sign --yes ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.variant }}:${{ github.sha }}
