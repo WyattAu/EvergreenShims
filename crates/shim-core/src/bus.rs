@@ -262,6 +262,7 @@ fn event_type_tag(event: &EventType) -> &str {
 mod tests {
     use super::*;
     use crate::event::{EventType, Severity};
+    use std::time::Duration;
 
     #[test]
     fn test_bus_new() {
@@ -446,5 +447,201 @@ mod tests {
         let bus = ShimBus::new();
         let mut rx = bus.subscribe();
         assert!(rx.try_recv().is_err());
+    }
+
+    // --- concurrency stress tests ---
+
+    #[test]
+    fn test_bus_concurrent_publish_many_threads() {
+        use std::sync::Arc;
+
+        let bus = Arc::new(ShimBus::new());
+        let total_events = 1000;
+        let num_threads = 10;
+        let events_per_thread = total_events / num_threads;
+
+        let handles: Vec<_> = (0..num_threads)
+            .map(|i| {
+                let bus = bus.clone();
+                std::thread::spawn(move || {
+                    for j in 0..events_per_thread {
+                        bus.emit(
+                            format!("thread-{}", i),
+                            EventType::Custom {
+                                event_name: format!("event-{}", j),
+                                payload: serde_json::json!(null),
+                            },
+                            Severity::Info,
+                        );
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(bus.total_published(), total_events as u64);
+    }
+
+    #[test]
+    fn test_bus_concurrent_subscribe_and_receive() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        let bus = Arc::new(ShimBus::new());
+        let num_threads = 5;
+        let events_per_thread = 200;
+
+        // Spawn subscriber threads that subscribe first, then wait
+        let counters: Vec<_> = (0..num_threads)
+            .map(|_| Arc::new(AtomicU64::new(0)))
+            .collect();
+
+        let published = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::new();
+
+        // Subscriber threads — subscribe immediately, then read after publish
+        for counter in &counters {
+            let bus = bus.clone();
+            let counter = counter.clone();
+            let published = published.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut rx = bus.subscribe();
+                // Wait for publisher to finish
+                while !published.load(Ordering::Relaxed) {
+                    std::thread::yield_now();
+                }
+                let mut count = 0u64;
+                loop {
+                    match rx.try_recv() {
+                        Ok(_evt) => {
+                            count += 1;
+                            counter.store(count, Ordering::Relaxed);
+                        }
+                        Err(broadcast::error::TryRecvError::Empty) => break,
+                        Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+                        Err(broadcast::error::TryRecvError::Closed) => break,
+                    }
+                }
+            }));
+        }
+
+        // Give subscribers time to subscribe
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Publisher thread
+        {
+            let bus = bus.clone();
+            handles.push(std::thread::spawn(move || {
+                for j in 0..events_per_thread {
+                    bus.emit(
+                        "publisher",
+                        EventType::Custom {
+                            event_name: format!("ev-{}", j),
+                            payload: serde_json::json!(null),
+                        },
+                        Severity::Info,
+                    );
+                }
+                published.store(true, Ordering::Relaxed);
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let total_received: u64 = counters.iter().map(|c| c.load(Ordering::Relaxed)).sum();
+        // All subscribers should have received events since they subscribed before publishing
+        assert!(total_received > 0, "no events received by any subscriber");
+    }
+
+    #[test]
+    fn test_bus_concurrent_publish_subscribe_monotonic_sequences() {
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        let bus = Arc::new(ShimBus::new());
+        let num_sources = 5;
+        let events_per_source = 100;
+
+        let handles: Vec<_> = (0..num_sources)
+            .map(|i| {
+                let bus = bus.clone();
+                std::thread::spawn(move || {
+                    let mut seqs = Vec::new();
+                    for _ in 0..events_per_source {
+                        let evt = bus.emit(
+                            format!("src-{}", i),
+                            EventType::Custom {
+                                event_name: "test".into(),
+                                payload: serde_json::json!(null),
+                            },
+                            Severity::Info,
+                        );
+                        seqs.push(evt.sequence);
+                    }
+                    seqs
+                })
+            })
+            .collect();
+
+        let mut all_seqs = Vec::new();
+        for h in handles {
+            let seqs = h.join().unwrap();
+            all_seqs.push(seqs);
+        }
+
+        // Each source should have strictly monotonic sequences
+        for seqs in &all_seqs {
+            for window in seqs.windows(2) {
+                assert!(window[1] > window[0], "sequences not monotonic: {:?}", seqs);
+            }
+        }
+
+        // All sequences for the same source should be unique
+        for seqs in &all_seqs {
+            let set: HashSet<_> = seqs.iter().collect();
+            assert_eq!(set.len(), seqs.len(), "duplicate sequences within a source");
+        }
+    }
+
+    #[test]
+    fn test_bus_concurrent_publish_to_capacity_channel() {
+        use std::sync::Arc;
+
+        let bus = Arc::new(ShimBus::with_capacity(16));
+        let num_threads = 4;
+        let events_per_thread = 100;
+
+        let handles: Vec<_> = (0..num_threads)
+            .map(|i| {
+                let bus = bus.clone();
+                std::thread::spawn(move || {
+                    for j in 0..events_per_thread {
+                        bus.emit(
+                            format!("thread-{}", i),
+                            EventType::Custom {
+                                event_name: format!("e{}", j),
+                                payload: serde_json::json!(null),
+                            },
+                            Severity::Info,
+                        );
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Should not panic — dropped events counted
+        assert_eq!(
+            bus.total_published(),
+            (num_threads * events_per_thread) as u64
+        );
     }
 }

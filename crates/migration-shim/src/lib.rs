@@ -408,21 +408,11 @@ impl MigrationShim {
             return Ok(());
         }
 
-        let sql = format!(
-            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES ({}, '{}', '{}', '{}')",
-            record.version,
-            record.name.replace('\'', "''"),
-            record.checksum.replace('\'', "''"),
-            record.applied_at.replace('\'', "''")
-        );
-
         match self.db_type.as_str() {
             "mysql" => {
                 let cs = self.connection_string();
                 let pool = sqlx::MySqlPool::connect(&cs).await?;
-                let mysql_sql =
-                    "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)";
-                sqlx::query(mysql_sql)
+                sqlx::query("INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)")
                     .bind(record.version as i32)
                     .bind(&record.name)
                     .bind(&record.checksum)
@@ -431,7 +421,15 @@ impl MigrationShim {
                     .await?;
             }
             _ => {
-                self.execute_sql_postgres(&sql).await?;
+                let cs = self.connection_string();
+                let pool = sqlx::PgPool::connect(&cs).await?;
+                sqlx::query("INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES ($1, $2, $3, $4)")
+                    .bind(record.version as i32)
+                    .bind(&record.name)
+                    .bind(&record.checksum)
+                    .bind(&record.applied_at)
+                    .execute(&pool)
+                    .await?;
             }
         }
         Ok(())
@@ -453,8 +451,12 @@ impl MigrationShim {
                     .await?;
             }
             _ => {
-                let sql = format!("DELETE FROM schema_migrations WHERE version = {}", version);
-                self.execute_sql_postgres(&sql).await?;
+                let cs = self.connection_string();
+                let pool = sqlx::PgPool::connect(&cs).await?;
+                sqlx::query("DELETE FROM schema_migrations WHERE version = $1")
+                    .bind(version as i32)
+                    .execute(&pool)
+                    .await?;
             }
         }
         Ok(())

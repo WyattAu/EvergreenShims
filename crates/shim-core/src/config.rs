@@ -31,9 +31,16 @@ pub fn validation_enabled() -> bool {
     }
 }
 
+/// Supported configuration schema versions.
+const SUPPORTED_VERSIONS: &[&str] = &["1.0"];
+
 /// Main configuration for the shim.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Schema version of this configuration file.
+    #[serde(default = "default_config_version")]
+    pub version: Option<String>,
+
     /// Health check configuration.
     #[serde(default)]
     pub health: HealthConfig,
@@ -77,6 +84,25 @@ pub struct Config {
     /// Multi-tenancy configuration.
     #[serde(default)]
     pub tenants: Vec<TenantConfig>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            version: default_config_version(),
+            health: HealthConfig::default(),
+            vault: None,
+            backup: None,
+            migration: None,
+            audit: None,
+            tls: None,
+            failover: None,
+            replication: None,
+            process: ProcessConfig::default(),
+            resource_quota: ResourceQuota::default(),
+            tenants: Vec::new(),
+        }
+    }
 }
 
 /// Health check configuration.
@@ -133,6 +159,10 @@ fn default_check_interval() -> u64 {
 
 fn default_check_timeout() -> u64 {
     5
+}
+
+fn default_config_version() -> Option<String> {
+    Some("1.0".to_string())
 }
 
 /// Vault configuration.
@@ -384,6 +414,14 @@ pub struct TenantConfig {
     /// Resource quota for this tenant (reuses global ResourceQuota).
     #[serde(default)]
     pub quota_config: ResourceQuota,
+
+    /// Period in seconds after which the request counter resets (default: 1).
+    #[serde(default = "default_reset_period_secs")]
+    pub reset_period_secs: u64,
+}
+
+fn default_reset_period_secs() -> u64 {
+    1
 }
 
 /// Process configuration.
@@ -482,6 +520,7 @@ impl Config {
     /// Load configuration from environment variables.
     pub fn from_env() -> Self {
         let mut config = Config {
+            version: default_config_version(),
             health: HealthConfig::default(),
             vault: None,
             backup: None,
@@ -545,6 +584,7 @@ impl Config {
                 max_requests_per_sec: None,
                 allowed_features: Vec::new(),
                 quota_config: ResourceQuota::default(),
+                reset_period_secs: 1,
             };
             if let Ok(val) = std::env::var("SHIM_TENANT_MAX_MEMORY") {
                 match val.parse() {
@@ -571,6 +611,19 @@ impl Config {
     /// and a human-readable message.
     pub fn validate(&self) -> Vec<ConfigValidationError> {
         let mut errors = Vec::new();
+
+        // --- version ---
+        if let Some(ref version) = self.version {
+            if !SUPPORTED_VERSIONS.contains(&version.as_str()) {
+                errors.push(ConfigValidationError {
+                    field: "version".into(),
+                    message: format!(
+                        "unknown config version '{}'; supported versions: {:?}",
+                        version, SUPPORTED_VERSIONS
+                    ),
+                });
+            }
+        }
 
         // --- health ---
         if self.health.listen.parse::<std::net::SocketAddr>().is_err() {
@@ -633,13 +686,11 @@ impl Config {
         // --- migration ---
         if let Some(ref migration) = self.migration {
             let path = &migration.dir;
-            if !path.exists() && std::fs::create_dir_all(path).is_err() {
+            // NOTE: Directory creation is the caller's responsibility; validate() only checks existence.
+            if !path.exists() {
                 errors.push(ConfigValidationError {
                     field: "migration.dir".into(),
-                    message: format!(
-                        "directory '{}' does not exist and cannot be created",
-                        path.display()
-                    ),
+                    message: format!("directory '{}' does not exist", path.display()),
                 });
             }
             if migration.db_port == 0 {
@@ -1182,6 +1233,7 @@ max_connections = 100
             max_requests_per_sec: Some(100),
             allowed_features: vec!["feature-x".into()],
             quota_config: ResourceQuota::default(),
+            reset_period_secs: 1,
         };
         let json = serde_json::to_string(&tenant).unwrap();
         assert!(json.contains("t1"));
@@ -1248,6 +1300,7 @@ max_memory_bytes = 2147483648
                 max_requests_per_sec: None,
                 allowed_features: vec![],
                 quota_config: ResourceQuota::default(),
+                reset_period_secs: 1,
             },
             TenantConfig {
                 tenant_id: "dup".into(),
@@ -1256,6 +1309,7 @@ max_memory_bytes = 2147483648
                 max_requests_per_sec: None,
                 allowed_features: vec![],
                 quota_config: ResourceQuota::default(),
+                reset_period_secs: 1,
             },
         ];
         let errors = config.validate();
@@ -1272,6 +1326,7 @@ max_memory_bytes = 2147483648
             max_requests_per_sec: None,
             allowed_features: vec![],
             quota_config: ResourceQuota::default(),
+            reset_period_secs: 1,
         }];
         let errors = config.validate();
         assert!(errors.iter().any(|e| e.field.contains("tenant_id")));
@@ -1287,6 +1342,7 @@ max_memory_bytes = 2147483648
             max_requests_per_sec: None,
             allowed_features: vec![],
             quota_config: ResourceQuota::default(),
+            reset_period_secs: 1,
         }];
         let errors = config.validate();
         assert!(errors.iter().any(|e| e.field.contains("max_cpu_percent")));
@@ -1303,6 +1359,7 @@ max_memory_bytes = 2147483648
                 max_requests_per_sec: None,
                 allowed_features: vec![],
                 quota_config: ResourceQuota::default(),
+                reset_period_secs: 1,
             });
 
             let mut overlay = Config::default();
@@ -1313,6 +1370,7 @@ max_memory_bytes = 2147483648
                 max_requests_per_sec: None,
                 allowed_features: vec![],
                 quota_config: ResourceQuota::default(),
+                reset_period_secs: 1,
             });
 
             base.merge(overlay);
@@ -1320,5 +1378,201 @@ max_memory_bytes = 2147483648
             assert!(base.tenants.iter().any(|t| t.tenant_id == "env-tenant"));
             assert!(base.tenants.iter().any(|t| t.tenant_id == "file-tenant"));
         });
+    }
+
+    // --- version tests ---
+
+    #[test]
+    fn test_config_default_version() {
+        let config = Config::default();
+        assert_eq!(config.version.as_deref(), Some("1.0"));
+    }
+
+    #[test]
+    fn test_config_valid_version() {
+        let toml_str = r#"
+version = "1.0"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.version.as_deref(), Some("1.0"));
+        assert!(config.validate().is_empty());
+    }
+
+    #[test]
+    fn test_config_unknown_version_warns() {
+        let mut config = Config::default();
+        config.version = Some("9.9".to_string());
+        let errors = config.validate();
+        assert!(errors.iter().any(|e| e.field == "version"));
+    }
+
+    #[test]
+    fn test_config_missing_version_defaults() {
+        let toml_str = r#"
+[health]
+listen = "127.0.0.1:8080"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.version.as_deref(), Some("1.0"));
+    }
+
+    // --- property-based: TOML roundtrip ---
+
+    #[test]
+    fn test_config_toml_roundtrip_minimal() {
+        let config = Config::default();
+        let toml_str = toml::to_string(&config).unwrap();
+        let deser: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(config.health.listen, deser.health.listen);
+        assert_eq!(config.health.interval_secs, deser.health.interval_secs);
+        assert_eq!(config.health.timeout_secs, deser.health.timeout_secs);
+        assert_eq!(config.process.command, deser.process.command);
+    }
+
+    #[test]
+    fn test_config_toml_roundtrip_with_vault() {
+        let mut config = Config::default();
+        config.vault = Some(VaultConfig {
+            addr: "https://vault.example.com:8200".into(),
+            role: "pki".into(),
+            secret: "secret/data/db".into(),
+            rotation_secs: 7200,
+        });
+        let toml_str = toml::to_string(&config).unwrap();
+        let deser: Config = toml::from_str(&toml_str).unwrap();
+        let vault = deser.vault.unwrap();
+        assert_eq!(vault.addr, "https://vault.example.com:8200");
+        assert_eq!(vault.role, "pki");
+        assert_eq!(vault.rotation_secs, 7200);
+    }
+
+    #[test]
+    fn test_config_toml_roundtrip_with_tenants() {
+        let mut config = Config::default();
+        config.tenants = vec![
+            TenantConfig {
+                tenant_id: "t1".into(),
+                max_memory_bytes: Some(1024),
+                max_cpu_percent: Some(75.0),
+                max_requests_per_sec: Some(100),
+                allowed_features: vec!["f1".into(), "f2".into()],
+                quota_config: ResourceQuota::default(),
+                reset_period_secs: 1,
+            },
+            TenantConfig {
+                tenant_id: "t2".into(),
+                max_memory_bytes: Some(2048),
+                max_cpu_percent: None,
+                max_requests_per_sec: None,
+                allowed_features: vec![],
+                quota_config: ResourceQuota::default(),
+                reset_period_secs: 1,
+            },
+        ];
+        let toml_str = toml::to_string(&config).unwrap();
+        let deser: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(deser.tenants.len(), 2);
+        assert_eq!(deser.tenants[0].tenant_id, "t1");
+        assert_eq!(deser.tenants[0].max_memory_bytes, Some(1024));
+        assert_eq!(deser.tenants[0].allowed_features, vec!["f1", "f2"]);
+        assert_eq!(deser.tenants[1].tenant_id, "t2");
+    }
+
+    #[test]
+    fn test_config_toml_roundtrip_all_optional_sections() {
+        let mut config = Config::default();
+        config.vault = Some(VaultConfig {
+            addr: "https://vault.local".into(),
+            role: "r".into(),
+            secret: "s".into(),
+            rotation_secs: 3600,
+        });
+        config.backup = Some(BackupConfig {
+            schedule: "0 2 * * *".into(),
+            storage: "s3".into(),
+            retention_days: 7,
+            database: "mydb".into(),
+            prefix: "backups/".into(),
+        });
+        config.tls = Some(TlsConfig {
+            provider: "letsencrypt".into(),
+            domain: "example.com".into(),
+            email: "admin@example.com".into(),
+            renew_before_secs: 86400,
+        });
+        config.failover = Some(FailoverConfig {
+            primary: "10.0.0.1:5432".into(),
+            replica: "10.0.0.2:5432".into(),
+            check_interval_secs: 5,
+            timeout_secs: 10,
+            failure_threshold: 3,
+            webhook: Some("https://hooks.example.com".into()),
+            db_type: "postgres".into(),
+        });
+        config.replication = Some(ReplicationConfig {
+            primary: "10.0.0.1:5432".into(),
+            replicas: vec!["10.0.0.2:5432".into(), "10.0.0.3:5432".into()],
+            mode: "synchronous".into(),
+            check_interval_secs: 5,
+            db_type: "postgres".into(),
+            slot_name: Some("my_slot".into()),
+        });
+        config.audit = Some(AuditConfig {
+            database: "mydb".into(),
+            tables: vec!["users".into(), "orders".into()],
+            format: "json".into(),
+        });
+        config.resource_quota = ResourceQuota {
+            max_memory_bytes: Some(4096),
+            max_cpu_percent: Some(80.0),
+            max_open_files: Some(1024),
+            max_connections: Some(100),
+        };
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let deser: Config = toml::from_str(&toml_str).unwrap();
+        assert!(deser.vault.is_some());
+        assert!(deser.backup.is_some());
+        assert!(deser.tls.is_some());
+        assert!(deser.failover.is_some());
+        assert!(deser.replication.is_some());
+        assert!(deser.audit.is_some());
+        assert_eq!(deser.resource_quota.max_memory_bytes, Some(4096));
+    }
+
+    #[test]
+    fn test_config_toml_roundtrip_preserves_none_optionals() {
+        let config = Config::default();
+        assert!(config.vault.is_none());
+        assert!(config.backup.is_none());
+        assert!(config.tls.is_none());
+        let toml_str = toml::to_string(&config).unwrap();
+        let deser: Config = toml::from_str(&toml_str).unwrap();
+        assert!(deser.vault.is_none());
+        assert!(deser.backup.is_none());
+        assert!(deser.tls.is_none());
+    }
+
+    #[test]
+    fn test_config_toml_roundtrip_custom_values() {
+        let mut config = Config::default();
+        config.health.listen = "192.168.1.100:9999".into();
+        config.health.interval_secs = 30;
+        config.health.timeout_secs = 15;
+        config.health.liveness_cmd = "curl -f http://localhost/health".into();
+        config.health.readiness_cmd = "pg_isready".into();
+        config.process.command = "my-app".into();
+        config.process.args = vec!["--verbose".into(), "--port=8080".into()];
+        config.process.shutdown_timeout_secs = 60;
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let deser: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(deser.health.listen, "192.168.1.100:9999");
+        assert_eq!(deser.health.interval_secs, 30);
+        assert_eq!(deser.health.timeout_secs, 15);
+        assert_eq!(deser.health.liveness_cmd, "curl -f http://localhost/health");
+        assert_eq!(deser.process.command, "my-app");
+        assert_eq!(deser.process.args, vec!["--verbose", "--port=8080"]);
+        assert_eq!(deser.process.shutdown_timeout_secs, 60);
     }
 }

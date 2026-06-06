@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use prometheus::{IntCounter, IntCounterVec, Opts, Registry};
-use redis::Commands;
+use redis::aio::ConnectionManager;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
@@ -200,13 +200,9 @@ impl RedisBridge {
     ///
     /// This runs as a long-lived task. It polls every `poll_interval_ms`.
     pub async fn start_consuming(self: Arc<Self>, poll_interval_ms: u64) -> Result<()> {
-        // Get connection on current thread, then wrap in Send-safe wrapper
-        let conn = self
-            .conn
-            .get_connection()
-            .map_err(|e| Error::Connection(format!("redis connection: {}", e)))?;
-
-        let conn = Arc::new(parking_lot::Mutex::new(conn));
+        let mut conn = ConnectionManager::new(self.conn.clone())
+            .await
+            .map_err(|e| Error::Connection(format!("redis async connection: {}", e)))?;
 
         info!(
             "redis bridge: starting consumer '{}' on '{}'",
@@ -216,9 +212,7 @@ impl RedisBridge {
         let mut last_id = "0-0".to_string();
 
         loop {
-            // XREADGROUP with COUNT 10, blocking 1s
-            let result: Option<Vec<(String, Vec<(String, Vec<(String, String)>)>)>> = {
-                let mut conn = conn.lock();
+            let result: Option<Vec<(String, Vec<(String, Vec<(String, String)>)>)>> =
                 redis::cmd("XREADGROUP")
                     .arg("GROUP")
                     .arg(CONSUMER_GROUP)
@@ -230,9 +224,9 @@ impl RedisBridge {
                     .arg("STREAMS")
                     .arg(&self.stream_key)
                     .arg(">")
-                    .query(&mut conn)
-                    .ok()
-            };
+                    .query_async(&mut conn)
+                    .await
+                    .ok();
 
             if let Some(streams) = result {
                 for (_stream_name, messages) in streams {
@@ -252,12 +246,12 @@ impl RedisBridge {
 
             // ACK processed entries
             if last_id != "0-0" {
-                let mut conn = conn.lock();
                 let _: std::result::Result<i64, redis::RedisError> = redis::cmd("XACK")
                     .arg(&self.stream_key)
                     .arg(CONSUMER_GROUP)
                     .arg(&last_id)
-                    .query(&mut conn);
+                    .query_async(&mut conn)
+                    .await;
             }
         }
     }
@@ -280,12 +274,9 @@ impl RedisBridge {
         poll_interval_ms: u64,
         handler: EventHandler,
     ) -> Result<()> {
-        let conn = self
-            .conn
-            .get_connection()
-            .map_err(|e| Error::Connection(format!("redis connection: {}", e)))?;
-
-        let conn = Arc::new(parking_lot::Mutex::new(conn));
+        let mut conn = ConnectionManager::new(self.conn.clone())
+            .await
+            .map_err(|e| Error::Connection(format!("redis async connection: {}", e)))?;
 
         info!(
             "redis bridge: starting consumer '{}' on '{}' with handler",
@@ -295,8 +286,7 @@ impl RedisBridge {
         let mut last_id = "0-0".to_string();
 
         loop {
-            let result: Option<Vec<(String, Vec<(String, Vec<(String, String)>)>)>> = {
-                let mut conn = conn.lock();
+            let result: Option<Vec<(String, Vec<(String, Vec<(String, String)>)>)>> =
                 redis::cmd("XREADGROUP")
                     .arg("GROUP")
                     .arg(CONSUMER_GROUP)
@@ -308,9 +298,9 @@ impl RedisBridge {
                     .arg("STREAMS")
                     .arg(&self.stream_key)
                     .arg(">")
-                    .query(&mut conn)
-                    .ok()
-            };
+                    .query_async(&mut conn)
+                    .await
+                    .ok();
 
             if let Some(streams) = result {
                 for (_stream_name, messages) in streams {
@@ -334,12 +324,12 @@ impl RedisBridge {
             }
 
             if last_id != "0-0" {
-                let mut conn = conn.lock();
                 let _: std::result::Result<i64, redis::RedisError> = redis::cmd("XACK")
                     .arg(&self.stream_key)
                     .arg(CONSUMER_GROUP)
                     .arg(&last_id)
-                    .query(&mut conn);
+                    .query_async(&mut conn)
+                    .await;
             }
         }
     }

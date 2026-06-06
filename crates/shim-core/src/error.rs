@@ -2,6 +2,7 @@
 
 /// Error type for shim operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Configuration error.
     #[error("configuration error: {0}")]

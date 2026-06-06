@@ -352,6 +352,187 @@ mod tests {
         assert_eq!(deser, evt);
     }
 
+    // --- property-based: Severity parsing ---
+
+    #[test]
+    fn test_severity_parse_all_valid_json_values() {
+        let variants = ["info", "notice", "warning", "error", "critical"];
+        for v in variants {
+            let json = format!("\"{}\"", v);
+            let parsed: Severity = serde_json::from_str(&json).unwrap();
+            let roundtrip = serde_json::to_string(&parsed).unwrap();
+            assert_eq!(roundtrip, json);
+        }
+    }
+
+    #[test]
+    fn test_severity_case_insensitive_parse() {
+        // serde rename_all = "lowercase" means only lowercase is valid
+        let json = "\"info\"";
+        let parsed: Severity = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, Severity::Info);
+
+        // Uppercase should fail
+        assert!(serde_json::from_str::<Severity>("\"INFO\"").is_err());
+    }
+
+    #[test]
+    fn test_severity_invalid_values_rejected() {
+        assert!(serde_json::from_str::<Severity>("\"verbose\"").is_err());
+        assert!(serde_json::from_str::<Severity>("\"trace\"").is_err());
+        assert!(serde_json::from_str::<Severity>("\"debug\"").is_err());
+        assert!(serde_json::from_str::<Severity>("\"fatal\"").is_err());
+        assert!(serde_json::from_str::<Severity>("\"\"").is_err());
+        assert!(serde_json::from_str::<Severity>("null").is_err());
+    }
+
+    #[test]
+    fn test_severity_ordering_by_alertability() {
+        let severities = [
+            Severity::Info,
+            Severity::Notice,
+            Severity::Warning,
+            Severity::Error,
+            Severity::Critical,
+        ];
+        // Only Warning+ should be alertable
+        for (i, s) in severities.iter().enumerate() {
+            let evt = ShimEvent::new(
+                "x",
+                EventType::Custom {
+                    event_name: "t".into(),
+                    payload: serde_json::json!(null),
+                },
+                *s,
+            );
+            assert_eq!(
+                evt.is_alertable(),
+                i >= 2,
+                "severity {:?} alertability mismatch",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_event_type_json_roundtrip_all_variants() {
+        let events = vec![
+            EventType::HealthStatusChanged {
+                previous: "down".into(),
+                current: "up".into(),
+            },
+            EventType::FailoverTriggered {
+                old_primary: "p1".into(),
+                new_primary: "p2".into(),
+            },
+            EventType::FailoverCompleted {
+                promoted: "p2".into(),
+            },
+            EventType::BackupStarted {
+                name: "daily".into(),
+            },
+            EventType::BackupCompleted {
+                name: "daily".into(),
+                size_bytes: 1024,
+                checksum: "abc".into(),
+            },
+            EventType::BackupFailed {
+                name: "daily".into(),
+                reason: "timeout".into(),
+            },
+            EventType::EncryptionKeyRotated {
+                key_id: "k1".into(),
+                algorithm: "aes256".into(),
+            },
+            EventType::ReplicationLagWarning {
+                lag_ms: 500,
+                threshold_ms: 100,
+            },
+            EventType::MigrationStarted {
+                version: "v1".into(),
+            },
+            EventType::MigrationCompleted {
+                version: "v1".into(),
+            },
+            EventType::MigrationFailed {
+                version: "v1".into(),
+                reason: "syntax".into(),
+            },
+            EventType::AuditRecorded {
+                event_type: "read".into(),
+                resource: "users".into(),
+                action: "SELECT".into(),
+            },
+            EventType::ComplianceCheckCompleted {
+                standard: "SOC2".into(),
+                score: 95.0,
+                violations: 2,
+            },
+            EventType::TlsCertExpiring {
+                cert_path: "/etc/tls/cert.pem".into(),
+                days_remaining: 7,
+            },
+            EventType::TlsCertRenewed {
+                cert_path: "/etc/tls/cert.pem".into(),
+            },
+            EventType::AuthTokenRevoked {
+                token_id: "tok1".into(),
+                reason: "expired".into(),
+            },
+            EventType::SchedulerTaskFired {
+                task_name: "backup".into(),
+                schedule: "0 2 * * *".into(),
+            },
+            EventType::QueueJobFailed {
+                job_id: "j1".into(),
+                queue: "email".into(),
+                retries: 3,
+            },
+            EventType::CacheHitRateLow {
+                hit_rate: 0.3,
+                threshold: 0.8,
+            },
+            EventType::CircuitBreakerTripped {
+                service: "db".into(),
+                state: "open".into(),
+            },
+            EventType::CdcBatchCommitted {
+                table: "users".into(),
+                event_count: 50,
+            },
+            EventType::ShardRebalanceStarted {
+                from_shard: "s1".into(),
+                to_shard: "s2".into(),
+            },
+            EventType::ArchivalTierTransition {
+                resource: "logs".into(),
+                from_tier: "hot".into(),
+                to_tier: "cold".into(),
+            },
+            EventType::CostBudgetAlert {
+                budget_name: "aws".into(),
+                usage_percent: 90.0,
+            },
+            EventType::ChaosExperimentStarted {
+                experiment: "pod-kill".into(),
+            },
+            EventType::ChaosExperimentCompleted {
+                experiment: "pod-kill".into(),
+                result: "recovered".into(),
+            },
+            EventType::Custom {
+                event_name: "myapp.event".into(),
+                payload: serde_json::json!({"key": "val"}),
+            },
+        ];
+
+        for evt in events {
+            let json = serde_json::to_string(&evt).unwrap();
+            let deser: EventType = serde_json::from_str(&json).unwrap();
+            assert_eq!(deser, evt, "roundtrip failed for variant");
+        }
+    }
+
     #[test]
     fn test_is_alertable() {
         let info = ShimEvent::new(

@@ -1070,6 +1070,77 @@ mod tests {
     }
 
     #[test]
+    fn test_pem_roundtrip_empty_payload() {
+        let data = b"";
+        let pem = pem_encode(data, "EMPTY");
+        let decoded = pem_decode(&pem, "EMPTY").unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_pem_roundtrip_single_byte() {
+        let data = b"A";
+        let pem = pem_encode(data, "BYTE");
+        let decoded = pem_decode(&pem, "BYTE").unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_pem_roundtrip_exact_64_byte_boundary() {
+        let data: Vec<u8> = (0..64).map(|i| (i % 256) as u8).collect();
+        let pem = pem_encode(data.as_slice(), "BOUNDARY");
+        let decoded = pem_decode(&pem, "BOUNDARY").unwrap();
+        assert_eq!(decoded, data.as_slice());
+    }
+
+    #[test]
+    fn test_pem_roundtrip_large_payload() {
+        let data: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
+        let pem = pem_encode(data.as_slice(), "LARGE");
+        assert!(pem.contains("BEGIN LARGE"));
+        let decoded = pem_decode(&pem, "LARGE").unwrap();
+        assert_eq!(decoded, data.as_slice());
+    }
+
+    #[test]
+    fn test_pem_decode_wrong_label_fails() {
+        let data = b"secret";
+        let pem = pem_encode(data, "CERTIFICATE");
+        assert!(pem_decode(&pem, "PRIVATE KEY").is_none());
+    }
+
+    #[test]
+    fn test_pem_decode_invalid_base64_fails() {
+        let invalid_pem = "-----BEGIN TEST-----\n!!!invalid-base64!!!\n-----END TEST-----\n";
+        assert!(pem_decode(invalid_pem, "TEST").is_none());
+    }
+
+    #[test]
+    fn test_pem_decode_missing_end_marker_fails() {
+        let no_end = "-----BEGIN TEST-----\nSGVsbG8=\n";
+        assert!(pem_decode(no_end, "TEST").is_none());
+    }
+
+    #[test]
+    fn test_pem_roundtrip_all_binary_values() {
+        let data: Vec<u8> = (0..=255).collect();
+        let pem = pem_encode(&data, "FULLBYTE");
+        let decoded = pem_decode(&pem, "FULLBYTE").unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_pem_encode_produces_correct_structure() {
+        let data = b"test";
+        let pem = pem_encode(data, "LABEL");
+        assert!(pem.starts_with("-----BEGIN LABEL-----\n"));
+        assert!(pem.ends_with("-----END LABEL-----\n"));
+        // Should have exactly 2 newlines: after BEGIN, after base64, and after END
+        let line_count = pem.lines().count();
+        assert_eq!(line_count, 3);
+    }
+
+    #[test]
     fn test_validate_cert_with_pem() {
         let (cert_pem, _) = TlsShim::generate_self_signed("example.com").unwrap();
         let shim = TlsShim::new();

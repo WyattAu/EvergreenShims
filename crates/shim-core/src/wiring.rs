@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use tokio::sync::watch;
 use tracing::{info, warn};
 
 use crate::bus::ShimBus;
@@ -16,6 +17,7 @@ pub struct HealthFailoverHandler {
     bus: ShimBus,
     failover_threshold: u32,
     unhealthy_count: Arc<RwLock<u32>>,
+    shutdown_tx: Arc<RwLock<Option<watch::Sender<bool>>>>,
 }
 
 impl HealthFailoverHandler {
@@ -24,186 +26,274 @@ impl HealthFailoverHandler {
             bus,
             failover_threshold,
             unhealthy_count: Arc::new(RwLock::new(0)),
+            shutdown_tx: Arc::new(RwLock::new(None)),
         }
     }
 
     /// Start monitoring health events and emitting failover triggers.
     pub fn start(self: Arc<Self>) {
         let mut rx = self.bus.subscribe();
-        let handler = self.clone();
+        let handler = Arc::clone(&self);
+
+        let (tx, mut shutdown_rx) = watch::channel(false);
+        *self.shutdown_tx.write() = Some(tx);
 
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if let EventType::HealthStatusChanged { current, .. } = &event.event {
-                            if current == "unhealthy" || current == "down" {
-                                let mut count = handler.unhealthy_count.write();
-                                *count += 1;
-                                if *count >= handler.failover_threshold {
-                                    warn!(
-                                        "health-failover: {} consecutive unhealthy checks, triggering failover",
-                                        *count
-                                    );
-                                    handler.bus.emit(
-                                        "failover-shim",
-                                        EventType::FailoverTriggered {
-                                            old_primary: "primary".into(),
-                                            new_primary: "promoted".into(),
-                                        },
-                                        Severity::Critical,
-                                    );
-                                    *count = 0;
+                tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        info!("health-failover: shutdown received");
+                        break;
+                    }
+                    result = rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                if let EventType::HealthStatusChanged { current, .. } = &event.event {
+                                    if current == "unhealthy" || current == "down" {
+                                        let mut count = handler.unhealthy_count.write();
+                                        *count += 1;
+                                        if *count >= handler.failover_threshold {
+                                            warn!(
+                                                "health-failover: {} consecutive unhealthy checks, triggering failover",
+                                                *count
+                                            );
+                                            handler.bus.emit(
+                                                "failover-shim",
+                                                EventType::FailoverTriggered {
+                                                    old_primary: "primary".into(),
+                                                    new_primary: "promoted".into(),
+                                                },
+                                                Severity::Critical,
+                                            );
+                                            *count = 0;
+                                        }
+                                    } else {
+                                        *handler.unhealthy_count.write() = 0;
+                                    }
                                 }
-                            } else {
-                                *handler.unhealthy_count.write() = 0;
                             }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("health-failover: lagged by {} events", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("health-failover: lagged by {} events", n);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
+    }
+
+    /// Stop the handler by signaling the background task to shut down.
+    pub fn stop(&self) {
+        if let Some(tx) = self.shutdown_tx.write().take() {
+            let _ = tx.send(true);
+        }
     }
 }
 
 /// Forwards backup completion events to the encryption shim.
 pub struct BackupEncryptionHandler {
     bus: ShimBus,
+    shutdown_tx: Arc<RwLock<Option<watch::Sender<bool>>>>,
 }
 
 impl BackupEncryptionHandler {
     pub fn new(bus: ShimBus) -> Self {
-        Self { bus }
+        Self {
+            bus,
+            shutdown_tx: Arc::new(RwLock::new(None)),
+        }
     }
 
     /// Start listening for backup events and forwarding to encryption.
     pub fn start(self: Arc<Self>) {
         let mut rx = self.bus.subscribe();
-        let handler = self.clone();
+        let handler = Arc::clone(&self);
+
+        let (tx, mut shutdown_rx) = watch::channel(false);
+        *self.shutdown_tx.write() = Some(tx);
 
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if let EventType::BackupCompleted {
-                            name,
-                            size_bytes,
-                            checksum,
-                        } = &event.event
-                        {
-                            info!(
-                                "backup-encryption: backup '{}' completed ({} bytes), ensuring encryption",
-                                name, size_bytes
-                            );
-                            handler.bus.emit(
-                                "encryption-shim",
-                                EventType::EncryptionKeyRotated {
-                                    key_id: format!("backup-{}", name),
-                                    algorithm: "AES-256-GCM".into(),
-                                },
-                                Severity::Info,
-                            );
-                            let _ = checksum;
+                tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        info!("backup-encryption: shutdown received");
+                        break;
+                    }
+                    result = rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                if let EventType::BackupCompleted {
+                                    name,
+                                    size_bytes,
+                                    checksum,
+                                } = &event.event
+                                {
+                                    info!(
+                                        "backup-encryption: backup '{}' completed ({} bytes), ensuring encryption",
+                                        name, size_bytes
+                                    );
+                                    handler.bus.emit(
+                                        "encryption-shim",
+                                        EventType::EncryptionKeyRotated {
+                                            key_id: format!("backup-{}", name),
+                                            algorithm: "AES-256-GCM".into(),
+                                        },
+                                        Severity::Info,
+                                    );
+                                    let _ = checksum;
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("backup-encryption: lagged by {} events", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("backup-encryption: lagged by {} events", n);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
+    }
+
+    /// Stop the handler by signaling the background task to shut down.
+    pub fn stop(&self) {
+        if let Some(tx) = self.shutdown_tx.write().take() {
+            let _ = tx.send(true);
+        }
     }
 }
 
 /// Fans out all events to the alerting shim for notification routing.
 pub struct AlertFanInHandler {
     bus: ShimBus,
+    shutdown_tx: Arc<RwLock<Option<watch::Sender<bool>>>>,
 }
 
 impl AlertFanInHandler {
     pub fn new(bus: ShimBus) -> Self {
-        Self { bus }
+        Self {
+            bus,
+            shutdown_tx: Arc::new(RwLock::new(None)),
+        }
     }
 
     /// Start monitoring all alertable events and routing to alerting.
     pub fn start(self: Arc<Self>) {
         let mut rx = self.bus.subscribe();
 
+        let (tx, mut shutdown_rx) = watch::channel(false);
+        *self.shutdown_tx.write() = Some(tx);
+
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if event.is_alertable() {
-                            info!(
-                                "alert-fanin: [{}] {} → {}",
-                                event.severity_str(),
-                                event.source,
-                                event.event_name(),
-                            );
-                            // Alerting shim will receive this via the same bus
+                tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        info!("alert-fanin: shutdown received");
+                        break;
+                    }
+                    result = rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                if event.is_alertable() {
+                                    info!(
+                                        "alert-fanin: [{}] {} → {}",
+                                        event.severity_str(),
+                                        event.source,
+                                        event.event_name(),
+                                    );
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("alert-fanin: lagged by {} events", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("alert-fanin: lagged by {} events", n);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
+    }
+
+    /// Stop the handler by signaling the background task to shut down.
+    pub fn stop(&self) {
+        if let Some(tx) = self.shutdown_tx.write().take() {
+            let _ = tx.send(true);
+        }
     }
 }
 
 /// Scheduled task → backup trigger.
 pub struct SchedulerBackupHandler {
     bus: ShimBus,
+    shutdown_tx: Arc<RwLock<Option<watch::Sender<bool>>>>,
 }
 
 impl SchedulerBackupHandler {
     pub fn new(bus: ShimBus) -> Self {
-        Self { bus }
+        Self {
+            bus,
+            shutdown_tx: Arc::new(RwLock::new(None)),
+        }
     }
 
     /// Start listening for scheduler events and triggering backups.
     pub fn start(self: Arc<Self>) {
         let mut rx = self.bus.subscribe();
-        let handler = self.clone();
+        let handler = Arc::clone(&self);
+
+        let (tx, mut shutdown_rx) = watch::channel(false);
+        *self.shutdown_tx.write() = Some(tx);
 
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if let EventType::SchedulerTaskFired {
-                            task_name,
-                            schedule,
-                        } = &event.event
-                        {
-                            if task_name.contains("backup") || task_name.contains("daily") {
-                                info!(
-                                    "scheduler-backup: task '{}' fired ({}), triggering backup",
-                                    task_name, schedule
-                                );
-                                handler.bus.emit(
-                                    "backup-shim",
-                                    EventType::BackupStarted {
-                                        name: task_name.clone(),
-                                    },
-                                    Severity::Info,
-                                );
+                tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        info!("scheduler-backup: shutdown received");
+                        break;
+                    }
+                    result = rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                if let EventType::SchedulerTaskFired {
+                                    task_name,
+                                    schedule,
+                                } = &event.event
+                                {
+                                    if task_name.contains("backup") || task_name.contains("daily") {
+                                        info!(
+                                            "scheduler-backup: task '{}' fired ({}), triggering backup",
+                                            task_name, schedule
+                                        );
+                                        handler.bus.emit(
+                                            "backup-shim",
+                                            EventType::BackupStarted {
+                                                name: task_name.clone(),
+                                            },
+                                            Severity::Info,
+                                        );
+                                    }
+                                }
                             }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("scheduler-backup: lagged by {} events", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("scheduler-backup: lagged by {} events", n);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
+    }
+
+    /// Stop the handler by signaling the background task to shut down.
+    pub fn stop(&self) {
+        if let Some(tx) = self.shutdown_tx.write().take() {
+            let _ = tx.send(true);
+        }
     }
 }
 

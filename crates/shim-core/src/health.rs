@@ -201,16 +201,6 @@ pub fn startup_probe_from_env() -> StartupProbe {
 async fn execute_health_cmd(cmd: &str, timeout_secs: u64) -> HealthStatus {
     let timeout = std::time::Duration::from_secs(timeout_secs);
 
-    // Handle special commands
-    if let Some(exec_cmd) = cmd.strip_prefix("exec:") {
-        if exec_cmd == "true" {
-            return HealthStatus::Healthy;
-        }
-        if exec_cmd == "false" {
-            return HealthStatus::Unhealthy;
-        }
-    }
-
     // Handle TCP checks (with timeout)
     if let Some(addr) = cmd.strip_prefix("tcp:") {
         return match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr)).await {
@@ -294,6 +284,12 @@ async fn execute_health_cmd(cmd: &str, timeout_secs: u64) -> HealthStatus {
     }
     // Handle exec commands
     else if let Some(exec_cmd) = cmd.strip_prefix("exec:") {
+        if exec_cmd == "true" {
+            return HealthStatus::Healthy;
+        }
+        if exec_cmd == "false" {
+            return HealthStatus::Unhealthy;
+        }
         let result = tokio::time::timeout(
             timeout,
             tokio::process::Command::new("sh")

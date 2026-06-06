@@ -455,22 +455,25 @@ impl std::fmt::Display for ShutdownStrategy {
     }
 }
 
-impl ShutdownStrategy {
-    /// Create from a string (e.g., from env var).
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+impl std::str::FromStr for ShutdownStrategy {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "postgres" | "postgresql" | "pg" => Self::PostgresGraceful,
             "redis" => Self::RedisGraceful,
             _ => Self::GenericGraceful,
-        }
+        })
     }
+}
 
+impl ShutdownStrategy {
     /// Create from the `SHUTDOWN_STRATEGY` env var.
     pub fn from_env() -> Self {
-        Self::from_str(
-            &std::env::var("SHUTDOWN_STRATEGY").unwrap_or_else(|_| "generic".to_string()),
-        )
+        std::env::var("SHUTDOWN_STRATEGY")
+            .unwrap_or_else(|_| "generic".to_string())
+            .parse()
+            .unwrap_or_default()
     }
 
     /// Get the default timeout from `SHUTDOWN_TIMEOUT_SECS` env var.
@@ -748,27 +751,27 @@ mod tests {
     #[test]
     fn test_shutdown_strategy_from_str() {
         assert_eq!(
-            ShutdownStrategy::from_str("postgres"),
+            "postgres".parse::<ShutdownStrategy>().unwrap(),
             ShutdownStrategy::PostgresGraceful
         );
         assert_eq!(
-            ShutdownStrategy::from_str("postgresql"),
+            "postgresql".parse::<ShutdownStrategy>().unwrap(),
             ShutdownStrategy::PostgresGraceful
         );
         assert_eq!(
-            ShutdownStrategy::from_str("pg"),
+            "pg".parse::<ShutdownStrategy>().unwrap(),
             ShutdownStrategy::PostgresGraceful
         );
         assert_eq!(
-            ShutdownStrategy::from_str("redis"),
+            "redis".parse::<ShutdownStrategy>().unwrap(),
             ShutdownStrategy::RedisGraceful
         );
         assert_eq!(
-            ShutdownStrategy::from_str("generic"),
+            "generic".parse::<ShutdownStrategy>().unwrap(),
             ShutdownStrategy::GenericGraceful
         );
         assert_eq!(
-            ShutdownStrategy::from_str("bogus"),
+            "bogus".parse::<ShutdownStrategy>().unwrap(),
             ShutdownStrategy::GenericGraceful
         );
     }

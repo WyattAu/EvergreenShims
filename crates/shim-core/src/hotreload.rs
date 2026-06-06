@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::RwLock;
-use prometheus::{IntCounter, Opts, Registry};
+use prometheus::{Gauge, IntCounter, Opts, Registry};
 use tracing::{error, info, warn};
 
 use crate::config::{Config, ConfigValidationError};
@@ -27,7 +27,7 @@ pub struct ReloadMetrics {
     /// Total failed config reloads (parse or validation errors).
     pub reload_failed_total: IntCounter,
     /// Unix timestamp of the last successful reload.
-    pub reload_last_timestamp: IntCounter,
+    pub reload_last_timestamp: Gauge,
 }
 
 impl ReloadMetrics {
@@ -43,8 +43,8 @@ impl ReloadMetrics {
             "Total failed config reload attempts",
         ))
         .unwrap();
-        // Using IntCounter for timestamp — set to epoch seconds on each reload
-        let reload_last_timestamp = IntCounter::with_opts(Opts::new(
+        // Gauge holding epoch seconds — set directly on each reload
+        let reload_last_timestamp = Gauge::with_opts(Opts::new(
             "config_reload_last_timestamp",
             "Unix timestamp of the last successful config reload",
         ))
@@ -178,9 +178,7 @@ impl ConfigWatcher {
                                             .unwrap_or_default()
                                             .as_secs();
                                         // Reset and set to current timestamp
-                                        m.reload_last_timestamp.inc_by(
-                                            ts.saturating_sub(m.reload_last_timestamp.get()),
-                                        );
+                                        m.reload_last_timestamp.set(ts as f64);
                                     }
 
                                     if let Some(ref cb) = callback {
@@ -282,9 +280,7 @@ impl ConfigWatcher {
                                                 .duration_since(std::time::UNIX_EPOCH)
                                                 .unwrap_or_default()
                                                 .as_secs();
-                                            m.reload_last_timestamp.inc_by(
-                                                ts.saturating_sub(m.reload_last_timestamp.get()),
-                                            );
+                                            m.reload_last_timestamp.set(ts as f64);
                                         }
 
                                         if let Some(ref cb) = on_validated {
@@ -459,6 +455,176 @@ mod tests {
         config.health.listen = "not-an-address".into();
         let errors = validator(&config);
         assert!(!errors.is_empty());
+    }
+
+    // --- concurrency stress tests ---
+
+    #[test]
+    fn test_concurrent_config_read_write() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("shim.toml");
+        std::fs::write(&config_path, "[health]\nlisten = \"0.0.0.0:9200\"\n").unwrap();
+
+        let watcher = Arc::new(ConfigWatcher::new(&config_path));
+        let running = Arc::new(AtomicBool::new(true));
+        let read_count = Arc::new(AtomicUsize::new(0));
+
+        // Spawn reader threads
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let watcher = watcher.clone();
+            let running = running.clone();
+            let read_count = read_count.clone();
+            handles.push(std::thread::spawn(move || {
+                while running.load(Ordering::Relaxed) {
+                    let _cfg = watcher.config();
+                    read_count.fetch_add(1, Ordering::Relaxed);
+                    std::thread::yield_now();
+                }
+            }));
+        }
+
+        // Spawn writer thread that modifies the config file
+        {
+            let config_path = config_path.clone();
+            let running = running.clone();
+            handles.push(std::thread::spawn(move || {
+                for port in 9201..9210 {
+                    let content = format!("[health]\nlisten = \"0.0.0.0:{}\"\n", port);
+                    std::fs::write(&config_path, content).unwrap();
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                running.store(false, Ordering::Relaxed);
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Readers should have completed many reads without panicking
+        assert!(read_count.load(Ordering::Relaxed) > 10);
+    }
+
+    #[test]
+    fn test_concurrent_config_reload_and_read() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("shim.toml");
+        std::fs::write(&config_path, "[health]\nlisten = \"0.0.0.0:9200\"\n").unwrap();
+
+        let watcher = Arc::new(ConfigWatcher::new(&config_path));
+        let callback_count = Arc::new(AtomicUsize::new(0));
+
+        let callback_count_clone = callback_count.clone();
+        watcher.start_watching(Some(Arc::new(move |_config: &Config| {
+            callback_count_clone.fetch_add(1, Ordering::Relaxed);
+        })));
+
+        // Wait for watcher to initialize
+        std::thread::sleep(Duration::from_millis(200));
+
+        let running = Arc::new(AtomicBool::new(true));
+
+        // Spawn reader threads
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let watcher = watcher.clone();
+            let running = running.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut count = 0;
+                while running.load(Ordering::Relaxed) {
+                    let _cfg = watcher.config();
+                    count += 1;
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                count
+            }));
+        }
+
+        // Write multiple config changes
+        for port in 9300..9305 {
+            let content = format!("[health]\nlisten = \"0.0.0.0:{}\"\n", port);
+            std::fs::write(&config_path, content).unwrap();
+            std::thread::sleep(Duration::from_millis(800));
+        }
+
+        running.store(false, Ordering::Relaxed);
+
+        for h in handles {
+            let count = h.join().unwrap();
+            assert!(count > 0, "reader should have completed at least one read");
+        }
+
+        // Allow remaining reloads to settle
+        std::thread::sleep(Duration::from_millis(1000));
+        // Callback may or may not have fired depending on timing, but shouldn't panic
+    }
+
+    #[test]
+    fn test_concurrent_validate_and_read() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("shim.toml");
+        std::fs::write(&config_path, "[health]\nlisten = \"0.0.0.0:9200\"\n").unwrap();
+
+        let watcher = Arc::new(ConfigWatcher::new(&config_path));
+        let validator: ValidateCallback = Arc::new(|config: &Config| config.validate());
+        let running = Arc::new(AtomicBool::new(true));
+
+        let mut handles = Vec::new();
+
+        // Reader threads
+        for _ in 0..3 {
+            let watcher = watcher.clone();
+            let running = running.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut count = 0;
+                while running.load(Ordering::Relaxed) {
+                    let cfg = watcher.config();
+                    let errors = cfg.validate();
+                    assert!(errors.is_empty(), "default config should be valid");
+                    count += 1;
+                    std::thread::yield_now();
+                }
+                count
+            }));
+        }
+
+        // Validator thread
+        {
+            let watcher = watcher.clone();
+            let validator = validator.clone();
+            let running = running.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut count = 0;
+                while running.load(Ordering::Relaxed) {
+                    let cfg = watcher.config();
+                    let errors = validator(&cfg);
+                    // Config loaded from file should be valid
+                    assert!(errors.is_empty());
+                    count += 1;
+                    std::thread::yield_now();
+                }
+                count
+            }));
+        }
+
+        // Stop after a short burst
+        std::thread::sleep(Duration::from_millis(100));
+        running.store(false, Ordering::Relaxed);
+
+        for h in handles {
+            let count = h.join().unwrap();
+            assert!(count > 0);
+        }
     }
 
     #[test]

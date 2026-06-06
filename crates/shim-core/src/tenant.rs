@@ -4,6 +4,7 @@
 //! per-tenant metrics.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -11,11 +12,78 @@ use crate::config::{Config, TenantConfig};
 use crate::Metric;
 
 /// Per-tenant resource usage snapshot.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TenantUsage {
     pub memory_bytes: u64,
     pub cpu_percent: f64,
     pub requests_count: u64,
+    pub last_reset: Instant,
+}
+
+impl Serialize for TenantUsage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("TenantUsage", 3)?;
+        state.serialize_field("memory_bytes", &self.memory_bytes)?;
+        state.serialize_field("cpu_percent", &self.cpu_percent)?;
+        state.serialize_field("requests_count", &self.requests_count)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TenantUsage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{MapAccess, Visitor};
+        use std::fmt;
+
+        struct TenantUsageVisitor;
+
+        impl<'de> Visitor<'de> for TenantUsageVisitor {
+            type Value = TenantUsage;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct TenantUsage")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<TenantUsage, A::Error> {
+                let mut memory_bytes = None;
+                let mut cpu_percent = None;
+                let mut requests_count = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "memory_bytes" => memory_bytes = Some(map.next_value()?),
+                        "cpu_percent" => cpu_percent = Some(map.next_value()?),
+                        "requests_count" => requests_count = Some(map.next_value()?),
+                        _ => {
+                            let _ = map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                Ok(TenantUsage {
+                    memory_bytes: memory_bytes.unwrap_or_default(),
+                    cpu_percent: cpu_percent.unwrap_or_default(),
+                    requests_count: requests_count.unwrap_or_default(),
+                    last_reset: Instant::now(),
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["memory_bytes", "cpu_percent", "requests_count"];
+        deserializer.deserialize_struct("TenantUsage", FIELDS, TenantUsageVisitor)
+    }
+}
+
+impl Default for TenantUsage {
+    fn default() -> Self {
+        Self {
+            memory_bytes: 0,
+            cpu_percent: 0.0,
+            requests_count: 0,
+            last_reset: Instant::now(),
+        }
+    }
 }
 
 /// Per-tenant metrics returned by the isolator.
@@ -96,11 +164,37 @@ impl TenantIsolator {
             .requests_count += 1;
     }
 
+    /// Reset the request counter if the configured period has elapsed.
+    pub fn check_and_reset(&mut self, tenant_id: &str) {
+        let reset_period = self
+            .configs
+            .get(tenant_id)
+            .map(|c| c.reset_period_secs)
+            .unwrap_or(1);
+
+        if let Some(usage) = self.usage.get_mut(tenant_id) {
+            if usage.last_reset.elapsed().as_secs() >= reset_period {
+                usage.requests_count = 0;
+                usage.last_reset = Instant::now();
+            }
+        }
+    }
+
     /// Check if a request is allowed under the tenant's quota.
     /// Returns `true` if allowed, `false` if quota exceeded.
-    pub fn check_quota(&self, tenant_id: &str) -> bool {
+    pub fn check_quota(&mut self, tenant_id: &str) -> bool {
         if !self.global_enabled {
             return true;
+        }
+
+        // Reset request counter if period has elapsed
+        let has_rate_limit = self
+            .configs
+            .get(tenant_id)
+            .map(|c| c.max_requests_per_sec.is_some())
+            .unwrap_or(false);
+        if has_rate_limit {
+            self.check_and_reset(tenant_id);
         }
 
         let config = match self.configs.get(tenant_id) {
@@ -120,8 +214,6 @@ impl TenantIsolator {
                 }
             }
             if let Some(max_rps) = config.max_requests_per_sec {
-                // Simple per-interval check: if requests_count exceeds rate limit
-                // we treat it as exceeded (the caller should reset counters periodically).
                 if usage.requests_count > max_rps as u64 {
                     return false;
                 }
@@ -261,6 +353,7 @@ mod tests {
                     max_requests_per_sec: Some(100),
                     allowed_features: vec!["feature-x".into(), "feature-y".into()],
                     quota_config: ResourceQuota::default(),
+                    reset_period_secs: 1,
                 },
                 TenantConfig {
                     tenant_id: "tenant-b".into(),
@@ -269,6 +362,7 @@ mod tests {
                     max_requests_per_sec: None,
                     allowed_features: vec![],
                     quota_config: ResourceQuota::default(),
+                    reset_period_secs: 1,
                 },
             ],
             ..Config::default()
@@ -301,6 +395,7 @@ mod tests {
             max_requests_per_sec: None,
             allowed_features: vec![],
             quota_config: ResourceQuota::default(),
+            reset_period_secs: 1,
         });
         assert!(isolator.is_enabled());
         assert_eq!(isolator.tenant_count(), 1);

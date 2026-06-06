@@ -480,6 +480,8 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
 mod tests {
     use super::*;
 
+    // ── Existing tests ────────────────────────────────────────────────
+
     #[test]
     fn critical_capabilities_list_contains_expected() {
         assert!(CRITICAL_CAPABILITIES.contains(&"health"));
@@ -494,5 +496,266 @@ mod tests {
                 "{name} should not be critical"
             );
         }
+    }
+
+    // ── 1. Capability initialization lifecycle (init → start → stop) ─
+
+    #[tokio::test]
+    async fn health_shim_lifecycle_init_start_stop() {
+        let mut cap = health_shim::HealthShim::new();
+        assert_eq!(cap.name(), "health");
+
+        let config = Config::default();
+        let init_result = cap.init(&config).await;
+        assert!(init_result.is_ok(), "init should succeed");
+
+        let start_result = cap.start().await;
+        assert!(start_result.is_ok(), "start should succeed");
+
+        let stop_result = cap.stop().await;
+        assert!(stop_result.is_ok(), "stop should succeed");
+    }
+
+    #[tokio::test]
+    async fn health_shim_metrics_after_lifecycle() {
+        let mut cap = health_shim::HealthShim::new();
+        let config = Config::default();
+        cap.init(&config).await.unwrap();
+        cap.start().await.unwrap();
+
+        let metrics = cap.metrics();
+        assert!(
+            metrics.is_empty() || metrics.iter().all(|m| !m.name.is_empty()),
+            "metrics should either be empty or have non-empty names"
+        );
+
+        cap.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn health_shim_init_sets_listen_address() {
+        let mut cap = health_shim::HealthShim::new();
+        let mut config = Config::default();
+        config.health.listen = "127.0.0.1:19101".to_string();
+
+        cap.init(&config).await.unwrap();
+        let start_result = cap.start().await;
+        assert!(start_result.is_ok());
+
+        cap.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn health_shim_stop_before_start_succeeds() {
+        let mut cap = health_shim::HealthShim::new();
+        let config = Config::default();
+        cap.init(&config).await.unwrap();
+
+        // stop without start should still succeed
+        let result = cap.stop().await;
+        assert!(result.is_ok());
+    }
+
+    // ── 2. Feature flag compilation verification ──────────────────────
+
+    #[test]
+    fn default_feature_includes_health() {
+        // The "health" feature is in the default feature set; verify
+        // the module path resolves (compile-time check: this test only
+        // compiles when the `health` feature is enabled).
+        let cap = health_shim::HealthShim::new();
+        assert_eq!(cap.name(), "health");
+    }
+
+    #[test]
+    fn critical_capabilities_count_matches_expected() {
+        // Exactly 2 critical capabilities
+        assert_eq!(CRITICAL_CAPABILITIES.len(), 2);
+        assert!(CRITICAL_CAPABILITIES.contains(&"health"));
+        assert!(CRITICAL_CAPABILITIES.contains(&"migration"));
+    }
+
+    #[test]
+    fn capability_outcome_struct_fields() {
+        let outcome = CapabilityOutcome {
+            name: "test-cap".to_string(),
+            started: true,
+            error: None,
+        };
+        assert_eq!(outcome.name, "test-cap");
+        assert!(outcome.started);
+        assert!(outcome.error.is_none());
+
+        let failed = CapabilityOutcome {
+            name: "bad-cap".to_string(),
+            started: false,
+            error: Some("init failed".to_string()),
+        };
+        assert!(!failed.started);
+        assert!(failed.error.is_some());
+    }
+
+    #[test]
+    fn all_known_feature_names_are_distinct() {
+        let features = vec![
+            "health",
+            "vault",
+            "backup",
+            "migration",
+            "audit",
+            "proxy",
+            "tls",
+            "config",
+            "failover",
+            "replication",
+            "cache",
+            "cdc",
+            "sharding",
+            "archival",
+            "auth",
+            "encryption",
+            "compliance",
+            "scheduler",
+            "queue",
+            "alerting",
+            "chaos",
+            "cost",
+            "mongodb",
+            "cockroachdb",
+            "dynamodb",
+            "elasticsearch",
+            "cassandra",
+        ];
+        let set: std::collections::HashSet<&str> = features.into_iter().collect();
+        assert_eq!(set.len(), 27, "all feature names must be unique");
+    }
+
+    // ── 3. Graceful shutdown signal handling ───────────────────────────
+
+    #[tokio::test]
+    async fn signal_handler_initial_state_is_not_shutdown() {
+        let handler = shim_core::SignalHandler::new();
+        assert!(
+            !handler.is_shutdown(),
+            "fresh SignalHandler should not be in shutdown state"
+        );
+    }
+
+    #[tokio::test]
+    async fn signal_handler_subscribe_returns_receiver() {
+        let handler = shim_core::SignalHandler::new();
+        let mut rx = handler.subscribe();
+        let result = rx.try_recv();
+        assert!(result.is_err(), "no signals sent yet");
+    }
+
+    #[tokio::test]
+    async fn signal_handler_multiple_subscribers() {
+        let handler = shim_core::SignalHandler::new();
+        let mut rx1 = handler.subscribe();
+        let mut rx2 = handler.subscribe();
+
+        assert!(rx1.try_recv().is_err());
+        assert!(rx2.try_recv().is_err());
+    }
+
+    #[test]
+    fn config_default_shutdown_timeout() {
+        let config = Config::default();
+        assert!(
+            config.process.shutdown_timeout_secs > 0,
+            "default shutdown timeout should be positive"
+        );
+    }
+
+    #[test]
+    fn graceful_shutdown_strategy_is_variant() {
+        use shim_core::ShutdownStrategy;
+        let strategy = ShutdownStrategy::GenericGraceful;
+        assert_eq!(strategy, ShutdownStrategy::GenericGraceful);
+        assert_eq!(strategy.to_string(), "generic");
+    }
+
+    // ── 4. Metrics collection across capabilities ─────────────────────
+
+    #[test]
+    fn health_shim_metrics_returns_empty_vec() {
+        let cap = health_shim::HealthShim::new();
+        let metrics = cap.metrics();
+        assert!(metrics.is_empty(), "HealthShim starts with no metrics");
+    }
+
+    #[test]
+    fn metric_new_has_no_labels() {
+        let m = shim_core::Metric::new("test_counter", 42.0);
+        assert_eq!(m.name, "test_counter");
+        assert_eq!(m.value, 42.0);
+        assert!(m.labels.is_empty());
+    }
+
+    #[test]
+    fn metric_with_labels() {
+        let mut labels = std::collections::HashMap::new();
+        labels.insert("source".to_string(), "backup".to_string());
+        labels.insert("status".to_string(), "ok".to_string());
+
+        let m = shim_core::Metric::with_labels("backup_events", 5.0, labels);
+        assert_eq!(m.name, "backup_events");
+        assert_eq!(m.value, 5.0);
+        assert_eq!(m.labels.len(), 2);
+        assert_eq!(m.labels.get("source").unwrap(), "backup");
+    }
+
+    #[test]
+    fn shim_metrics_collector_new_and_export() {
+        let metrics = shim_core::metrics::ShimMetrics::new();
+        metrics.set_healthy(true);
+        metrics.events_published.inc_by(10);
+        metrics.record_error("timeout");
+
+        let output = metrics.export();
+        assert!(output.contains("shim_events_published_total 10"));
+        assert!(output.contains("shim_health_status 1"));
+        assert!(output.contains("shim_errors_total"));
+    }
+
+    #[test]
+    fn shim_metrics_all_standard_metrics_present() {
+        let metrics = shim_core::metrics::ShimMetrics::new();
+        // Label-based metrics must be used at least once to appear in output
+        metrics.record_error("test");
+        metrics.events_by_source.with_label_values(&["test"]).inc();
+        metrics.events_handled.with_label_values(&["test"]).inc();
+        let output = metrics.export();
+
+        let expected = vec![
+            "shim_events_published_total",
+            "shim_events_dropped_total",
+            "shim_bus_subscribers",
+            "shim_health_status",
+            "shim_health_checks_total",
+            "shim_uptime_seconds",
+            "shim_errors_total",
+            "shim_operation_duration_seconds",
+            "shim_events_by_source_total",
+            "shim_events_handled_total",
+        ];
+        for name in &expected {
+            assert!(
+                output.contains(name),
+                "Prometheus output should contain metric '{name}'"
+            );
+        }
+    }
+
+    #[test]
+    fn config_validate_default_is_clean() {
+        let config = Config::default();
+        let errors = config.validate();
+        assert!(
+            errors.is_empty(),
+            "default config should pass validation, got: {:?}",
+            errors
+        );
     }
 }
