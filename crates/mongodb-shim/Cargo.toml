@@ -1,0 +1,21 @@
+[package]
+name = "mongodb-shim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "MongoDB health checks, backup, and CDC"
+
+[dependencies]
+shim-core = { path = "../shim-core" }
+anyhow.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+prometheus.workspace = true
+
+[dev-dependencies]
+temp-env.workspace = true

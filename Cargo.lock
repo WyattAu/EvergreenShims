@@ -2639,6 +2639,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mongodb-shim"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "shim-core",
+ "temp-env",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
