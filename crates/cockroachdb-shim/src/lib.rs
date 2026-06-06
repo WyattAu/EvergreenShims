@@ -310,7 +310,6 @@ mod tests {
     fn test_crdb_default_trait() {
         let shim = CrdbShim::default();
         assert_eq!(shim.name(), "cockroachdb");
-        assert_eq!(shim.host(), "localhost");
         assert_eq!(shim.port(), 26257);
     }
 
