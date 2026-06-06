@@ -33,6 +33,9 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 tempfile.workspace = true
+redis.workspace = true
+sqlx.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
