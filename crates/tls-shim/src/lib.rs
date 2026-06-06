@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! TLS shim — automatic TLS certificate management.
 //!
 //! Obtains and renews TLS certificates from Let's Encrypt or an internal CA.
@@ -107,8 +106,11 @@ pub struct TlsShim {
     domain: String,
     email: String,
     renew_before_secs: u64,
+    #[allow(dead_code)]
     cert_file: Option<PathBuf>,
+    #[allow(dead_code)]
     key_file: Option<PathBuf>,
+    #[allow(dead_code)]
     listen: String,
     data_dir: PathBuf,
     min_version: TlsVersion,
@@ -631,6 +633,7 @@ impl Default for TlsShim {
 }
 
 /// PEM-encode DER bytes.
+#[allow(dead_code)]
 fn pem_encode(der: &[u8], label: &str) -> String {
     let b64 = base64_encode(der);
     let mut result = format!("-----BEGIN {}-----\n", label);
@@ -654,6 +657,7 @@ fn pem_decode(pem: &str, expected_label: &str) -> Option<Vec<u8>> {
 }
 
 /// Minimal base64 encode (no-std compatible, no external dep needed for this).
+#[allow(dead_code)]
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::with_capacity(data.len().div_ceil(3) * 4);

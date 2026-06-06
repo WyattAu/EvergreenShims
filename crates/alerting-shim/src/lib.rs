@@ -261,7 +261,13 @@ impl AlertingShim {
 
         if self.http_client.is_some() {
             for name in &target_names {
-                let webhook = self.webhooks.iter().find(|w| w.name == *name).unwrap();
+                let webhook = match self.webhooks.iter().find(|w| w.name == *name) {
+                    Some(w) => w,
+                    None => {
+                        tracing::warn!(webhook = %name, "Webhook not found, skipping");
+                        continue;
+                    }
+                };
                 let mut success = false;
                 for attempt in 0..=WEBHOOK_RETRY_COUNT {
                     if attempt > 0 {

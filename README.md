@@ -142,7 +142,7 @@ See [docs/building.md](docs/building.md) for full build instructions.
 
 ## Testing
 
-577 tests across 30 crates. Three tiers:
+757 tests across 32 crates. Three tiers:
 
 1. **Unit tests**: Per-crate, run with `cargo test --workspace`
 2. **Integration tests**: Docker Compose with PostgreSQL, MariaDB, Redis, Vault, MinIO

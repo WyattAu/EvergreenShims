@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! DynamoDB shim — health checks, backup, and cost tracking.
 //!
 //! ## Environment Variables

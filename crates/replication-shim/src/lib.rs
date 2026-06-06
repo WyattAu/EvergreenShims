@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Replication shim — database replication management.
 //!
 //! Manages primary-replica replication for PostgreSQL and MySQL.

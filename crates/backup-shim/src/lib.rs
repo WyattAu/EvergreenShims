@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Backup shim — automated database backups with S3 upload and retention.
 //!
 //! Supports PostgreSQL (pg_dump), MariaDB/MySQL (mysqldump),
@@ -28,6 +27,11 @@
 
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+
+/// Lock a mutex, recovering from poison if necessary.
+fn lock_mutex<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
 
 use aws_sdk_s3::Client as S3Client;
 use serde::{Deserialize, Serialize};
@@ -137,6 +141,7 @@ impl BackupState {
 pub struct BackupShim {
     schedule: String,
     storage: String,
+    #[allow(dead_code)]
     backup_path: String,
     prefix: String,
     retention_days: u32,
@@ -410,6 +415,7 @@ impl BackupShim {
     }
 
     /// Delete a backup from S3.
+    #[allow(dead_code)]
     async fn delete_from_s3(&self, filename: &str) -> anyhow::Result<()> {
         let client = self.build_s3_client().await?;
 
@@ -442,25 +448,25 @@ impl BackupShim {
 
     /// Clean up expired backups based on retention policy.
     pub fn cleanup_retention(&self) -> Vec<String> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_mutex(&self.state);
         state.cleanup_retention(self.retention_days)
     }
 
     /// Record a successful backup in history.
     pub fn record_backup(&self, filename: String, size_bytes: u64, checksum: String) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_mutex(&self.state);
         state.record_backup(filename, size_bytes, checksum);
     }
 
     /// Record a failed backup attempt.
     pub fn record_failure(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_mutex(&self.state);
         state.record_failure();
     }
 
     /// Get summary of backup history.
     pub fn history_summary(&self) -> (usize, u64, u64) {
-        let state = self.state.lock().unwrap();
+        let state = lock_mutex(&self.state);
         state.history_summary()
     }
 
@@ -655,7 +661,7 @@ impl BackupShim {
                         }
                     }
 
-                    let mut state = self.state.lock().unwrap();
+                    let mut state = lock_mutex(&self.state);
                     state.record_backup(filename.clone(), size, checksum);
                     tracing::info!("Backup completed: {} ({} bytes)", filename, size);
                     return Ok(());
@@ -668,7 +674,7 @@ impl BackupShim {
 
         // All retries exhausted
         let err = last_error.unwrap_or_else(|| anyhow::anyhow!("Backup failed after all retries"));
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_mutex(&self.state);
         state.record_failure();
         tracing::error!(
             "Backup failed after {} attempts: {}",
@@ -976,7 +982,7 @@ impl Capability for BackupShim {
     }
 
     fn metrics(&self) -> Vec<Metric> {
-        let state = self.state.lock().unwrap();
+        let state = lock_mutex(&self.state);
         let mut metrics = vec![
             Metric::new("backup_success_total", state.backup_success as f64),
             Metric::new("backup_failure_total", state.backup_failure as f64),

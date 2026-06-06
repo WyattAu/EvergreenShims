@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Cost shim — resource tracking per tenant.
 //!
 //! Tracks resource usage (CPU, memory, storage, I/O) per tenant for billing.
@@ -112,7 +111,9 @@ pub struct CostProjection {
 pub struct CostShim {
     enabled: bool,
     tenant_key: String,
+    #[allow(dead_code)]
     report_schedule: String,
+    #[allow(dead_code)]
     budget_default: f64,
     alert_threshold: f64,
     currency: String,

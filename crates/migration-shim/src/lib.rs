@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Migration shim — database schema migrations with rollback support.
 //!
 //! Runs SQL migration files from a directory in order, tracking applied
@@ -349,6 +348,7 @@ impl MigrationShim {
     }
 
     /// Execute a SQL statement via psql command.
+    #[allow(dead_code)]
     async fn execute_sql_via_psql(&self, sql: &str) -> anyhow::Result<()> {
         let output = tokio::process::Command::new("psql")
             .args([

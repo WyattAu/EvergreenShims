@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Sharding shim — automatic sharding for distributed databases.
 //!
 //! Routes queries to the correct shard based on a shard key.
@@ -71,6 +70,7 @@ pub struct ShardingShim {
     strategy: ShardingStrategy,
     shard_key: String,
     shard_count: u32,
+    #[allow(dead_code)]
     addresses: Vec<String>,
     vnodes: usize,
     shards: HashMap<u32, ShardMapping>,

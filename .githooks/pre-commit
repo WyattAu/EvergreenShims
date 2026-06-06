@@ -78,23 +78,38 @@ fi
 pass "Secret scanning"
 
 # Step 5: Check for accidental unwrap() in library code
-step "Checking for unwrap() in library code..."
+step "Checking for unwrap()/expect() in library code..."
 UNWRAP_FOUND=false
 for f in $(git diff --cached --name-only --diff-filter=ACM -- '*.rs' 2>/dev/null); do
     # Skip test files, benchmarks, and main.rs (binary entry points)
     if echo "$f" | grep -qE '(tests/|test_|benches/|main\.rs)'; then
         continue
     fi
-    if grep -n '\.unwrap()' "$f" 2>/dev/null | grep -v '#\[cfg(test)\]' | grep -v '//.*unwrap' | head -1 > /dev/null 2>&1; then
-        echo -e "${YELLOW}Warning: unwrap() found in $f${NC}"
-        grep -n '\.unwrap()' "$f" 2>/dev/null | grep -v '#\[cfg(test)\]' | grep -v '//.*unwrap' | head -5
+    if grep -nE '\.(unwrap|expect)\(' "$f" 2>/dev/null | grep -v '#\[cfg(test)\]' | grep -v '//.*unwrap' | grep -v '//.*expect' | head -1 > /dev/null 2>&1; then
+        echo -e "${YELLOW}Warning: unwrap()/expect() found in $f${NC}"
+        grep -nE '\.(unwrap|expect)\(' "$f" 2>/dev/null | grep -v '#\[cfg(test)\]' | grep -v '//.*unwrap' | grep -v '//.*expect' | head -5
         UNWRAP_FOUND=true
     fi
 done
 if [ "$UNWRAP_FOUND" = true ]; then
-    echo -e "${YELLOW}unwrap() detected in library code. Prefer ? operator or context(). Continuing...${NC}"
+    echo -e "${YELLOW}unwrap()/expect() detected in library code. Prefer ? operator or context(). Continuing...${NC}"
 fi
-pass "unwrap() check"
+pass "unwrap()/expect() check"
+
+# Step 6: Check for crate-level #![allow(dead_code)]
+step "Checking for crate-level dead_code suppression..."
+DEADCODE_FOUND=false
+for f in $(git diff --cached --name-only --diff-filter=ACM -- '*.rs' 2>/dev/null); do
+    if head -5 "$f" 2>/dev/null | grep -q '#!\[allow(dead_code)\]'; then
+        echo -e "${RED}Crate-level #![allow(dead_code)] found in $f${NC}"
+        echo -e "${RED}Use targeted #[allow(dead_code)] on specific items instead${NC}"
+        DEADCODE_FOUND=true
+    fi
+done
+if [ "$DEADCODE_FOUND" = true ]; then
+    fail "Crate-level #![allow(dead_code)] is not allowed. Use targeted annotations."
+fi
+pass "dead_code check"
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))

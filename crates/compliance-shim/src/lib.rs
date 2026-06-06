@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Compliance shim — CIS/STIG compliance checking.
 //!
 //! Checks database configuration against security benchmarks.
@@ -97,7 +96,9 @@ pub struct ComplianceReport {
 pub struct ComplianceShim {
     benchmark: String,
     db_type: String,
+    #[allow(dead_code)]
     report_format: String,
+    #[allow(dead_code)]
     output: String,
     min_severity: Severity,
     checks_passed: u64,

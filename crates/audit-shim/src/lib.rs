@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Audit shim — database query logging and SIEM export.
 //!
 //! Captures database queries and exports them to syslog, file, or webhook.
@@ -86,9 +85,11 @@ pub struct AuditShim {
     tables: Vec<String>,
     format: String,
     output: String,
+    #[allow(dead_code)]
     output_file: Option<String>,
     webhook_url: Option<String>,
     log_queries: bool,
+    #[allow(dead_code)]
     log_parameters: bool,
     min_duration_ms: u64,
     queries_logged: u64,

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Auth shim — authentication/authorization layer.
 //!
 //! Provides authentication and authorization for database connections
@@ -114,17 +113,23 @@ struct StoredToken {
     token_hash: String,
     user: String,
     role: Role,
+    #[allow(dead_code)]
     issued_at: String,
     expires_at: String,
+    #[allow(dead_code)]
     source_ip: Option<String>,
 }
 
 /// Auth shim.
 pub struct AuthShim {
     method: String,
+    #[allow(dead_code)]
     ldap_url: Option<String>,
+    #[allow(dead_code)]
     ldap_base: Option<String>,
+    #[allow(dead_code)]
     oauth_issuer: Option<String>,
+    #[allow(dead_code)]
     oauth_audience: Option<String>,
     token_expiry_secs: u64,
     max_failed_logins: u32,

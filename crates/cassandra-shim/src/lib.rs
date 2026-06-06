@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Cassandra shim — health checks and cluster monitoring.
 //!
 //! Uses nodetool for health checks and cluster topology queries.

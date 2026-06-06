@@ -106,7 +106,21 @@ pub struct EncryptionShim {
 }
 
 impl EncryptionShim {
+    /// Create a new `EncryptionShim` from environment variables.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the encryption key configuration is invalid (file unreadable,
+    /// invalid hex encoding, or wrong key length). Use [`try_new`] for
+    /// non-panicking construction.
     pub fn new() -> Self {
+        Self::try_new().expect("EncryptionShim configuration is invalid")
+    }
+
+    /// Create a new `EncryptionShim` from environment variables.
+    ///
+    /// Returns an error if the encryption key configuration is invalid.
+    pub fn try_new() -> anyhow::Result<Self> {
         let method_str =
             std::env::var("ENCRYPTION_METHOD").unwrap_or_else(|_| "aes-gcm".to_string());
         let method = method_str.parse().unwrap_or(EncryptionMethod::AesGcm);
@@ -122,36 +136,37 @@ impl EncryptionShim {
             shutdown_tx: None,
         };
 
-        shim.load_primary_key();
+        shim.load_primary_key()?;
         shim.load_previous_keys();
 
         if let Ok(aad) = std::env::var("ENCRYPTION_AAD") {
             shim.aad_prefix = Some(aad.into_bytes());
         }
 
-        shim
+        Ok(shim)
     }
 
-    fn load_primary_key(&mut self) {
+    fn load_primary_key(&mut self) -> anyhow::Result<()> {
         let key_id = std::env::var("ENCRYPTION_KEY_ID").unwrap_or_else(|_| "default".to_string());
 
         let material = if let Ok(key_path) = std::env::var("ENCRYPTION_KEY_PATH") {
-            std::fs::read(&key_path)
-                .unwrap_or_else(|e| panic!("Cannot read encryption key file {}: {}", key_path, e))
+            std::fs::read(&key_path).map_err(|e| {
+                anyhow::anyhow!("Cannot read encryption key file {}: {}", key_path, e)
+            })?
         } else if let Ok(hex_key) = std::env::var("ENCRYPTION_KEY") {
-            hex::decode(&hex_key).unwrap_or_else(|e| panic!("Invalid ENCRYPTION_KEY hex: {}", e))
+            hex::decode(&hex_key)
+                .map_err(|e| anyhow::anyhow!("Invalid ENCRYPTION_KEY hex: {}", e))?
         } else {
             tracing::warn!("No ENCRYPTION_KEY set, generating random key (dev mode)");
             random_bytes(KEY_SIZE)
         };
 
-        if material.len() != KEY_SIZE {
-            panic!(
-                "ENCRYPTION_KEY must be {} bytes, got {}",
-                KEY_SIZE,
-                material.len()
-            );
-        }
+        anyhow::ensure!(
+            material.len() == KEY_SIZE,
+            "ENCRYPTION_KEY must be {} bytes, got {}",
+            KEY_SIZE,
+            material.len()
+        );
 
         let key = EncryptionKey {
             id: key_id.clone(),
@@ -168,6 +183,8 @@ impl EncryptionShim {
             method = %self.method,
             "Encryption key loaded"
         );
+
+        Ok(())
     }
 
     fn load_previous_keys(&mut self) {

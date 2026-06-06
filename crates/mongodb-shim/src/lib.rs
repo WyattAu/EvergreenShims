@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! MongoDB shim — health checks, backup, and CDC for MongoDB.
 //!
 //! ## Environment Variables
@@ -42,6 +41,7 @@ pub struct MongoShim {
     database: String,
     backup_dir: String,
     backup_cmd: String,
+    #[allow(dead_code)]
     retention_days: u32,
     health_checks: u64,
     backup_success: u64,

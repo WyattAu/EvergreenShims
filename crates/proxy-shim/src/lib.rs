@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Proxy shim — connection pooling, retries, and circuit breaker.
 //!
 //! Sits between the application and database, providing:
@@ -125,7 +124,9 @@ struct ProxyState {
     target: String,
     max_connections: u32,
     min_idle: u32,
+    #[allow(dead_code)]
     max_lifetime_secs: u64,
+    #[allow(dead_code)]
     idle_timeout_secs: u64,
     connect_timeout: u64,
     retry_attempts: u32,

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Failover shim — automatic failover for HA databases.
 //!
 //! Monitors a primary database, detects failure, promotes a replica,
@@ -86,6 +85,7 @@ pub struct FailoverEvent {
 
 /// Patroni-specific replication info.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct PatroniReplicaInfo {
     client_addr: String,
     state: String,
@@ -101,6 +101,7 @@ struct PatroniReplicaInfo {
 
 /// Redis Sentinel master info.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 struct SentinelMasterInfo {
     ip: String,
     port: String,
@@ -165,6 +166,7 @@ async fn run_psql(
 }
 
 /// Parse replication lag from psql output. Returns seconds or None.
+#[allow(dead_code)]
 fn parse_replication_lag(lag_str: &str) -> Option<f64> {
     if lag_str.is_empty() || lag_str == "NULL" {
         return None;

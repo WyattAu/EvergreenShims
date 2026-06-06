@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Elasticsearch shim — health checks and snapshot management.
 //!
 //! ## Environment Variables

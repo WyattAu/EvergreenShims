@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! CockroachDB shim — health checks, topology awareness, and CDC.
 //!
 //! CockroachDB uses the PostgreSQL wire protocol, so health checks
