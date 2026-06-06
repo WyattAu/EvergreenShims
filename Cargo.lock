@@ -1226,6 +1226,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shim-core",
+ "sqlx",
  "tokio",
  "toml",
  "tracing",

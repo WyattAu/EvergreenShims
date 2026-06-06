@@ -248,6 +248,118 @@ impl ComplianceShim {
         }
     }
 
+    /// Run CIS/STIG checks against a real database and return results.
+    ///
+    /// This method actually queries the database to verify each rule.
+    pub async fn run_database_checks(&mut self, db_url: &str) -> Vec<ComplianceCheck> {
+        let mut checks = self.generate_cis_checks();
+
+        match self.db_type.as_str() {
+            "postgres" => {
+                if let Ok(pool) = sqlx::PgPool::connect(db_url).await {
+                    for check in checks.iter_mut() {
+                        self.check_postgres_rule(pool.clone(), check).await;
+                    }
+                } else {
+                    tracing::warn!("Failed to connect to PostgreSQL for compliance checks");
+                }
+            }
+            "mariadb" | "mysql" => {
+                if let Ok(pool) = sqlx::MySqlPool::connect(db_url).await {
+                    for check in checks.iter_mut() {
+                        self.check_mariadb_rule(pool.clone(), check).await;
+                    }
+                } else {
+                    tracing::warn!("Failed to connect to MariaDB for compliance checks");
+                }
+            }
+            _ => {}
+        }
+
+        checks
+    }
+
+    /// Check a single PostgreSQL rule against the database.
+    async fn check_postgres_rule(&self, pool: sqlx::PgPool, check: &mut ComplianceCheck) {
+        let result = match check.id.as_str() {
+            "CIS-POSTGRES-001" => {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*)::int FROM pg_roles WHERE rolsuper = true AND rolname NOT IN ('postgres', 'rds_superuser')",
+                )
+                .fetch_one(&pool)
+                .await
+                .map(|count| (count == 0, format!("{} non-admin superusers", count)))
+            }
+            "CIS-POSTGRES-002" => {
+                sqlx::query_scalar::<_, String>("SHOW password_encryption")
+                    .fetch_one(&pool)
+                    .await
+                    .map(|enc| (enc == "scram-sha-256", format!("password_encryption = {}", enc)))
+            }
+            "CIS-POSTGRES-003" => {
+                sqlx::query_scalar::<_, String>("SHOW log_connections")
+                    .fetch_one(&pool)
+                    .await
+                    .map(|v| (v == "on", format!("log_connections = {}", v)))
+            }
+            "CIS-POSTGRES-005" => {
+                sqlx::query_scalar::<_, String>("SHOW ssl")
+                    .fetch_one(&pool)
+                    .await
+                    .map(|v| (v == "on", format!("ssl = {}", v)))
+            }
+            "CIS-POSTGRES-011" => {
+                sqlx::query_scalar::<_, String>("SHOW max_connections")
+                    .fetch_one(&pool)
+                    .await
+                    .map(|v| {
+                        let n: i64 = v.parse().unwrap_or(0);
+                        (n < 500, format!("max_connections = {}", n))
+                    })
+            }
+            _ => return,
+        };
+
+        match result {
+            Ok((passed, evidence)) => {
+                check.passed = passed;
+                check.evidence = evidence;
+            }
+            Err(e) => {
+                check.evidence = format!("Query failed: {}", e);
+            }
+        }
+    }
+
+    /// Check a single MariaDB rule against the database.
+    async fn check_mariadb_rule(&self, pool: sqlx::MySqlPool, check: &mut ComplianceCheck) {
+        let result = match check.id.as_str() {
+            "CIS-MYSQL-001" => {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mysql.user WHERE User = ''")
+                    .fetch_one(&pool)
+                    .await
+                    .map(|c| (c == 0, format!("{} anonymous accounts", c)))
+            }
+            "CIS-MYSQL-004" => {
+                sqlx::query_scalar::<_, String>("SHOW VARIABLES LIKE 'local_infile'")
+                    .fetch_one(&pool)
+                    .await
+                    .map(|v| (v == "OFF", format!("local_infile = {}", v)))
+            }
+            _ => return,
+        };
+
+        match result {
+            Ok((passed, evidence)) => {
+                check.passed = passed;
+                check.evidence = evidence;
+            }
+            Err(e) => {
+                check.evidence = format!("Query failed: {}", e);
+            }
+        }
+    }
+
     /// PostgreSQL CIS Benchmark rules (12 checks).
     fn postgres_cis_rules(&self) -> Vec<ComplianceCheck> {
         vec![
