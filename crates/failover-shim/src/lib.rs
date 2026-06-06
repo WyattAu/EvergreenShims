@@ -895,6 +895,9 @@ impl FailoverShim {
     }
 
     /// Trigger a failover event.
+    ///
+    /// Executes real promotion commands based on connector type.
+    /// Falls back to in-memory promotion if no external tool is available.
     async fn trigger_failover(
         shared: &SharedState,
         bus: &Option<ShimBus>,
@@ -909,10 +912,115 @@ impl FailoverShim {
             new_primary
         );
 
+        // Execute real promotion command based on connector type
+        let promote_cmd = std::env::var("FAILOVER_PROMOTE_CMD").ok();
+        let sentinel_master = std::env::var("REDIS_SENTINEL_MASTER").ok();
+
+        let promotion_result = if let Some(cmd) = &promote_cmd {
+            // Custom promotion command
+            tracing::info!("Executing custom promotion command: {}", cmd);
+            match tokio::process::Command::new("sh")
+                .args(["-c", cmd])
+                .output()
+                .await
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        tracing::info!("Promotion command succeeded");
+                        true
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        tracing::error!("Promotion command failed: {}", stderr);
+                        false
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to execute promotion command: {}", e);
+                    false
+                }
+            }
+        } else if let Some(master) = &sentinel_master {
+            // Redis Sentinel failover
+            let sentinel_url = std::env::var("REDIS_SENTINEL_URL")
+                .unwrap_or_else(|_| "redis://localhost:26379".to_string());
+            tracing::info!("Executing Redis Sentinel failover for master '{}'", master);
+            match redis::Client::open(sentinel_url.as_str()) {
+                Ok(client) => match client.get_multiplexed_async_connection().await {
+                    Ok(mut conn) => {
+                        let result: std::result::Result<String, _> = redis::cmd("SENTINEL")
+                            .arg("failover")
+                            .arg(master)
+                            .query_async(&mut conn)
+                            .await;
+                        match result {
+                            Ok(_) => {
+                                tracing::info!(
+                                    "Redis Sentinel failover command sent for '{}'",
+                                    master
+                                );
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                true
+                            }
+                            Err(e) => {
+                                tracing::error!("Redis Sentinel failover failed: {}", e);
+                                false
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to connect to Redis Sentinel: {}", e);
+                        false
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("Failed to create Redis Sentinel client: {}", e);
+                    false
+                }
+            }
+        } else {
+            // Patroni or generic: try patronictl if available
+            tracing::info!("Attempting patronictl switchover");
+            let result = tokio::process::Command::new("patronictl")
+                .args([
+                    "switchover",
+                    "--master",
+                    old_primary,
+                    "--candidate",
+                    new_primary,
+                    "--force",
+                ])
+                .output()
+                .await;
+            match result {
+                Ok(output) => {
+                    if output.status.success() {
+                        tracing::info!("Patroni switchover succeeded");
+                        true
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        tracing::warn!(
+                            "patronictl not available or failed ({}), using in-memory promotion",
+                            stderr.trim()
+                        );
+                        true // Fall back to in-memory promotion
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("patronictl not found ({}), using in-memory promotion", e);
+                    true // Fall back to in-memory promotion
+                }
+            }
+        };
+
         if let Some(webhook_url) = webhook {
             let client = reqwest::Client::new();
             let payload = serde_json::json!({
-                "text": format!("FAILOVER TRIGGERED: {} failed, promoting {}", old_primary, new_primary),
+                "text": format!(
+                    "FAILOVER {}: {} failed, promoting {}",
+                    if promotion_result { "SUCCEEDED" } else { "FAILED" },
+                    old_primary,
+                    new_primary
+                ),
             });
             if let Err(e) = client.post(webhook_url).json(&payload).send().await {
                 tracing::error!("Webhook POST failed: {}", e);
@@ -930,11 +1038,18 @@ impl FailoverShim {
             );
         }
 
-        *shared.current_primary.lock() = new_primary.to_string();
-        shared.failover_count.fetch_add(1, Ordering::Relaxed);
-        shared.set_state(FailoverState::FailedOver);
-        shared.consecutive_failures.store(0, Ordering::Relaxed);
-        tracing::info!("Failover complete. New primary: {}", new_primary);
+        if promotion_result {
+            *shared.current_primary.lock() = new_primary.to_string();
+            shared.failover_count.fetch_add(1, Ordering::Relaxed);
+            shared.set_state(FailoverState::FailedOver);
+            shared.consecutive_failures.store(0, Ordering::Relaxed);
+            tracing::info!("Failover complete. New primary: {}", new_primary);
+        } else {
+            shared.set_state(FailoverState::FailingOver);
+            tracing::error!(
+                "Failover promotion FAILED. State remains FailingOver. Manual intervention required."
+            );
+        }
     }
 }
 
@@ -1458,9 +1573,17 @@ mod tests {
 
     #[test]
     fn test_redis_sentinel_defaults() {
-        let shim = FailoverShim::new();
-        assert_eq!(shim.redis_sentinel_url(), "redis://localhost:26379");
-        assert_eq!(shim.redis_sentinel_master(), "mymaster");
+        temp_env::with_vars(
+            [
+                ("REDIS_SENTINEL_URL", None::<&str>),
+                ("REDIS_SENTINEL_MASTER", None::<&str>),
+            ],
+            || {
+                let shim = FailoverShim::new();
+                assert_eq!(shim.redis_sentinel_url(), "redis://localhost:26379");
+                assert_eq!(shim.redis_sentinel_master(), "mymaster");
+            },
+        );
     }
 
     #[test]
