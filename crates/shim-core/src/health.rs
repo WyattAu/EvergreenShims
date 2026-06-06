@@ -232,6 +232,7 @@ async fn execute_health_cmd(cmd: &str, timeout_secs: u64) -> HealthStatus {
         }
         #[cfg(not(feature = "http"))]
         {
+            let _ = url; // Suppress unused variable warning when http feature is disabled
             tracing::warn!("HTTP health check requires 'http' feature");
             HealthStatus::Unknown
         }

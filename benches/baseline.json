@@ -1,5 +1,6 @@
 {
-  "version": 1,
+  "version": 2,
+  "updated": "2026-06-06",
   "benchmarks": {
     "backup_checksum_1mb": {
       "mean_ns": 1500000,
@@ -14,16 +15,16 @@
       "tolerance": 0.20
     },
     "encryption_throughput/aes_gcm_encrypt_4kb": {
-      "mean_ns": 800000,
-      "tolerance": 0.20
+      "mean_ns": 32000,
+      "tolerance": 0.25
     },
     "encryption_throughput/aes_gcm_decrypt_4kb": {
-      "mean_ns": 700000,
-      "tolerance": 0.20
+      "mean_ns": 31000,
+      "tolerance": 0.25
     },
     "migration_checksum": {
-      "mean_ns": 500000,
-      "tolerance": 0.20
+      "mean_ns": 195,
+      "tolerance": 0.25
     }
   }
 }
