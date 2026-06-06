@@ -24,11 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo check --workspace
 
   test:
@@ -36,11 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo test --workspace
 
   fmt:
@@ -48,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -59,13 +55,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   security-audit:
@@ -74,21 +68,36 @@ jobs:
     timeout-minutes: 5
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2.0.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: rustsec/audit-check@2a17c28b31e9c3c9e3e15947b8a751c26b21e37e # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny
+      - name: Check licenses
+        run: cargo deny check licenses
+      - name: Check advisories
+        run: cargo deny check advisories
+      - name: Check bans
+        run: cargo deny check bans
 
   benchmark-check:
     name: Benchmark Check
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build benchmarks
         run: cargo bench --package evergreen-benchmarks --no-run 2>&1
       - name: Run benchmarks (quick mode)
@@ -99,11 +108,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build benchmarks
         run: cargo bench --package evergreen-benchmarks --no-run 2>&1
       - name: Run benchmarks (quick mode) and save output
@@ -124,11 +131,12 @@ jobs:
               unit = parts[1]
               multipliers = {
                   'ns': 1,
-                  'µs': 1_000,
                   'us': 1_000,
                   'ms': 1_000_000,
                   's': 1_000_000_000,
               }
+              # Handle unicode micro sign
+              unit = unit.replace('\u00b5s', 'us')
               if unit in multipliers:
                   return value * multipliers[unit]
               return None
@@ -183,7 +191,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
