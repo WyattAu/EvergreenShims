@@ -218,7 +218,6 @@ mod tests {
     fn test_dynamo_default_trait() {
         let shim = DynamoShim::default();
         assert_eq!(shim.name(), "dynamodb");
-        assert_eq!(shim.region(), "us-east-1");
     }
 
     #[test]

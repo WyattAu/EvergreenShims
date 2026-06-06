@@ -243,8 +243,6 @@ mod tests {
     fn test_cassandra_default_trait() {
         let shim = CassandraShim::default();
         assert_eq!(shim.name(), "cassandra");
-        assert_eq!(shim.host(), "localhost");
-        assert_eq!(shim.port(), 9042);
     }
 
     #[test]

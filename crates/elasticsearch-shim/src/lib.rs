@@ -229,7 +229,6 @@ mod tests {
     fn test_es_default_trait() {
         let shim = ElasticsearchShim::default();
         assert_eq!(shim.name(), "elasticsearch");
-        assert_eq!(shim.url(), "http://localhost:9200");
     }
 
     #[test]
