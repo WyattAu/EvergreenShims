@@ -1,0 +1,22 @@
+[package]
+name = "cockroachdb-shim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "CockroachDB health checks and CDC awareness"
+
+[dependencies]
+shim-core = { path = "../shim-core" }
+anyhow.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+prometheus.workspace = true
+sqlx.workspace = true
+
+[dev-dependencies]
+temp-env.workspace = true

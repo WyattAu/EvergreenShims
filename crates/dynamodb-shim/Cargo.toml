@@ -1,0 +1,23 @@
+[package]
+name = "dynamodb-shim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "DynamoDB health checks, backup, and cost tracking"
+
+[dependencies]
+shim-core = { path = "../shim-core" }
+anyhow.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+prometheus.workspace = true
+aws-config.workspace = true
+aws-sdk-dynamodb = "1"
+
+[dev-dependencies]
+temp-env.workspace = true

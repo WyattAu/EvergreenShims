@@ -26,6 +26,10 @@ members = [
     "crates/evergreen-shim",
     "crates/integration-tests",
     "crates/mongodb-shim",
+    "crates/cockroachdb-shim",
+    "crates/dynamodb-shim",
+    "crates/elasticsearch-shim",
+    "crates/cassandra-shim",
 ]
 resolver = "2"
 

@@ -155,9 +155,17 @@ async fn test_patroni_connector_defaults() {
 async fn test_redis_sentinel_defaults() {
     use failover_shim::FailoverShim;
 
-    let shim = FailoverShim::new();
-    assert_eq!(shim.redis_sentinel_url(), "redis://localhost:26379");
-    assert_eq!(shim.redis_sentinel_master(), "mymaster");
+    temp_env::with_vars(
+        [
+            ("REDIS_SENTINEL_URL", None::<&str>),
+            ("REDIS_SENTINEL_MASTER", None::<&str>),
+        ],
+        || {
+            let shim = FailoverShim::new();
+            assert_eq!(shim.redis_sentinel_url(), "redis://localhost:26379");
+            assert_eq!(shim.redis_sentinel_master(), "mymaster");
+        },
+    );
 }
 
 /// Test graceful shutdown with generic shutdown handler.
