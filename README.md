@@ -12,8 +12,8 @@ Evergreen images manage themselves. A single Rust binary executes as PID 1 in a 
 ```
 FROM scratch
 
-/app/db-shim        (Rust, ~1MB)    PID 1 -- entry point
-/app/postgres       (application)   PID N -- child process
+/app/db-shim        (Rust, ~2.5MB)   PID 1 -- entry point
+/app/postgres       (application)     PID N -- child process
 
 Capabilities:
   Health probes:       /livez, /readyz, /metrics
@@ -142,7 +142,7 @@ See [docs/building.md](docs/building.md) for full build instructions.
 
 ## Testing
 
-757 tests across 32 crates. Three tiers:
+792 tests across 32 crates. Three tiers:
 
 1. **Unit tests**: Per-crate, run with `cargo test --workspace`
 2. **Integration tests**: Docker Compose with PostgreSQL, MariaDB, Redis, Vault, MinIO

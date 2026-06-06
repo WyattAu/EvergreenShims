@@ -16,7 +16,7 @@ Three tiers, executed in order of cost and scope:
 
 ## Unit Tests
 
-Per-crate `#[cfg(test)]` modules. 757 tests across 32 crates.
+Per-crate `#[cfg(test)]` modules. 792 tests across 32 crates.
 
 ```bash
 cargo test --workspace
@@ -34,26 +34,28 @@ cargo test --workspace
 
 | Crate | Tests | Focus |
 |-------|-------|-------|
-| shim-core | 78 | Bus, config, events, health, metrics, process, shutdown, signal, wiring |
-| integration-tests | 73 | Cross-shim event chains, real DB operations |
+| shim-core | 175 | Bus, config, events, health, metrics, process, shutdown, signal, wiring |
+| integration-tests | 87 | Cross-shim event chains, real DB operations |
 | proxy-shim | 25 | Circuit breaker, rate limiting, load balancing, routing |
-| tls-shim | 24 | ACME, self-signed, Vault PKI, PEM handling, cert validation |
-| migration-shim | 22 | Checksum, parsing, apply, rollback, multi-DB orchestration |
+| tls-shim | 33 | ACME, self-signed, Vault PKI, PEM handling, cert validation |
+| backup-shim | 31 | Checksum, S3 upload, retention, verification |
+| migration-shim | 30 | Checksum, parsing, apply, rollback, multi-DB orchestration |
+| chaos-shim | 32 | Fault injection, experiments, blast radius, orchestrator |
 | auth-shim | 22 | HMAC tokens, API keys, passwords, RBAC, lockout |
 | audit-shim | 21 | Disk persistence, log rotation, webhook, CEF format |
+| evergreen-shim | 21 | Binary lifecycle, feature flags, critical capabilities |
 | failover-shim | 19 | TCP/Patroni/RedisSentinel connectors, state machine |
 | replication-shim | 19 | Replica management, WAL tracking, state transitions |
-| chaos-shim | 19 | Fault injection, experiments, blast radius |
+| cost-shim | 26 | Budgets, billing, cost projection, optimizer |
 | cache-shim | 16 | LRU/LFU/FIFO eviction, TTL, prefix invalidation |
 | queue-shim | 16 | Worker pool, retry, dead-letter queue, timeout |
+| mongodb-shim | 16 | Health, backup, env overrides, serialization |
 | cockroachdb-shim | 15 | Connection strings, env overrides, metrics |
 | alerting-shim | 14 | Deduplication, backoff, severity routing |
-| cost-shim | 14 | Budgets, billing, cost projection, alerts |
 | cassandra-shim | 14 | Host/port/cluster config, JMX, serialization |
 | cdc-shim | 13 | WAL advancement, batch publishing, ring buffer |
 | scheduler-shim | 13 | Cron parsing, retry/jitter, task execution |
-| health-shim | 12 | HealthChecker, mock health checks, metrics, lifecycle |
-| mongodb-shim | 16 | Health, backup, env overrides, serialization |
+| health-shim | 20 | HealthChecker, mock health checks, metrics, lifecycle |
 | dynamodb-shim | 12 | Region/table, endpoint, metrics, serialization |
 | elasticsearch-shim | 11 | URL/index, snapshot repo, metrics, lifecycle |
 | compliance-shim | 12 | CIS/STIG rules, violation tracking, severity filtering |
@@ -61,6 +63,8 @@ cargo test --workspace
 | vault-shim | 10 | Defaults, env overrides, TLS skip verify, metrics |
 | config-shim | 11 | SHA-256 hashing, validation, backup, signal parsing |
 | sharding-shim | 12 | Hash ring, range, directory routing |
+| management-api | 5 | Status, metrics, capability listing |
+| benchmarks | 16 | Criterion output parsing, regression detection |
 
 ## Integration Tests
 
@@ -115,28 +119,29 @@ Fault injection via `chaos-shim`:
 
 ## Performance Baselines (from benchmarks)
 
-| Operation | Throughput |
-|-----------|------------|
-| SHA-256 checksum (1MB) | ~220ns |
-| Cache set (1K keys) | ~23ms |
-| Cache get (1K keys) | ~14ms |
-| AES-GCM encrypt (4KB) | ~52us |
-| AES-GCM decrypt (4KB) | ~53us |
-| Migration checksum | ~224ns |
+| Operation | Measured | Tolerance |
+|-----------|----------|-----------|
+| SHA-256 checksum (1MB) | ~1.5ms | 20% |
+| Cache set (1K keys) | ~5ms | 20% |
+| Cache get (1K keys) | ~3ms | 20% |
+| AES-GCM encrypt (4KB) | ~32us | 25% |
+| AES-GCM decrypt (4KB) | ~32us | 25% |
+| Migration checksum | ~195ns | 25% |
 
 ## CI/CD Pipeline
 
 GitHub Actions (`.github/workflows/ci.yml`):
 
-1. `cargo check --workspace`
-2. `cargo test --workspace`
-3. `cargo fmt --all -- --check`
-4. `cargo clippy --workspace --all-targets -- -D warnings`
-5. Security audit (rustsec/audit-check)
-6. Benchmark build verification
-7. Binary size threshold enforcement (500KB for health-shim)
+1. `cargo check --workspace` -- Compile verification
+2. `cargo test --workspace` -- Full test suite
+3. `cargo fmt --all -- --check` -- Formatting enforcement
+4. `cargo clippy --workspace --all-targets -- -D warnings` -- Lint enforcement
+5. `rustsec/audit-check` -- Known vulnerability scanning
+6. `cargo-deny` -- License, advisory, and ban checking
+7. Benchmark regression detection -- Performance regression gating
+8. Binary size threshold enforcement -- 3MB for health-shim (musl, stripped)
 
-## Pre-Commit Hook
+## Pre-Commit Hooks
 
 Local enforcement of formatting, linting, unit tests, and secret scanning:
 
@@ -145,4 +150,10 @@ Local enforcement of formatting, linting, unit tests, and secret scanning:
 # Configures core.hooksPath to .githooks/
 ```
 
-Hook runs: `cargo fmt --check` -> `cargo clippy -D warnings` -> `cargo test --workspace --lib` -> secret scan -> unwrap check.
+### Hooks
+
+| Hook | Purpose | Failure Mode |
+|------|---------|--------------|
+| `pre-commit` | fmt, clippy, unit tests, secret scan, unwrap detection, dead_code check | Hard fail (except unwrap warning) |
+| `commit-msg` | Conventional Commits format enforcement | Hard fail |
+| `pre-push` | Compile check, unit tests | Hard fail |

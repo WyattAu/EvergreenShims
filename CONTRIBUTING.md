@@ -16,7 +16,7 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-### Pre-Commit Hook
+### Pre-Commit Hooks
 
 The pre-commit hook enforces:
 
@@ -25,6 +25,17 @@ The pre-commit hook enforces:
 3. `cargo test --workspace --lib` (unit tests only)
 4. Secret scanning (hardcoded credentials detection)
 5. unwrap() detection in library code (warning only)
+6. Crate-level `#![allow(dead_code)]` detection
+
+The commit-msg hook enforces Conventional Commits format:
+
+```
+type(scope): description
+```
+
+Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+
+The pre-push hook runs a lightweight smoke test (compile check + unit tests) before pushing.
 
 ## Adding a Shim
 
