@@ -5,6 +5,7 @@
 
 mod backup;
 mod failover;
+mod graceful_degradation;
 mod vault;
 
 // ============================================================================

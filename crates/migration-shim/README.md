@@ -1,37 +1,28 @@
 # migration-shim
 
-Database schema migrations with rollback support.
+Database schema migrations with rollback support. Runs SQL migration files from a directory in order, tracking applied migrations in a `schema_migrations` table.
 
-## Features
+## Environment Variables
 
-- **SQL file-based** — Standard `.up.sql` / `.down.sql` files
-- **Version tracking** — Applied migrations stored in `_migrations` table
-- **Auto-migrate** — Run pending migrations on startup
-- **Multi-database** — PostgreSQL, MariaDB/MySQL
+| Variable | Description | Default |
+|---|---|---|
+| `MIGRATION_DIR` | Directory containing migration files | `/migrations` |
+| `MIGRATION_DATABASE` | Database name | — |
+| `MIGRATION_DB_HOST` | Database host | `127.0.0.1` |
+| `MIGRATION_DB_PORT` | Database port | `5432` |
+| `MIGRATION_DB_USER` | Database user | `postgres` |
+| `MIGRATION_DB_PASSWORD` | Database password | — |
+| `MIGRATION_DB_URL` | Full database URL (overrides host/port/user/password/name) | — |
+| `MIGRATION_AUTO_MIGRATE` | Auto-migrate on startup | `false` |
+| `MIGRATION_DB_TYPE` | Database type: `postgres`, `mysql` | — |
 
-## Migration Files
+## Migration File Naming
 
-```
-/migrations/
-  001_create_users.up.sql
-  001_create_users.down.sql
-  002_add_email_index.up.sql
-  002_add_email_index.down.sql
-```
-
-## Configuration
-
-### Environment Variables
-
-```bash
-MIGRATION_DIR="/migrations"              # Migration directory
-MIGRATION_DATABASE="mydb"                # Database name
-MIGRATION_DB_HOST="127.0.0.1"            # Database host
-MIGRATION_DB_PORT=5432                    # Database port
-MIGRATION_DB_USER="postgres"             # Database user
-MIGRATION_DB_PASSWORD="secret"           # Database password
-MIGRATION_AUTO_MIGRATE="true"            # Auto-migrate on startup
-MIGRATION_DB_TYPE="postgres"             # Database type
+```text
+001_create_users.up.sql
+001_create_users.down.sql
+002_add_email_index.up.sql
+002_add_email_index.down.sql
 ```
 
 ## Usage
@@ -41,14 +32,25 @@ use migration_shim::MigrationShim;
 use shim_core::Capability;
 
 let mut shim = MigrationShim::new();
+let config = shim_core::Config::default();
 shim.init(&config).await?;
-shim.start().await?;  // Runs migrations if auto_migrate=true
+shim.start().await?;
 ```
 
-## Metrics
+## Configuration Options
 
-| Metric | Description |
-|--------|-------------|
-| `migration_current_version` | Current schema version |
-| `migration_applied_total` | Total migrations applied |
-| `migration_last_success_timestamp` | Last successful migration |
+- Supports `postgres` and `mysql` database types.
+- Lock file (`.migration.lock`) prevents concurrent migrations.
+- Auto-migrate on startup via `MIGRATION_AUTO_MIGRATE=true`.
+
+## Metrics Exposed
+
+- `migration_applied_total` – Total migrations applied.
+- `migration_rolled_back_total` – Total rollbacks executed.
+- `migration_last_timestamp` – Unix timestamp of the last migration.
+
+## Testing
+
+```bash
+cargo test -p migration-shim
+```

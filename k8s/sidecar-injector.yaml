@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: evergreen-sidecar-injector
+  namespace: evergreen-system
+  labels:
+    app.kubernetes.io/name: evergreen-sidecar-injector
+    app.kubernetes.io/part-of: evergreen-shims
+    app.kubernetes.io/component: webhook
+spec:
+  selector:
+    app.kubernetes.io/name: evergreen-operator
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: 9443
+      protocol: TCP
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: evergreen-sidecar-injector
+  labels:
+    app.kubernetes.io/name: evergreen-sidecar-injector
+    app.kubernetes.io/part-of: evergreen-shims
+    app.kubernetes.io/component: webhook
+webhooks:
+  - name: sidecar-injector.evergreen.dev
+    admissionReviewVersions: ["v1", "v1beta1"]
+    sideEffects: None
+    failurePolicy: Fail
+    reinvocationPolicy: IfNeeded
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchExpressions:
+        - key: evergreen.dev/inject
+          operator: In
+          values: ["enabled"]
+    objectSelector:
+      matchExpressions:
+        - key: evergreen.dev/inject-sidecar
+          operator: NotIn
+          values: ["disabled"]
+    clientConfig:
+      service:
+        name: evergreen-sidecar-injector
+        namespace: evergreen-system
+        path: /inject-sidecar
+      # CA_BUNDLE is injected by cert-manager or the operator bootstrap
+      # For manual setup, replace with base64-encoded CA certificate
+      caBundle: Cg==
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: Namespaced
+    timeoutSeconds: 10
+    failurePolicy: Fail
+    sideEffects: None
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: evergreen-sidecar-config
+  namespace: evergreen-system
+  labels:
+    app.kubernetes.io/name: evergreen-sidecar-injector
+    app.kubernetes.io/part-of: evergreen-shims
+data:
+  sidecar.yaml: |
+    # Default sidecar injection configuration
+    container:
+      name: evergreen-shim
+      image: ghcr.io/wyattau/evergreen-shim:latest
+      imagePullPolicy: IfNotPresent
+      args:
+        - "run"
+        - "-f"
+        - "/etc/shim/config.toml"
+      ports:
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        - name: health
+          containerPort: 9091
+          protocol: TCP
+      env:
+        - name: SHIM_CONFIG_PATH
+          value: "/etc/shim/config.toml"
+      volumeMounts:
+        - name: shim-config
+          mountPath: /etc/shim
+          readOnly: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: health
+        initialDelaySeconds: 10
+        periodSeconds: 15
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: health
+        initialDelaySeconds: 5
+        periodSeconds: 10
+    volumes:
+      - name: shim-config
+        configMap:
+          name: shim-config
+          optional: true
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+      prometheus.io/path: "/metrics"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shim-config
+  namespace: evergreen-system
+  labels:
+    app.kubernetes.io/name: evergreen-shim
+    app.kubernetes.io/part-of: evergreen-shims
+data:
+  config.toml: |
+    # Default EvergreenShim configuration
+    [health]
+    enabled = true
+    interval_secs = 10
+
+    [process]
+    command = "echo"
+    args = ["hello from evergreen-shim"]

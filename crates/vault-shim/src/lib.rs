@@ -232,6 +232,25 @@ impl Capability for VaultShim {
     }
 
     async fn init(&mut self, config: &Config) -> Result<()> {
+        if shim_core::config::validation_enabled() {
+            let errors = config.validate();
+            let vault_errors: Vec<_> = errors
+                .iter()
+                .filter(|e| e.field.starts_with("vault."))
+                .collect();
+            if !vault_errors.is_empty() {
+                let msg = vault_errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(shim_core::Error::Config(format!(
+                    "vault config validation failed: {}",
+                    msg
+                )));
+            }
+        }
+
         // Override defaults with config
         if let Some(vault_config) = &config.vault {
             self.vault_addr = vault_config.addr.clone();

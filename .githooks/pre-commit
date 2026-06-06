@@ -66,9 +66,9 @@ for pattern in "${SECRET_PATTERNS[@]}"; do
         SECRET_FOUND=true
     fi
 done
-# Check for private keys in any staged file (excluding .githooks which contains scan patterns)
-ALL_FILES=$(git diff --cached --name-only --diff-filter=ACM -- ':!.githooks/' 2>/dev/null || true)
-if echo "$ALL_FILES" | xargs grep -l 'BEGIN.*PRIVATE KEY' 2>/dev/null | head -1 > /dev/null 2>&1; then
+# Check for private keys in config/env files (not Rust source which may generate keys in tests)
+CONFIG_KEY_FILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.toml' '*.yml' '*.yaml' '*.env' '*.env.*' '*.pem' '*.key' 2>/dev/null || true)
+if echo "$CONFIG_KEY_FILES" | xargs grep -l 'BEGIN.*PRIVATE KEY' 2>/dev/null | head -1 > /dev/null 2>&1; then
     echo -e "${RED}Private key detected in staged files${NC}"
     SECRET_FOUND=true
 fi

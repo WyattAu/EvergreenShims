@@ -16,6 +16,10 @@ prometheus.workspace = true
 axum.workspace = true
 tower.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 temp-env.workspace = true
+tempfile.workspace = true

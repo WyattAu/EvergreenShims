@@ -10,6 +10,8 @@ description = "Core types and traits for EvergreenShims"
 default = ["http"]
 http = ["dep:reqwest"]
 redis-bus = ["dep:redis"]
+otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+wasm = []
 
 [dependencies]
 anyhow.workspace = true
@@ -30,6 +32,11 @@ axum.workspace = true
 notify = "7"
 reqwest = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

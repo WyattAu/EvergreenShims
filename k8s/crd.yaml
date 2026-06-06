@@ -1,0 +1,155 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: shimconfigs.evergreen.dev
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: evergreen.dev
+  names:
+    kind: ShimConfig
+    listKind: ShimConfigList
+    plural: shimconfigs
+    singular: shimconfig
+    shortNames:
+      - sc
+      - shimcfg
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Child Command
+          type: string
+          jsonPath: .spec.childCommand
+        - name: Features
+          type: string
+          jsonPath: .spec.features
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: ShimConfig defines the configuration for an EvergreenShim sidecar.
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: Desired state of the ShimConfig
+              required:
+                - childCommand
+              properties:
+                shimConfig:
+                  type: object
+                  description: General shim configuration options
+                  properties:
+                    logLevel:
+                      type: string
+                      enum: ["debug", "info", "warn", "error"]
+                      default: "info"
+                      description: Logging level for the shim
+                    jsonLogging:
+                      type: boolean
+                      default: false
+                      description: Enable JSON structured logging
+                    metricsPort:
+                      type: integer
+                      minimum: 1024
+                      maximum: 65535
+                      default: 9090
+                      description: Port for Prometheus metrics endpoint
+                    healthPort:
+                      type: integer
+                      minimum: 1024
+                      maximum: 65535
+                      default: 9091
+                      description: Port for health check endpoint
+                    otelEndpoint:
+                      type: string
+                      description: OpenTelemetry OTLP endpoint (e.g., http://localhost:4317)
+                childCommand:
+                  type: string
+                  description: Command to run as the child process
+                childArgs:
+                  type: array
+                  items:
+                    type: string
+                  default: []
+                  description: Arguments for the child process
+                features:
+                  type: array
+                  items:
+                    type: string
+                  default: []
+                  description: List of shim features to enable (e.g., health, vault, backup)
+                resources:
+                  type: object
+                  description: Resource requirements for the shim sidecar
+                  properties:
+                    requests:
+                      type: object
+                      description: Minimum resources required
+                      properties:
+                        cpu:
+                          type: string
+                          description: CPU request (e.g., "100m", "0.5")
+                        memory:
+                          type: string
+                          description: Memory request (e.g., "128Mi", "1Gi")
+                    limits:
+                      type: object
+                      description: Maximum resources allowed
+                      properties:
+                        cpu:
+                          type: string
+                          description: CPU limit (e.g., "500m", "2")
+                        memory:
+                          type: string
+                          description: Memory limit (e.g., "256Mi", "2Gi")
+            status:
+              type: object
+              description: Observed state of the ShimConfig
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                readyReplicas:
+                  type: integer
+                  description: Number of ready shim replicas
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: Latest observed generation
+      additionalPrinterColumns:
+        - name: Child Command
+          type: string
+          jsonPath: .spec.childCommand
+        - name: Features
+          type: string
+          jsonPath: .spec.features
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

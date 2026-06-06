@@ -476,6 +476,259 @@ impl ChaosShim {
     }
 }
 
+// =========================================================================
+// Chaos Orchestrator
+// =========================================================================
+
+/// Schedule for an experiment (cron-like).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExperimentSchedule {
+    /// Cron expression (5-field: minute hour day month weekday).
+    pub cron: String,
+    /// Maximum number of times this experiment can run.
+    #[serde(default = "default_max_runs")]
+    pub max_runs: Option<u32>,
+    /// How many times it has run so far.
+    #[serde(default)]
+    pub run_count: u32,
+}
+
+fn default_max_runs() -> Option<u32> {
+    None
+}
+
+/// Record of a completed experiment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExperimentResult {
+    pub experiment_id: String,
+    pub name: String,
+    pub fault_type: FaultType,
+    pub target: String,
+    pub started_at: String,
+    pub ended_at: String,
+    pub faults_injected: u64,
+    pub success: bool,
+}
+
+/// Orchestrator that manages multiple chaos experiments across targets.
+pub struct ChaosOrchestrator {
+    enabled: bool,
+    active_experiments: HashMap<String, ChaosExperiment>,
+    experiment_history: Vec<ExperimentResult>,
+    schedules: HashMap<String, ExperimentSchedule>,
+    experiment_counter: u64,
+    total_faults_injected: u64,
+    blast_radius_limit: f64,
+}
+
+impl ChaosOrchestrator {
+    pub fn new() -> Self {
+        Self {
+            enabled: std::env::var("CHAOS_ORCHESTRATOR_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            active_experiments: HashMap::new(),
+            experiment_history: Vec::new(),
+            schedules: HashMap::new(),
+            experiment_counter: 0,
+            total_faults_injected: 0,
+            blast_radius_limit: 1.0,
+        }
+    }
+
+    /// Set the global blast radius limit (0.0-1.0).
+    pub fn set_blast_radius_limit(&mut self, limit: f64) {
+        self.blast_radius_limit = limit.clamp(0.0, 1.0);
+    }
+
+    /// Start a new experiment.
+    pub fn start_experiment(
+        &mut self,
+        name: &str,
+        fault_type: FaultType,
+        target: &str,
+        blast_radius: f64,
+        duration_secs: u64,
+    ) -> std::result::Result<String, String> {
+        if !self.enabled {
+            return Err("Orchestrator is disabled".into());
+        }
+
+        let effective_blast_radius = blast_radius.min(self.blast_radius_limit);
+
+        self.experiment_counter += 1;
+        let id = format!("orch-exp-{:04}", self.experiment_counter);
+
+        let experiment = ChaosExperiment {
+            id: id.clone(),
+            name: name.to_string(),
+            fault_type: fault_type.clone(),
+            enabled: true,
+            target: target.to_string(),
+            blast_radius: effective_blast_radius,
+            duration_secs,
+            started_at: Some(Utc::now().to_rfc3339()),
+            ended_at: None,
+            faults_injected: 0,
+        };
+
+        self.active_experiments.insert(id.clone(), experiment);
+        tracing::info!(
+            "Orchestrator started experiment '{}' (id={}, fault={}, target={}, blast_radius={})",
+            name,
+            id,
+            fault_type,
+            target,
+            effective_blast_radius
+        );
+
+        Ok(id)
+    }
+
+    /// Stop an active experiment by ID.
+    pub fn stop_experiment(&mut self, id: &str) -> bool {
+        if let Some(exp) = self.active_experiments.get_mut(id) {
+            exp.enabled = false;
+            exp.ended_at = Some(Utc::now().to_rfc3339());
+            tracing::info!("Orchestrator stopped experiment '{}' (id={})", exp.name, id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Stop all active experiments.
+    pub fn stop_all(&mut self) {
+        let ids: Vec<String> = self.active_experiments.keys().cloned().collect();
+        for id in &ids {
+            self.stop_experiment(id);
+        }
+    }
+
+    /// Finalize a completed experiment and move it to history.
+    pub fn complete_experiment(&mut self, id: &str, success: bool) -> bool {
+        let exp = match self.active_experiments.remove(id) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        let result = ExperimentResult {
+            experiment_id: exp.id.clone(),
+            name: exp.name,
+            fault_type: exp.fault_type,
+            target: exp.target,
+            started_at: exp.started_at.unwrap_or_default(),
+            ended_at: exp.ended_at.unwrap_or_else(|| Utc::now().to_rfc3339()),
+            faults_injected: exp.faults_injected,
+            success,
+        };
+
+        self.total_faults_injected += result.faults_injected;
+        self.experiment_history.push(result);
+        true
+    }
+
+    /// Register a schedule for an experiment.
+    pub fn register_schedule(&mut self, experiment_id: &str, cron: &str, max_runs: Option<u32>) {
+        self.schedules.insert(
+            experiment_id.to_string(),
+            ExperimentSchedule {
+                cron: cron.to_string(),
+                max_runs,
+                run_count: 0,
+            },
+        );
+    }
+
+    /// Check if a scheduled experiment can run (hasn't exceeded max_runs).
+    pub fn can_run_scheduled(&self, experiment_id: &str) -> bool {
+        match self.schedules.get(experiment_id) {
+            Some(schedule) => {
+                schedule.max_runs.is_none() || schedule.run_count < schedule.max_runs.unwrap()
+            }
+            None => false,
+        }
+    }
+
+    /// Record that a scheduled experiment ran.
+    pub fn record_scheduled_run(&mut self, experiment_id: &str) {
+        if let Some(schedule) = self.schedules.get_mut(experiment_id) {
+            schedule.run_count += 1;
+        }
+    }
+
+    /// Get the number of active experiments.
+    pub fn active_count(&self) -> usize {
+        self.active_experiments.len()
+    }
+
+    /// Get the number of completed experiments.
+    pub fn completed_count(&self) -> usize {
+        self.experiment_history.len()
+    }
+
+    /// Get total faults injected across all experiments.
+    pub fn total_faults_injected(&self) -> u64 {
+        self.total_faults_injected
+    }
+
+    /// Get a reference to an active experiment.
+    pub fn get_experiment(&self, id: &str) -> Option<&ChaosExperiment> {
+        self.active_experiments.get(id)
+    }
+
+    /// Get experiment history.
+    pub fn history(&self) -> &[ExperimentResult] {
+        &self.experiment_history
+    }
+
+    /// Check if the orchestrator is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable or disable the orchestrator.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Stop expired experiments and move them to history.
+    pub fn tick(&mut self) {
+        let now = Utc::now();
+        let expired_ids: Vec<String> = self
+            .active_experiments
+            .iter()
+            .filter(|(_, exp)| {
+                exp.enabled
+                    && exp
+                        .started_at
+                        .as_ref()
+                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                        .map(|started| {
+                            now.signed_duration_since(started.with_timezone(&Utc))
+                                >= Duration::seconds(exp.duration_secs as i64)
+                        })
+                        .unwrap_or(false)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in &expired_ids {
+            if let Some(exp) = self.active_experiments.get_mut(id) {
+                exp.enabled = false;
+                exp.ended_at = Some(now.to_rfc3339());
+            }
+            self.complete_experiment(id, true);
+        }
+    }
+}
+
+impl Default for ChaosOrchestrator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Generate a short UUID-like identifier for rule tracking.
 fn uuid_short() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -773,5 +1026,188 @@ mod tests {
             ..ChaosShim::new()
         };
         assert!(!shim.is_active());
+    }
+
+    // --- ChaosOrchestrator tests ---
+
+    #[test]
+    fn test_orchestrator_default_disabled() {
+        let orch = ChaosOrchestrator::new();
+        assert!(!orch.is_enabled());
+        assert_eq!(orch.active_count(), 0);
+        assert_eq!(orch.completed_count(), 0);
+    }
+
+    #[test]
+    fn test_orchestrator_start_experiment_disabled() {
+        let mut orch = ChaosOrchestrator::new();
+        let result = orch.start_experiment("test", FaultType::Latency, "all", 0.5, 60);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Orchestrator is disabled");
+    }
+
+    #[test]
+    fn test_orchestrator_start_experiment_enabled() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+        let result =
+            orch.start_experiment("test-latency", FaultType::Latency, "service-a", 0.5, 60);
+        assert!(result.is_ok());
+        let id = result.unwrap();
+        assert!(id.starts_with("orch-exp-"));
+        assert_eq!(orch.active_count(), 1);
+
+        let exp = orch.get_experiment(&id).unwrap();
+        assert_eq!(exp.name, "test-latency");
+        assert_eq!(exp.fault_type, FaultType::Latency);
+        assert_eq!(exp.target, "service-a");
+        assert!((exp.blast_radius - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_orchestrator_blast_radius_capped() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+        orch.set_blast_radius_limit(0.3);
+        let id = orch
+            .start_experiment("test", FaultType::Error, "all", 0.9, 60)
+            .unwrap();
+        let exp = orch.get_experiment(&id).unwrap();
+        assert!((exp.blast_radius - 0.3).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_orchestrator_stop_experiment() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+        let id = orch
+            .start_experiment("test", FaultType::Latency, "all", 1.0, 60)
+            .unwrap();
+        assert!(orch.stop_experiment(&id));
+        assert!(!orch.get_experiment(&id).unwrap().enabled);
+        assert!(orch.get_experiment(&id).unwrap().ended_at.is_some());
+    }
+
+    #[test]
+    fn test_orchestrator_stop_all() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+        orch.start_experiment("exp1", FaultType::Latency, "all", 1.0, 60)
+            .unwrap();
+        orch.start_experiment("exp2", FaultType::Error, "all", 1.0, 60)
+            .unwrap();
+        assert_eq!(orch.active_count(), 2);
+
+        orch.stop_all();
+        // Experiments are still in active map, just disabled
+        for exp in orch.active_experiments.values() {
+            assert!(!exp.enabled);
+        }
+    }
+
+    #[test]
+    fn test_orchestrator_complete_experiment() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+        let id = orch
+            .start_experiment("test", FaultType::Partition, "db-1", 1.0, 30)
+            .unwrap();
+        assert!(orch.complete_experiment(&id, true));
+        assert_eq!(orch.active_count(), 0);
+        assert_eq!(orch.completed_count(), 1);
+        assert_eq!(orch.history()[0].experiment_id, id);
+        assert!(orch.history()[0].success);
+    }
+
+    #[test]
+    fn test_orchestrator_complete_nonexistent() {
+        let mut orch = ChaosOrchestrator::new();
+        assert!(!orch.complete_experiment("nonexistent", true));
+    }
+
+    #[test]
+    fn test_orchestrator_schedules() {
+        let mut orch = ChaosOrchestrator::new();
+        orch.register_schedule("exp-1", "0 */6 * * *", Some(3));
+
+        assert!(orch.can_run_scheduled("exp-1"));
+        assert!(!orch.can_run_scheduled("nonexistent"));
+
+        orch.record_scheduled_run("exp-1");
+        orch.record_scheduled_run("exp-1");
+        assert!(orch.can_run_scheduled("exp-1"));
+
+        orch.record_scheduled_run("exp-1");
+        assert!(!orch.can_run_scheduled("exp-1"));
+    }
+
+    #[test]
+    fn test_orchestrator_tick_expires() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+        // duration_secs = 0 means already expired
+        let id = orch
+            .start_experiment("expired", FaultType::Latency, "all", 1.0, 0)
+            .unwrap();
+
+        orch.tick();
+        assert_eq!(orch.active_count(), 0);
+        assert_eq!(orch.completed_count(), 1);
+        assert_eq!(orch.history()[0].experiment_id, id);
+    }
+
+    #[test]
+    fn test_orchestrator_total_faults() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            total_faults_injected: 5,
+            ..ChaosOrchestrator::new()
+        };
+        let id = orch
+            .start_experiment("test", FaultType::Latency, "all", 1.0, 60)
+            .unwrap();
+        // Manually set faults on the experiment
+        orch.active_experiments
+            .get_mut(&id)
+            .unwrap()
+            .faults_injected = 10;
+        orch.complete_experiment(&id, true);
+
+        assert_eq!(orch.total_faults_injected(), 15);
+    }
+
+    #[test]
+    fn test_orchestrator_set_enabled() {
+        let mut orch = ChaosOrchestrator::new();
+        assert!(!orch.is_enabled());
+        orch.set_enabled(true);
+        assert!(orch.is_enabled());
+    }
+
+    #[test]
+    fn test_orchestrator_experiment_counter_increments() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+        let id1 = orch
+            .start_experiment("a", FaultType::Latency, "all", 1.0, 60)
+            .unwrap();
+        let id2 = orch
+            .start_experiment("b", FaultType::Error, "all", 1.0, 60)
+            .unwrap();
+        assert_ne!(id1, id2);
     }
 }

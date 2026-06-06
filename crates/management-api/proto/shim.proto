@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package evergreen.shim;
+
+// ShimManagementService provides gRPC API for managing EvergreenShim instances.
+service ShimManagementService {
+  // GetStatus returns the current health status and version of the shim.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+
+  // GetMetrics returns all collected metrics from the shim.
+  rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
+
+  // ReloadConfig triggers a hot-reload of the shim configuration.
+  rpc ReloadConfig(ReloadConfigRequest) returns (ReloadConfigResponse);
+
+  // ListCapabilities returns all enabled capabilities on the shim.
+  rpc ListCapabilities(ListCapabilitiesRequest) returns (ListCapabilitiesResponse);
+}
+
+// Health status of the shim
+enum HealthStatus {
+  HEALTH_STATUS_UNSPECIFIED = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_DEGRADED = 2;
+  HEALTH_STATUS_UNHEALTHY = 3;
+}
+
+// GetStatus
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  HealthStatus health = 1;
+  string version = 2;
+  string uptime_seconds = 3;
+  repeated CapabilityStatus capabilities = 4;
+}
+
+message CapabilityStatus {
+  string name = 1;
+  bool enabled = 2;
+  bool healthy = 3;
+  string last_error = 4;
+}
+
+// GetMetrics
+message GetMetricsRequest {}
+
+message GetMetricsResponse {
+  repeated Metric metrics = 1;
+}
+
+message Metric {
+  string name = 1;
+  double value = 2;
+  map<string, string> labels = 3;
+  MetricType type = 4;
+}
+
+enum MetricType {
+  METRIC_TYPE_UNSPECIFIED = 0;
+  METRIC_TYPE_COUNTER = 1;
+  METRIC_TYPE_GAUGE = 2;
+  METRIC_TYPE_HISTOGRAM = 3;
+  METRIC_TYPE_SUMMARY = 4;
+}
+
+// ReloadConfig
+message ReloadConfigRequest {
+  // Optional: path to new config file. If empty, reloads current config.
+  string config_path = 1;
+}
+
+message ReloadConfigResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string warnings = 3;
+}
+
+// ListCapabilities
+message ListCapabilitiesRequest {}
+
+message ListCapabilitiesResponse {
+  repeated CapabilityInfo capabilities = 1;
+}
+
+message CapabilityInfo {
+  string name = 1;
+  bool enabled = 2;
+  string version = 3;
+  repeated string dependencies = 4;
+  map<string, string> metadata = 5;
+}

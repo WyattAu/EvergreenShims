@@ -10,6 +10,8 @@ backup-shim = { path = "../backup-shim" }
 cache-shim = { path = "../cache-shim" }
 encryption-shim = { path = "../encryption-shim" }
 migration-shim = { path = "../migration-shim" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 criterion = { workspace = true }

@@ -279,6 +279,304 @@ impl CostShim {
     }
 }
 
+// =========================================================================
+// Cost Optimizer
+// =========================================================================
+
+/// Type of optimization recommendation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum RecommendationType {
+    /// Resource is underutilized and can be downsized.
+    RightSizeDown,
+    /// Resource is overutilized and should be upsized.
+    RightSizeUp,
+    /// Resource appears idle and could be shut down.
+    IdleResource,
+    /// Reserved capacity would save money.
+    ReservedCapacity,
+}
+
+impl std::fmt::Display for RecommendationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RightSizeDown => write!(f, "right_size_down"),
+            Self::RightSizeUp => write!(f, "right_size_up"),
+            Self::IdleResource => write!(f, "idle_resource"),
+            Self::ReservedCapacity => write!(f, "reserved_capacity"),
+        }
+    }
+}
+
+/// A single cost optimization recommendation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostRecommendation {
+    pub resource_id: String,
+    pub recommendation_type: RecommendationType,
+    pub description: String,
+    pub current_value: f64,
+    pub suggested_value: f64,
+    pub unit: String,
+    pub estimated_savings_monthly: f64,
+    pub severity: String,
+}
+
+/// Resource usage data point for time-series analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageDataPoint {
+    pub resource_id: String,
+    pub metric_name: String,
+    pub value: f64,
+    pub recorded_at: String,
+}
+
+/// Analyzes resource usage patterns and generates cost optimization
+/// recommendations.
+pub struct CostOptimizer {
+    enabled: bool,
+    usage_history: Vec<UsageDataPoint>,
+    recommendations: Vec<CostRecommendation>,
+    /// CPU threshold below which a resource is considered underutilized.
+    underutilized_threshold: f64,
+    /// CPU threshold above which a resource is considered overutilized.
+    overutilized_threshold: f64,
+    /// Number of days of data required to generate a recommendation.
+    analysis_window_days: u32,
+}
+
+impl CostOptimizer {
+    pub fn new() -> Self {
+        Self {
+            enabled: std::env::var("COST_OPTIMIZER_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(true),
+            usage_history: Vec::new(),
+            recommendations: Vec::new(),
+            underutilized_threshold: 10.0,
+            overutilized_threshold: 80.0,
+            analysis_window_days: 7,
+        }
+    }
+
+    /// Record a usage data point.
+    pub fn record_usage(&mut self, resource_id: &str, metric_name: &str, value: f64) {
+        self.usage_history.push(UsageDataPoint {
+            resource_id: resource_id.to_string(),
+            metric_name: metric_name.to_string(),
+            value,
+            recorded_at: chrono::Utc::now().to_rfc3339(),
+        });
+    }
+
+    /// Analyze usage history and generate recommendations.
+    pub fn analyze(&mut self) -> Vec<CostRecommendation> {
+        if !self.enabled {
+            return Vec::new();
+        }
+
+        self.recommendations.clear();
+        let resources = self.unique_resources();
+
+        for resource_id in resources {
+            let cpu_points: Vec<f64> = self
+                .usage_history
+                .iter()
+                .filter(|p| p.resource_id == resource_id && p.metric_name == "cpu_percent")
+                .map(|p| p.value)
+                .collect();
+
+            let mem_points: Vec<f64> = self
+                .usage_history
+                .iter()
+                .filter(|p| p.resource_id == resource_id && p.metric_name == "memory_bytes")
+                .map(|p| p.value)
+                .collect();
+
+            // Need at least some data points
+            if cpu_points.is_empty() && mem_points.is_empty() {
+                continue;
+            }
+
+            // CPU underutilized
+            if !cpu_points.is_empty() {
+                let avg_cpu: f64 = cpu_points.iter().sum::<f64>() / cpu_points.len() as f64;
+                let below_threshold_days = cpu_points
+                    .iter()
+                    .filter(|&&v| v < self.underutilized_threshold)
+                    .count();
+
+                if below_threshold_days >= self.analysis_window_days as usize {
+                    let suggested = (avg_cpu * 2.0).ceil().min(100.0);
+                    self.recommendations.push(CostRecommendation {
+                        resource_id: resource_id.clone(),
+                        recommendation_type: RecommendationType::RightSizeDown,
+                        description: format!(
+                            "CPU averaging {:.1}% over {} days, below {}% threshold. \
+                             Consider reducing allocated CPU cores.",
+                            avg_cpu, below_threshold_days, self.underutilized_threshold
+                        ),
+                        current_value: avg_cpu,
+                        suggested_value: suggested,
+                        unit: "percent".to_string(),
+                        estimated_savings_monthly: self.estimate_savings(avg_cpu, suggested),
+                        severity: "low".to_string(),
+                    });
+                }
+
+                // CPU overutilized
+                let above_threshold_days = cpu_points
+                    .iter()
+                    .filter(|&&v| v > self.overutilized_threshold)
+                    .count();
+
+                if above_threshold_days >= self.analysis_window_days as usize {
+                    let suggested = (avg_cpu * 1.5).ceil().min(100.0);
+                    self.recommendations.push(CostRecommendation {
+                        resource_id: resource_id.clone(),
+                        recommendation_type: RecommendationType::RightSizeUp,
+                        description: format!(
+                            "CPU averaging {:.1}% over {} days, above {}% threshold. \
+                             Consider increasing allocated CPU cores.",
+                            avg_cpu, above_threshold_days, self.overutilized_threshold
+                        ),
+                        current_value: avg_cpu,
+                        suggested_value: suggested,
+                        unit: "percent".to_string(),
+                        estimated_savings_monthly: 0.0,
+                        severity: "high".to_string(),
+                    });
+                }
+
+                // Completely idle
+                let idle_days = cpu_points.iter().filter(|&&v| v < 1.0).count();
+                if idle_days >= self.analysis_window_days as usize
+                    && cpu_points.len() >= self.analysis_window_days as usize
+                {
+                    self.recommendations.push(CostRecommendation {
+                        resource_id: resource_id.clone(),
+                        recommendation_type: RecommendationType::IdleResource,
+                        description: format!(
+                            "Resource idle (CPU < 1%) for {} days. Consider shutting down \
+                             or consolidating.",
+                            idle_days
+                        ),
+                        current_value: avg_cpu,
+                        suggested_value: 0.0,
+                        unit: "percent".to_string(),
+                        estimated_savings_monthly: self.estimate_savings(avg_cpu, 0.0),
+                        severity: "medium".to_string(),
+                    });
+                }
+            }
+
+            // Memory underutilized
+            if !mem_points.is_empty() {
+                let avg_mem: f64 = mem_points.iter().sum::<f64>() / mem_points.len() as f64;
+                let low_mem_days = mem_points
+                    .iter()
+                    .filter(|&&v| v < self.underutilized_threshold)
+                    .count();
+
+                if low_mem_days >= self.analysis_window_days as usize {
+                    let suggested = (avg_mem * 2.0).ceil();
+                    self.recommendations.push(CostRecommendation {
+                        resource_id: resource_id.clone(),
+                        recommendation_type: RecommendationType::RightSizeDown,
+                        description: format!(
+                            "Memory usage averaging {:.0} bytes over {} days, consistently low. \
+                             Consider reducing allocated memory.",
+                            avg_mem, low_mem_days
+                        ),
+                        current_value: avg_mem,
+                        suggested_value: suggested,
+                        unit: "bytes".to_string(),
+                        estimated_savings_monthly: self.estimate_memory_savings(avg_mem, suggested),
+                        severity: "low".to_string(),
+                    });
+                }
+            }
+        }
+
+        self.recommendations.clone()
+    }
+
+    /// Get current recommendations.
+    pub fn recommendations(&self) -> &[CostRecommendation] {
+        &self.recommendations
+    }
+
+    /// Get the number of recommendations.
+    pub fn recommendation_count(&self) -> usize {
+        self.recommendations.len()
+    }
+
+    /// Check if the optimizer is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Set the underutilized threshold.
+    pub fn set_underutilized_threshold(&mut self, threshold: f64) {
+        self.underutilized_threshold = threshold;
+    }
+
+    /// Set the overutilized threshold.
+    pub fn set_overutilized_threshold(&mut self, threshold: f64) {
+        self.overutilized_threshold = threshold;
+    }
+
+    /// Set the analysis window in days.
+    pub fn set_analysis_window(&mut self, days: u32) {
+        self.analysis_window_days = days;
+    }
+
+    /// Get usage history.
+    pub fn usage_history(&self) -> &[UsageDataPoint] {
+        &self.usage_history
+    }
+
+    /// Clear usage history.
+    pub fn clear_history(&mut self) {
+        self.usage_history.clear();
+        self.recommendations.clear();
+    }
+
+    fn unique_resources(&self) -> Vec<String> {
+        let mut resources: Vec<String> = self
+            .usage_history
+            .iter()
+            .map(|p| p.resource_id.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        resources.sort();
+        resources
+    }
+
+    fn estimate_savings(&self, current: f64, suggested: f64) -> f64 {
+        if current <= suggested {
+            return 0.0;
+        }
+        // Rough estimate: each 10% CPU reduction saves ~$50/month
+        let reduction = current - suggested;
+        (reduction / 10.0) * 50.0
+    }
+
+    fn estimate_memory_savings(&self, current: f64, suggested: f64) -> f64 {
+        if current <= suggested {
+            return 0.0;
+        }
+        // Rough estimate: each GB of memory reduction saves ~$30/month
+        let reduction_gb = (current - suggested) / (1024.0 * 1024.0 * 1024.0);
+        reduction_gb * 30.0
+    }
+}
+
+impl Default for CostOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for CostShim {
     fn default() -> Self {
         Self::new()
@@ -497,5 +795,171 @@ mod tests {
         assert_eq!(metrics[0].value, 2.0);
         assert_eq!(metrics[1].value, 1.0);
         assert!((metrics[2].value - 0.5).abs() < 0.01);
+    }
+
+    // --- CostOptimizer tests ---
+
+    #[test]
+    fn test_optimizer_default_enabled() {
+        let opt = CostOptimizer::new();
+        assert!(opt.is_enabled());
+        assert_eq!(opt.recommendation_count(), 0);
+    }
+
+    #[test]
+    fn test_optimizer_record_usage() {
+        let mut opt = CostOptimizer::new();
+        opt.record_usage("server-1", "cpu_percent", 5.0);
+        assert_eq!(opt.usage_history().len(), 1);
+    }
+
+    #[test]
+    fn test_optimizer_analyze_disabled() {
+        let mut opt = CostOptimizer {
+            enabled: false,
+            ..CostOptimizer::new()
+        };
+        opt.record_usage("server-1", "cpu_percent", 5.0);
+        let recs = opt.analyze();
+        assert!(recs.is_empty());
+    }
+
+    #[test]
+    fn test_optimizer_right_size_down() {
+        let mut opt = CostOptimizer::new();
+        // Record 10 days of low CPU usage (5% avg)
+        for _ in 0..10 {
+            opt.record_usage("server-1", "cpu_percent", 5.0);
+        }
+        let recs = opt.analyze();
+        assert!(!recs.is_empty());
+        assert_eq!(
+            recs[0].recommendation_type,
+            RecommendationType::RightSizeDown
+        );
+        assert_eq!(recs[0].resource_id, "server-1");
+        assert_eq!(recs[0].current_value, 5.0);
+        // suggested = ceil(5.0 * 2.0) = 10.0
+        assert_eq!(recs[0].suggested_value, 10.0);
+    }
+
+    #[test]
+    fn test_optimizer_right_size_up() {
+        let mut opt = CostOptimizer::new();
+        // Record 10 days of high CPU usage
+        for _ in 0..10 {
+            opt.record_usage("server-1", "cpu_percent", 90.0);
+        }
+        let recs = opt.analyze();
+        let up_recs: Vec<_> = recs
+            .iter()
+            .filter(|r| r.recommendation_type == RecommendationType::RightSizeUp)
+            .collect();
+        assert!(!up_recs.is_empty());
+        assert_eq!(up_recs[0].severity, "high");
+    }
+
+    #[test]
+    fn test_optimizer_idle_resource() {
+        let mut opt = CostOptimizer::new();
+        // Record 10 days of nearly zero CPU
+        for _ in 0..10 {
+            opt.record_usage("server-1", "cpu_percent", 0.5);
+        }
+        let recs = opt.analyze();
+        let idle_recs: Vec<_> = recs
+            .iter()
+            .filter(|r| r.recommendation_type == RecommendationType::IdleResource)
+            .collect();
+        assert!(!idle_recs.is_empty());
+        assert_eq!(idle_recs[0].severity, "medium");
+    }
+
+    #[test]
+    fn test_optimizer_memory_underutilized() {
+        let mut opt = CostOptimizer::new();
+        // Low memory usage (raw bytes below underutilized_threshold of 10.0)
+        for _ in 0..10 {
+            opt.record_usage("server-1", "memory_bytes", 5.0);
+        }
+        let recs = opt.analyze();
+        let mem_recs: Vec<_> = recs.iter().filter(|r| r.unit == "bytes").collect();
+        assert!(!mem_recs.is_empty());
+        assert_eq!(
+            mem_recs[0].recommendation_type,
+            RecommendationType::RightSizeDown
+        );
+    }
+
+    #[test]
+    fn test_optimizer_no_recommendations_no_data() {
+        let mut opt = CostOptimizer::new();
+        let recs = opt.analyze();
+        assert!(recs.is_empty());
+    }
+
+    #[test]
+    fn test_optimizer_thresholds() {
+        let mut opt = CostOptimizer::new();
+        opt.set_underutilized_threshold(5.0);
+        opt.set_overutilized_threshold(90.0);
+        opt.set_analysis_window(3);
+
+        // 5% is above the new 5% threshold, so no downsize recommendation
+        for _ in 0..5 {
+            opt.record_usage("server-1", "cpu_percent", 5.0);
+        }
+        let recs = opt.analyze();
+        // 5% is exactly at threshold, not below
+        let down_recs: Vec<_> = recs
+            .iter()
+            .filter(|r| r.recommendation_type == RecommendationType::RightSizeDown)
+            .collect();
+        assert!(down_recs.is_empty());
+    }
+
+    #[test]
+    fn test_optimizer_clear_history() {
+        let mut opt = CostOptimizer::new();
+        for _ in 0..10 {
+            opt.record_usage("server-1", "cpu_percent", 90.0);
+        }
+        let recs = opt.analyze();
+        assert!(!opt.usage_history().is_empty());
+        assert!(!recs.is_empty());
+
+        opt.clear_history();
+        assert!(opt.usage_history().is_empty());
+        assert_eq!(opt.recommendation_count(), 0);
+    }
+
+    #[test]
+    fn test_optimizer_recommendation_type_display() {
+        assert_eq!(
+            RecommendationType::RightSizeDown.to_string(),
+            "right_size_down"
+        );
+        assert_eq!(RecommendationType::RightSizeUp.to_string(), "right_size_up");
+        assert_eq!(
+            RecommendationType::IdleResource.to_string(),
+            "idle_resource"
+        );
+        assert_eq!(
+            RecommendationType::ReservedCapacity.to_string(),
+            "reserved_capacity"
+        );
+    }
+
+    #[test]
+    fn test_optimizer_multiple_resources() {
+        let mut opt = CostOptimizer::new();
+        for _ in 0..10 {
+            opt.record_usage("server-1", "cpu_percent", 5.0);
+            opt.record_usage("server-2", "cpu_percent", 90.0);
+        }
+        let recs = opt.analyze();
+        let resources: Vec<String> = recs.iter().map(|r| r.resource_id.clone()).collect();
+        assert!(resources.contains(&"server-1".to_string()));
+        assert!(resources.contains(&"server-2".to_string()));
     }
 }

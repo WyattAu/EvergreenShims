@@ -36,6 +36,126 @@ use shim_core::{Capability, Config, Metric, Result};
 use tokio::fs;
 use tokio::sync::watch;
 
+/// Lock file content stored as JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockInfo {
+    pub pid: u32,
+    pub hostname: String,
+    pub created_at: String,
+}
+
+/// Manages migration lock files to prevent concurrent migrations.
+///
+/// Creates a `.migration.lock` file in the migration directory before
+/// starting migrations and removes it after completion. Detects stale
+/// locks older than 1 hour.
+pub struct MigrationLock {
+    lock_path: PathBuf,
+    stale_threshold_secs: u64,
+}
+
+impl MigrationLock {
+    /// Create a new lock manager for the given migration directory.
+    pub fn new(migration_dir: &std::path::Path) -> Self {
+        Self {
+            lock_path: migration_dir.join(".migration.lock"),
+            stale_threshold_secs: 3600,
+        }
+    }
+
+    /// Create a new lock manager with a custom stale threshold.
+    pub fn with_stale_threshold(
+        migration_dir: &std::path::Path,
+        stale_threshold_secs: u64,
+    ) -> Self {
+        Self {
+            lock_path: migration_dir.join(".migration.lock"),
+            stale_threshold_secs,
+        }
+    }
+
+    /// Check if a lock file currently exists.
+    pub fn is_locked(&self) -> bool {
+        self.lock_path.exists()
+    }
+
+    /// Acquire the migration lock using atomic file creation.
+    ///
+    /// If a lock already exists and is stale (> threshold old), it is
+    /// removed first. Returns `Ok(())` on success, `Err` if the lock
+    /// cannot be acquired.
+    pub fn acquire_lock(&self) -> std::result::Result<(), String> {
+        if self.lock_path.exists() {
+            if self.is_stale() {
+                tracing::warn!(
+                    "Removing stale migration lock at {}",
+                    self.lock_path.display()
+                );
+                std::fs::remove_file(&self.lock_path)
+                    .map_err(|e| format!("Failed to remove stale lock: {}", e))?;
+            } else {
+                let content = std::fs::read_to_string(&self.lock_path)
+                    .unwrap_or_else(|_| "<unreadable>".to_string());
+                return Err(format!(
+                    "Migration lock already held by another process: {}",
+                    content
+                ));
+            }
+        }
+
+        let hostname = gethostname::gethostname().to_string_lossy().to_string();
+
+        let info = LockInfo {
+            pid: std::process::id(),
+            hostname,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let content = serde_json::to_string_pretty(&info)
+            .map_err(|e| format!("Failed to serialize lock info: {}", e))?;
+
+        std::fs::File::create_new(&self.lock_path)
+            .map_err(|e| format!("Failed to create lock file: {}", e))?;
+
+        std::fs::write(&self.lock_path, &content)
+            .map_err(|e| format!("Failed to write lock file: {}", e))?;
+
+        tracing::info!("Migration lock acquired at {}", self.lock_path.display());
+        Ok(())
+    }
+
+    /// Release the migration lock by removing the lock file.
+    pub fn release_lock(&self) -> std::result::Result<(), String> {
+        if self.lock_path.exists() {
+            std::fs::remove_file(&self.lock_path)
+                .map_err(|e| format!("Failed to remove lock file: {}", e))?;
+            tracing::info!("Migration lock released at {}", self.lock_path.display());
+        }
+        Ok(())
+    }
+
+    /// Check if an existing lock file is stale (older than threshold).
+    fn is_stale(&self) -> bool {
+        let content = match std::fs::read_to_string(&self.lock_path) {
+            Ok(c) => c,
+            Err(_) => return true,
+        };
+
+        let info: LockInfo = match serde_json::from_str(&content) {
+            Ok(i) => i,
+            Err(_) => return true,
+        };
+
+        let created = match chrono::DateTime::parse_from_rfc3339(&info.created_at) {
+            Ok(dt) => dt.with_timezone(&chrono::Utc),
+            Err(_) => return true,
+        };
+
+        let age = chrono::Utc::now() - created;
+        age.num_seconds() as u64 > self.stale_threshold_secs
+    }
+}
+
 /// Migration record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationRecord {
@@ -886,6 +1006,25 @@ impl Capability for MigrationShim {
     }
 
     async fn init(&mut self, config: &Config) -> Result<()> {
+        if shim_core::config::validation_enabled() {
+            let errors = config.validate();
+            let migration_errors: Vec<_> = errors
+                .iter()
+                .filter(|e| e.field.starts_with("migration."))
+                .collect();
+            if !migration_errors.is_empty() {
+                let msg = migration_errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(shim_core::Error::Config(format!(
+                    "migration config validation failed: {}",
+                    msg
+                )));
+            }
+        }
+
         if let Some(migration_config) = &config.migration {
             self.dir = migration_config.dir.clone();
             self.database = migration_config.database.clone();
@@ -917,6 +1056,12 @@ impl Capability for MigrationShim {
         }
 
         if self.auto_migrate {
+            let lock = MigrationLock::new(&self.dir);
+            if let Err(e) = lock.acquire_lock() {
+                tracing::error!("Cannot acquire migration lock: {}", e);
+                return Err(shim_core::Error::Migration(e));
+            }
+
             let migrations = self.scan_migrations().await?;
             tracing::info!("Found {} migration files", migrations.len());
 
@@ -934,6 +1079,10 @@ impl Capability for MigrationShim {
                 if let Err(e) = self.apply_migration_db(&migration).await {
                     tracing::warn!("Migration {} failed: {}", version, e);
                 }
+            }
+
+            if let Err(e) = lock.release_lock() {
+                tracing::warn!("Failed to release migration lock: {}", e);
             }
 
             tracing::info!(
@@ -1271,5 +1420,101 @@ mod tests {
         let c2 = MigrationShim::compute_checksum("CREATE TABLE test (id INT)");
         assert_eq!(c1, c2);
         assert_eq!(c1.len(), 16); // FNV-1a is 64-bit, formatted as 16 hex chars
+    }
+
+    #[test]
+    fn test_lock_acquire_and_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = MigrationLock::new(dir.path());
+        assert!(!lock.is_locked());
+        lock.acquire_lock().unwrap();
+        assert!(lock.is_locked());
+        lock.release_lock().unwrap();
+        assert!(!lock.is_locked());
+    }
+
+    #[test]
+    fn test_lock_double_acquire_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = MigrationLock::new(dir.path());
+        lock.acquire_lock().unwrap();
+        let lock2 = MigrationLock::new(dir.path());
+        let result = lock2.acquire_lock();
+        assert!(result.is_err());
+        lock.release_lock().unwrap();
+    }
+
+    #[test]
+    fn test_lock_stale_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = MigrationLock::with_stale_threshold(dir.path(), 1);
+        lock.acquire_lock().unwrap();
+
+        // Create a lock info with timestamp 2 hours ago
+        let stale_info = LockInfo {
+            pid: 99999,
+            hostname: "stale-host".to_string(),
+            created_at: (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339(),
+        };
+        let content = serde_json::to_string_pretty(&stale_info).unwrap();
+        std::fs::write(lock.lock_path.clone(), content).unwrap();
+
+        assert!(lock.is_stale());
+        assert!(lock.is_locked());
+
+        // Should be able to acquire since lock is stale
+        let lock2 = MigrationLock::with_stale_threshold(dir.path(), 1);
+        lock2.acquire_lock().unwrap();
+    }
+
+    #[test]
+    fn test_lock_stale_with_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = MigrationLock::new(dir.path());
+        lock.acquire_lock().unwrap();
+        std::fs::write(lock.lock_path.clone(), "not json").unwrap();
+        assert!(lock.is_stale());
+    }
+
+    #[test]
+    fn test_lock_stale_with_invalid_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = MigrationLock::new(dir.path());
+        lock.acquire_lock().unwrap();
+        let bad_info = r#"{"pid": 1, "hostname": "h", "created_at": "not-a-date"}"#;
+        std::fs::write(lock.lock_path.clone(), bad_info).unwrap();
+        assert!(lock.is_stale());
+    }
+
+    #[test]
+    fn test_lock_is_not_stale_when_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = MigrationLock::with_stale_threshold(dir.path(), 3600);
+        lock.acquire_lock().unwrap();
+        assert!(!lock.is_stale());
+        lock.release_lock().unwrap();
+    }
+
+    #[test]
+    fn test_lock_release_when_no_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = MigrationLock::new(dir.path());
+        // Should not error even if no lock exists
+        lock.release_lock().unwrap();
+    }
+
+    #[test]
+    fn test_lock_info_serializes_correctly() {
+        let info = LockInfo {
+            pid: 1234,
+            hostname: "testhost".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("1234"));
+        assert!(json.contains("testhost"));
+        let parsed: LockInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.pid, 1234);
+        assert_eq!(parsed.hostname, "testhost");
     }
 }

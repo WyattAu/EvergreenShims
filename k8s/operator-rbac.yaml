@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evergreen-operator
+  namespace: evergreen-system
+  labels:
+    app.kubernetes.io/name: evergreen-operator
+    app.kubernetes.io/part-of: evergreen-shims
+    app.kubernetes.io/component: operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: evergreen-operator
+  labels:
+    app.kubernetes.io/name: evergreen-operator
+    app.kubernetes.io/part-of: evergreen-shims
+rules:
+  # ShimConfig CRD management
+  - apiGroups: ["evergreen.dev"]
+    resources: ["shimconfigs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["evergreen.dev"]
+    resources: ["shimconfigs/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["evergreen.dev"]
+    resources: ["shimconfigs/finalizers"]
+    verbs: ["update"]
+  # Pod management for sidecar injection
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list", "watch"]
+  # Service management
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # ConfigMap and Secret management
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Deployment and ReplicaSet management
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Events for logging
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Namespaces (for multi-namespace operator)
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  # MutatingWebhookConfiguration for sidecar injection
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Custom Resource Definitions
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: evergreen-operator
+  labels:
+    app.kubernetes.io/name: evergreen-operator
+    app.kubernetes.io/part-of: evergreen-shims
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: evergreen-operator
+subjects:
+  - kind: ServiceAccount
+    name: evergreen-operator
+    namespace: evergreen-system

@@ -84,6 +84,88 @@ jobs:
       - name: Run benchmarks (quick mode)
         run: cargo bench --package evergreen-benchmarks -- --quick 2>&1 | tail -20
 
+  benchmark-regression:
+    name: Benchmark Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build benchmarks
+        run: cargo bench --package evergreen-benchmarks --no-run 2>&1
+      - name: Run benchmarks (quick mode) and save output
+        run: cargo bench --package evergreen-benchmarks -- --quick 2>&1 | tee /tmp/bench_output.txt
+      - name: Check for regressions
+        run: |
+          python3 - <<'EOF'
+          import json
+          import re
+          import sys
+
+          def parse_time_to_ns(time_str):
+              time_str = time_str.strip()
+              parts = time_str.split()
+              if len(parts) < 2:
+                  return None
+              value = float(parts[0].replace(',', ''))
+              unit = parts[1]
+              multipliers = {
+                  'ns': 1,
+                  'µs': 1_000,
+                  'us': 1_000,
+                  'ms': 1_000_000,
+                  's': 1_000_000_000,
+              }
+              if unit in multipliers:
+                  return value * multipliers[unit]
+              return None
+
+          with open('/tmp/bench_output.txt', 'r') as f:
+              output = f.read()
+
+          pattern = r'^(.+?)\s+time:\s+\[([^\]]+)\]'
+          results = {}
+          for line in output.splitlines():
+              m = re.match(pattern, line.strip())
+              if m:
+                  name = m.group(1).strip()
+                  time_part = m.group(2).split()[0]
+                  ns = parse_time_to_ns(time_part + ' ns')
+                  if ns is not None:
+                      results[name] = ns
+
+          with open('benches/baseline.json', 'r') as f:
+              baseline = json.load(f)
+
+          failures = []
+          for name, measured_ns in results.items():
+              if name in baseline['benchmarks']:
+                  entry = baseline['benchmarks'][name]
+                  baseline_ns = entry['mean_ns']
+                  tolerance = entry['tolerance']
+                  threshold = baseline_ns * (1.0 + tolerance)
+                  if measured_ns > threshold:
+                      pct = ((measured_ns - baseline_ns) / baseline_ns) * 100
+                      failures.append({
+                          'name': name,
+                          'baseline_ns': baseline_ns,
+                          'measured_ns': measured_ns,
+                          'regression_pct': pct,
+                      })
+
+          if failures:
+              print("BENCHMARK REGRESSION DETECTED:")
+              print()
+              for f in failures:
+                  print(f"  {f['name']}: {f['regression_pct']:.1f}% regression")
+                  print(f"    baseline: {f['baseline_ns']:.0f} ns")
+                  print(f"    measured: {f['measured_ns']:.0f} ns")
+              sys.exit(1)
+          else:
+              print(f"All {len(results)} benchmarks passed regression checks.")
+          EOF
+
   binary-size-check:
     name: Binary Size Check
     runs-on: ubuntu-latest

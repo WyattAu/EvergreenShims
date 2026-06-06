@@ -11,28 +11,40 @@ pub mod health;
 pub mod hotreload;
 pub mod metrics;
 pub mod process;
+pub mod resource;
 pub mod shutdown;
 pub mod signal;
+pub mod structured_logging;
+pub mod tenant;
 pub mod wiring;
 
 #[cfg(feature = "redis-bus")]
 pub mod redis_bridge;
 
+#[cfg(feature = "otel")]
+pub mod otel;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;
+
 pub use bus::ShimBus;
 pub use config::{
-    AuditConfig, BackupConfig, Config, FailoverConfig, HealthConfig, MigrationConfig,
-    ProcessConfig, ReplicationConfig, TlsConfig, VaultConfig,
+    AuditConfig, BackupConfig, Config, ConfigValidationError, FailoverConfig, HealthConfig,
+    MigrationConfig, ProcessConfig, ReplicationConfig, ResourceQuota, TenantConfig, TlsConfig,
+    VaultConfig,
 };
 pub use error::{Error, Result};
 pub use event::{EventHandler, EventType, Severity, ShimEvent};
 pub use health::{CommandHealthCheck, HealthCheck, HealthStatus, StartupProbe};
 pub use metrics::Metric;
 pub use process::ChildProcess;
+pub use resource::{ResourceMonitor, ResourceUsage};
 pub use shutdown::{
     graceful_shutdown, DatabaseType, GracefulShutdown, ShutdownManager, ShutdownResult,
     ShutdownStrategy,
 };
 pub use signal::{Signal, SignalHandler};
+pub use tenant::{TenantIsolator, TenantMetrics, TenantUsage};
 
 /// A shim capability that can be enabled/disabled.
 #[async_trait::async_trait]

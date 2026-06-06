@@ -729,6 +729,25 @@ impl Capability for TlsShim {
     }
 
     async fn init(&mut self, config: &Config) -> Result<()> {
+        if shim_core::config::validation_enabled() {
+            let errors = config.validate();
+            let tls_errors: Vec<_> = errors
+                .iter()
+                .filter(|e| e.field.starts_with("tls."))
+                .collect();
+            if !tls_errors.is_empty() {
+                let msg = tls_errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(shim_core::Error::Config(format!(
+                    "tls config validation failed: {}",
+                    msg
+                )));
+            }
+        }
+
         if let Some(tls_config) = &config.tls {
             self.provider = tls_config.provider.clone();
             self.domain = tls_config.domain.clone();

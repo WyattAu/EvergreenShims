@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "benchmarks": {
+    "backup_checksum_1mb": {
+      "mean_ns": 1500000,
+      "tolerance": 0.20
+    },
+    "cache_operations/set_1000_keys": {
+      "mean_ns": 5000000,
+      "tolerance": 0.20
+    },
+    "cache_operations/get_1000_keys": {
+      "mean_ns": 3000000,
+      "tolerance": 0.20
+    },
+    "encryption_throughput/aes_gcm_encrypt_4kb": {
+      "mean_ns": 800000,
+      "tolerance": 0.20
+    },
+    "encryption_throughput/aes_gcm_decrypt_4kb": {
+      "mean_ns": 700000,
+      "tolerance": 0.20
+    },
+    "migration_checksum": {
+      "mean_ns": 500000,
+      "tolerance": 0.20
+    }
+  }
+}

@@ -1,0 +1,31 @@
+[package]
+name = "management-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "gRPC management API for EvergreenShim operator"
+
+[[bin]]
+name = "management-api"
+path = "src/main.rs"
+
+[dependencies]
+tonic = "0.12"
+prost = "0.13"
+tokio = { workspace = true }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+prometheus.workspace = true
+shim-core = { path = "../shim-core", default-features = false }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tonic = { version = "0.12", features = ["transport"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }

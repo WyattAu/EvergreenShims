@@ -1,40 +1,28 @@
 # backup-shim
 
-Automated database backups with compression and retention.
+Automated database backups with S3 upload and retention. Supports PostgreSQL (`pg_dump`), MariaDB/MySQL (`mysqldump`), Redis (`BGSAVE`), and MongoDB (`mongodump`).
 
-## Features
+## Environment Variables
 
-- **Multi-database** — PostgreSQL, MariaDB/MySQL, Redis, MongoDB
-- **Compression** — gzip, zstd, or none
-- **Retention policy** — Auto-cleanup of old backups
-- **Scheduled backups** — Cron-based scheduling
-
-## Supported Databases
-
-| Database | Tool | Notes |
-|----------|------|-------|
-| PostgreSQL | `pg_dump` | Custom format (`-Fc`) |
-| MariaDB/MySQL | `mysqldump` | Single-transaction mode |
-| Redis | `BGSAVE` | RDB file copy |
-| MongoDB | `mongodump` | Full dump |
-
-## Configuration
-
-### Environment Variables
-
-```bash
-BACKUP_SCHEDULE="0 2 * * *"          # Cron schedule
-BACKUP_STORAGE="local"               # Storage backend
-BACKUP_PATH="/var/backups"           # Local path
-BACKUP_RETENTION_DAYS=30             # Keep backups for 30 days
-BACKUP_DATABASE="mydb"               # Database name
-BACKUP_DB_TYPE="postgres"            # Database type
-BACKUP_DB_HOST="127.0.0.1"           # Database host
-BACKUP_DB_PORT=5432                   # Database port
-BACKUP_DB_USER="postgres"            # Database user
-BACKUP_DB_PASSWORD="secret"          # Database password
-BACKUP_COMPRESSION="gzip"            # Compression type
-```
+| Variable | Description | Default |
+|---|---|---|
+| `BACKUP_SCHEDULE` | Cron schedule | `0 2 * * *` |
+| `BACKUP_STORAGE` | Storage backend: `s3`, `local` | `local` |
+| `BACKUP_PATH` | Local path or S3 bucket | — |
+| `BACKUP_PREFIX` | Key prefix for backups | — |
+| `BACKUP_RETENTION_DAYS` | Days to keep backups | `30` |
+| `BACKUP_DATABASE` | Database name | — |
+| `BACKUP_DB_TYPE` | Database type: `postgres`, `mariadb`, `mysql`, `redis`, `mongo` | — |
+| `BACKUP_DB_HOST` | Database host | `127.0.0.1` |
+| `BACKUP_DB_PORT` | Database port | — |
+| `BACKUP_DB_USER` | Database user | — |
+| `BACKUP_DB_PASSWORD` | Database password | — |
+| `BACKUP_CMD` | Backup command override | `pg_dump` |
+| `BACKUP_OUTPUT_DIR` | Output directory | `/tmp/backups` |
+| `REDIS_URL` | Redis connection URL | `redis://localhost:6379` |
+| `REDIS_PASSWORD` | Redis password | — |
+| `BACKUP_COMPRESSION` | Compression: `none`, `gzip`, `zstd` | `gzip` |
+| `BACKUP_TIMEOUT_SECS` | Timeout for dump command | `3600` |
 
 ## Usage
 
@@ -43,24 +31,28 @@ use backup_shim::BackupShim;
 use shim_core::Capability;
 
 let mut shim = BackupShim::new();
+let config = shim_core::Config::default();
 shim.init(&config).await?;
-shim.start().await?;  // Runs initial backup + scheduled loop
+shim.start().await?;
 ```
 
-## Backup Files
+## Configuration Options
 
+- Cron-based scheduling for automated backups.
+- S3 or local storage backends.
+- Configurable compression and retention policies.
+- SHA-256 checksums generated for each backup.
+
+## Metrics Exposed
+
+- `backup_total` – Total backups attempted.
+- `backup_success` – Successful backups.
+- `backup_failure` – Failed backups.
+- `backup_size_bytes` – Size of the last backup.
+- `backup_duration_seconds` – Duration of the last backup.
+
+## Testing
+
+```bash
+cargo test -p backup-shim
 ```
-/var/backups/
-  mydb_20240101_020000.sql.gz    # gzip compressed
-  mydb_20240102_020000.sql.zst   # zstd compressed
-  mydb_20240103_020000.sql       # uncompressed
-```
-
-## Metrics
-
-| Metric | Description |
-|--------|-------------|
-| `backup_success_total` | Successful backups |
-| `backup_failure_total` | Failed backups |
-| `backup_size_bytes` | Last backup size |
-| `backup_last_success_timestamp` | Last successful backup |

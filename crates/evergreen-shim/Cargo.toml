@@ -42,6 +42,9 @@ dynamodb = ["dep:dynamodb-shim"]
 elasticsearch = ["dep:elasticsearch-shim"]
 cassandra = ["dep:cassandra-shim"]
 
+# Management API
+mgmt-api = ["dep:management-api"]
+
 # Pre-built combos
 db-shim = ["health", "vault", "backup", "migration", "audit"]
 proxy-combo = ["health", "audit", "tls"]
@@ -49,6 +52,7 @@ ha-shim = ["health", "failover", "replication"]
 cache-shim-combo = ["health", "cache"]
 infra = ["health", "vault", "backup", "migration", "audit", "config", "failover", "replication", "tls", "auth", "scheduler"]
 full = ["health", "vault", "backup", "migration", "audit", "proxy", "tls", "config", "failover", "replication", "cache", "cdc", "sharding", "archival", "auth", "encryption", "compliance", "scheduler", "queue", "alerting", "chaos", "cost", "mongodb", "cockroachdb", "dynamodb", "elasticsearch", "cassandra"]
+otel = ["shim-core/otel"]
 
 [dependencies]
 shim-core = { path = "../shim-core", default-features = false }
@@ -79,6 +83,7 @@ cockroachdb-shim = { path = "../cockroachdb-shim", optional = true }
 dynamodb-shim = { path = "../dynamodb-shim", optional = true }
 elasticsearch-shim = { path = "../elasticsearch-shim", optional = true }
 cassandra-shim = { path = "../cassandra-shim", optional = true }
+management-api = { path = "../management-api", optional = true }
 anyhow.workspace = true
 tokio.workspace = true
 clap.workspace = true

@@ -512,6 +512,25 @@ impl Capability for FailoverShim {
     }
 
     async fn init(&mut self, config: &Config) -> Result<()> {
+        if shim_core::config::validation_enabled() {
+            let errors = config.validate();
+            let failover_errors: Vec<_> = errors
+                .iter()
+                .filter(|e| e.field.starts_with("failover."))
+                .collect();
+            if !failover_errors.is_empty() {
+                let msg = failover_errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(shim_core::Error::Config(format!(
+                    "failover config validation failed: {}",
+                    msg
+                )));
+            }
+        }
+
         if let Some(fc) = &config.failover {
             self.primary = fc.primary.clone();
             self.replica = fc.replica.clone();

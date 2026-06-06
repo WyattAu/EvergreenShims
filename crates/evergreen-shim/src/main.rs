@@ -1,11 +1,20 @@
 //! EvergreenShim - Unified shim binary.
 //!
 //! This binary combines multiple shim capabilities into a single executable.
+//! Capabilities are initialized and started with graceful degradation:
+//! - Critical capabilities (health, migration) cause process failure on error.
+//! - Non-critical capabilities log warnings and allow the process to continue.
+//! - A `shim_capabilities_healthy` gauge is exported via metrics (1=all critical healthy, 0=otherwise).
 
 use anyhow::Result;
 use clap::Parser;
 use shim_core::{Capability, Config};
+use std::collections::HashSet;
 use std::path::PathBuf;
+
+/// Capabilities that must start successfully for the shim to be considered operational.
+/// If any critical capability fails to init or start, the process exits with an error.
+const CRITICAL_CAPABILITIES: &[&str] = &["health", "migration"];
 
 /// CLI arguments.
 #[derive(Parser)]
@@ -22,6 +31,15 @@ struct Args {
     /// Enable debug logging.
     #[arg(long, global = true)]
     debug: bool,
+
+    /// Output logs as JSON (structured logging).
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// OpenTelemetry OTLP endpoint (e.g. http://localhost:4317).
+    /// When set, traces are exported to this endpoint.
+    #[arg(long, global = true)]
+    otel_endpoint: Option<String>,
 }
 
 #[derive(clap::Subcommand)]
@@ -60,14 +78,22 @@ enum Subcommand {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
-    let log_level = if args.debug { "debug" } else { "error" };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
-        )
-        .init();
+    // Initialize logging — OpenTelemetry takes precedence when an endpoint is given.
+    #[cfg(feature = "otel")]
+    {
+        if let Some(ref endpoint) = args.otel_endpoint {
+            shim_core::otel::init_otel_tracing(endpoint, args.debug, args.json);
+        } else {
+            let _ = shim_core::structured_logging::init_structured_logging(args.debug, args.json);
+        }
+    }
+    #[cfg(not(feature = "otel"))]
+    {
+        if args.otel_endpoint.is_some() {
+            eprintln!("warning: --otel-endpoint requires the 'otel' feature; ignoring");
+        }
+        let _ = shim_core::structured_logging::init_structured_logging(args.debug, args.json);
+    }
 
     match args.command {
         Some(Subcommand::Run {
@@ -120,6 +146,13 @@ async fn run_healthcheck(
     // Nothing to check
     eprintln!("healthcheck: specify --tcp or --http");
     std::process::exit(2)
+}
+
+/// Result of attempting to initialize and start a capability.
+struct CapabilityOutcome {
+    name: String,
+    started: bool,
+    error: Option<String>,
 }
 
 async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<String>) -> Result<()> {
@@ -304,21 +337,102 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
         capabilities.push(Box::new(cassandra_shim::CassandraShim::new()));
     }
 
-    // Initialize capabilities
-    for cap in &mut capabilities {
-        cap.init(&config).await?;
+    // Initialize and start capabilities with graceful degradation.
+    let mut outcomes: Vec<CapabilityOutcome> = Vec::new();
+    let mut successful: Vec<usize> = Vec::new();
+
+    for (idx, cap) in capabilities.iter_mut().enumerate() {
+        let name = cap.name().to_string();
+        let is_critical = CRITICAL_CAPABILITIES.contains(&name.as_str());
+
+        tracing::info!("Initializing capability: {}", name);
+
+        // Attempt init
+        if let Err(e) = cap.init(&config).await {
+            let msg = format!("init failed: {e}");
+            tracing::error!("Capability '{}' failed to initialize: {msg}", name);
+
+            outcomes.push(CapabilityOutcome {
+                name,
+                started: false,
+                error: Some(msg),
+            });
+
+            if is_critical {
+                return Err(anyhow::anyhow!(
+                    "Critical capability '{}' failed to initialize: {}",
+                    cap.name(),
+                    e
+                ));
+            }
+            continue;
+        }
+
+        // Attempt start
+        tracing::info!("Starting capability: {}", name);
+        if let Err(e) = cap.start().await {
+            let msg = format!("start failed: {e}");
+            tracing::error!("Capability '{}' failed to start: {msg}", name);
+
+            outcomes.push(CapabilityOutcome {
+                name,
+                started: false,
+                error: Some(msg),
+            });
+
+            if is_critical {
+                return Err(anyhow::anyhow!(
+                    "Critical capability '{}' failed to start: {}",
+                    cap.name(),
+                    e
+                ));
+            }
+            continue;
+        }
+
+        tracing::info!("Capability '{}' started successfully", name);
+        outcomes.push(CapabilityOutcome {
+            name,
+            started: true,
+            error: None,
+        });
+        successful.push(idx);
     }
 
-    // Start capabilities
-    for cap in &mut capabilities {
-        cap.start().await?;
+    // Build the set of successful capability names for the health metric.
+    let all_critical_healthy = {
+        let successful_names: HashSet<&str> =
+            successful.iter().map(|&i| capabilities[i].name()).collect();
+        CRITICAL_CAPABILITIES
+            .iter()
+            .all(|c| successful_names.contains(c))
+    };
+
+    let healthy_value: f64 = if all_critical_healthy { 1.0 } else { 0.0 };
+
+    // Log a summary of capability startup results.
+    let failed_count = outcomes.iter().filter(|o| !o.started).count();
+    let started_count = outcomes.iter().filter(|o| o.started).count();
+    tracing::info!(
+        "Capability startup summary: {} started, {} failed (shim_capabilities_healthy={})",
+        started_count,
+        failed_count,
+        healthy_value as u32,
+    );
+
+    for outcome in &outcomes {
+        if let Some(ref err) = outcome.error {
+            tracing::warn!("  [FAILED] {}: {}", outcome.name, err);
+        }
     }
 
     // Spawn child process
     let mut child = shim_core::ChildProcess::new(config.process.clone());
     child.start().await?;
 
-    tracing::info!("All capabilities started, child process running, waiting for shutdown signal");
+    tracing::info!(
+        "All critical capabilities started, child process running, waiting for shutdown signal"
+    );
 
     // Wait for shutdown signal or child exit
     let signal_handler = shim_core::SignalHandler::new();
@@ -353,11 +467,32 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
     // Stop child process
     child.stop().await?;
 
-    // Stop capabilities in reverse order
-    for cap in capabilities.iter_mut().rev() {
-        cap.stop().await?;
+    // Stop capabilities in reverse order (only those that started)
+    for idx in successful.iter().rev() {
+        capabilities[*idx].stop().await?;
     }
 
     tracing::info!("EvergreenShim stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn critical_capabilities_list_contains_expected() {
+        assert!(CRITICAL_CAPABILITIES.contains(&"health"));
+        assert!(CRITICAL_CAPABILITIES.contains(&"migration"));
+    }
+
+    #[test]
+    fn non_critical_capabilities_are_not_in_critical_list() {
+        for name in &["chaos", "cost", "cache", "alerting", "audit", "vault"] {
+            assert!(
+                !CRITICAL_CAPABILITIES.contains(name),
+                "{name} should not be critical"
+            );
+        }
+    }
 }

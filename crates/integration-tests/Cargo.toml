@@ -36,6 +36,7 @@ tempfile.workspace = true
 redis.workspace = true
 sqlx.workspace = true
 reqwest.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

@@ -679,6 +679,152 @@ impl BackupShim {
     }
 }
 
+/// Result of backup verification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationResult {
+    pub success: bool,
+    pub file_exists: bool,
+    pub file_size: u64,
+    pub checksum_match: Option<bool>,
+    pub restore_test: Option<bool>,
+    pub errors: Vec<String>,
+}
+
+/// Verifies backup integrity after backup completes.
+///
+/// Checks file existence, non-zero size, and SHA-256 checksum match.
+/// Optionally tests restore capability.
+pub struct BackupVerifier {
+    verify_after: bool,
+    test_restore: bool,
+}
+
+impl BackupVerifier {
+    /// Create a new verifier from environment variables.
+    pub fn from_env() -> Self {
+        let verify_after = std::env::var("BACKUP_VERIFY_AFTER")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(true);
+        let test_restore = std::env::var("BACKUP_VERIFY_RESTORE")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        Self {
+            verify_after,
+            test_restore,
+        }
+    }
+
+    /// Create a verifier with explicit settings.
+    pub fn new(verify_after: bool, test_restore: bool) -> Self {
+        Self {
+            verify_after,
+            test_restore,
+        }
+    }
+
+    /// Verify a backup file exists, has non-zero size, and matches checksum.
+    pub async fn verify(&self, path: &str, expected_checksum: &str) -> VerificationResult {
+        if !self.verify_after {
+            return VerificationResult {
+                success: true,
+                file_exists: true,
+                file_size: 0,
+                checksum_match: None,
+                restore_test: None,
+                errors: vec![],
+            };
+        }
+
+        let mut errors = Vec::new();
+
+        // Check file exists and has content
+        let metadata = match fs::metadata(path).await {
+            Ok(m) => m,
+            Err(e) => {
+                return VerificationResult {
+                    success: false,
+                    file_exists: false,
+                    file_size: 0,
+                    checksum_match: None,
+                    restore_test: None,
+                    errors: vec![format!("File not found: {}", e)],
+                };
+            }
+        };
+
+        let size = metadata.len();
+        if size == 0 {
+            errors.push("Backup file has zero size".to_string());
+            return VerificationResult {
+                success: false,
+                file_exists: true,
+                file_size: 0,
+                checksum_match: Some(false),
+                restore_test: None,
+                errors,
+            };
+        }
+
+        // Verify checksum
+        let data = match fs::read(path).await {
+            Ok(d) => d,
+            Err(e) => {
+                errors.push(format!("Failed to read backup file: {}", e));
+                return VerificationResult {
+                    success: false,
+                    file_exists: true,
+                    file_size: size,
+                    checksum_match: None,
+                    restore_test: None,
+                    errors,
+                };
+            }
+        };
+
+        let actual_checksum = BackupShim::compute_checksum(&data);
+        let checksum_ok = actual_checksum == expected_checksum;
+        if !checksum_ok {
+            errors.push(format!(
+                "Checksum mismatch: expected={}, actual={}",
+                expected_checksum, actual_checksum
+            ));
+        }
+
+        // Optionally test restore
+        let restore_ok = if self.test_restore && checksum_ok {
+            match self.test_restore_command(path).await {
+                Ok(ok) => Some(ok),
+                Err(e) => {
+                    errors.push(format!("Restore test failed: {}", e));
+                    Some(false)
+                }
+            }
+        } else {
+            None
+        };
+
+        let success = checksum_ok && errors.is_empty();
+        VerificationResult {
+            success,
+            file_exists: true,
+            file_size: size,
+            checksum_match: Some(checksum_ok),
+            restore_test: restore_ok,
+            errors,
+        }
+    }
+
+    /// Test restore by running the appropriate restore command.
+    async fn test_restore_command(&self, path: &str) -> anyhow::Result<bool> {
+        let output = Command::new("pg_restore")
+            .args(["--list", path])
+            .output()
+            .await?;
+
+        Ok(output.status.success())
+    }
+}
+
 impl Default for BackupShim {
     fn default() -> Self {
         Self::new()
@@ -692,6 +838,25 @@ impl Capability for BackupShim {
     }
 
     async fn init(&mut self, config: &Config) -> Result<()> {
+        if shim_core::config::validation_enabled() {
+            let errors = config.validate();
+            let backup_errors: Vec<_> = errors
+                .iter()
+                .filter(|e| e.field.starts_with("backup."))
+                .collect();
+            if !backup_errors.is_empty() {
+                let msg = backup_errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(shim_core::Error::Config(format!(
+                    "backup config validation failed: {}",
+                    msg
+                )));
+            }
+        }
+
         if let Some(bc) = &config.backup {
             self.schedule = bc.schedule.clone();
             self.storage = bc.storage.clone();
@@ -1129,5 +1294,109 @@ mod tests {
             let shim = BackupShim::new();
             assert_eq!(shim.redis_url, "redis://localhost:6379");
         });
+    }
+
+    #[test]
+    fn test_verifier_from_env_defaults() {
+        temp_env::with_var_unset("BACKUP_VERIFY_AFTER", || {
+            temp_env::with_var_unset("BACKUP_VERIFY_RESTORE", || {
+                let v = BackupVerifier::from_env();
+                assert!(v.verify_after);
+                assert!(!v.test_restore);
+            });
+        });
+    }
+
+    #[test]
+    fn test_verifier_from_env_disabled() {
+        temp_env::with_vars(
+            [
+                ("BACKUP_VERIFY_AFTER", Some("false")),
+                ("BACKUP_VERIFY_RESTORE", Some("true")),
+            ],
+            || {
+                let v = BackupVerifier::from_env();
+                assert!(!v.verify_after);
+                assert!(v.test_restore);
+            },
+        );
+    }
+
+    #[test]
+    fn test_verifier_new_explicit() {
+        let v = BackupVerifier::new(true, true);
+        assert!(v.verify_after);
+        assert!(v.test_restore);
+    }
+
+    #[tokio::test]
+    async fn test_verify_file_not_found() {
+        let v = BackupVerifier::new(true, false);
+        let result = v.verify("/nonexistent/path/backup.sql", "abc123").await;
+        assert!(!result.success);
+        assert!(!result.file_exists);
+        assert!(result.file_size == 0);
+        assert!(!result.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_verify_file_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.sql");
+        std::fs::write(&path, "").unwrap();
+
+        let v = BackupVerifier::new(true, false);
+        let result = v.verify(path.to_str().unwrap(), "abc").await;
+        assert!(!result.success);
+        assert!(result.file_exists);
+        assert_eq!(result.file_size, 0);
+        assert!(result.errors.iter().any(|e| e.contains("zero size")));
+    }
+
+    #[tokio::test]
+    async fn test_verify_checksum_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backup.sql");
+        let data = b"backup content here";
+        std::fs::write(&path, data).unwrap();
+
+        let checksum = BackupShim::compute_checksum(data);
+        let v = BackupVerifier::new(true, false);
+        let result = v.verify(path.to_str().unwrap(), &checksum).await;
+        assert!(result.success);
+        assert!(result.file_exists);
+        assert_eq!(result.file_size, data.len() as u64);
+        assert_eq!(result.checksum_match, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_verify_checksum_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backup.sql");
+        std::fs::write(&path, b"content").unwrap();
+
+        let v = BackupVerifier::new(true, false);
+        let result = v
+            .verify(
+                path.to_str().unwrap(),
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .await;
+        assert!(!result.success);
+        assert!(result.file_exists);
+        assert_eq!(result.checksum_match, Some(false));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("Checksum mismatch")));
+    }
+
+    #[tokio::test]
+    async fn test_verify_disabled_skips_checks() {
+        let v = BackupVerifier::new(false, false);
+        let result = v.verify("/nonexistent", "abc").await;
+        assert!(result.success);
+        assert!(result.file_exists);
+        assert!(result.checksum_match.is_none());
     }
 }

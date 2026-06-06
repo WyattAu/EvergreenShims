@@ -1,0 +1,92 @@
+apiVersion: evergreen.dev/v1alpha1
+kind: ShimConfig
+metadata:
+  name: sample-shim
+  namespace: default
+  labels:
+    app.kubernetes.io/name: sample-shim
+    app.kubernetes.io/part-of: evergreen-shims
+spec:
+  shimConfig:
+    logLevel: "info"
+    jsonLogging: false
+    metricsPort: 9090
+    healthPort: 9091
+  childCommand: "redis-server"
+  childArgs:
+    - "--bind"
+    - "0.0.0.0"
+    - "--port"
+    - "6379"
+  features:
+    - health
+    - vault
+    - backup
+    - audit
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+---
+# Database shim example
+apiVersion: evergreen.dev/v1alpha1
+kind: ShimConfig
+metadata:
+  name: postgres-shim
+  namespace: default
+  labels:
+    app.kubernetes.io/name: postgres-shim
+    app.kubernetes.io/part-of: evergreen-shims
+spec:
+  shimConfig:
+    logLevel: "debug"
+    jsonLogging: true
+    metricsPort: 9092
+    healthPort: 9093
+    otelEndpoint: "http://otel-collector.observability:4317"
+  childCommand: "postgres"
+  childArgs:
+    - "-D"
+    - "/var/lib/postgresql/data"
+    - "-c"
+    - "config_file=/etc/postgresql/postgresql.conf"
+  features:
+    - health
+    - vault
+    - backup
+    - migration
+    - audit
+    - replication
+    - failover
+    - tls
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+---
+# Minimal shim example
+apiVersion: evergreen.dev/v1alpha1
+kind: ShimConfig
+metadata:
+  name: minimal-shim
+  namespace: default
+spec:
+  childCommand: "nginx"
+  childArgs:
+    - "-g"
+    - "daemon off;"
+  features:
+    - health
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"

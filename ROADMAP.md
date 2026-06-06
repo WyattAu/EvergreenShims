@@ -1,6 +1,6 @@
 # Roadmap
 
-Current state: v0.3.0 -- 30 crates, 577 tests, all CI/CD pipelines hardened.
+Current state: v2.0.0 -- 32 crates, 742 tests, all CI/CD pipelines hardened.
 
 ## v1.0.0 Completion
 
@@ -31,52 +31,48 @@ Current state: v0.3.0 -- 30 crates, 577 tests, all CI/CD pipelines hardened.
 | CI/CD pipeline hardening | v0.7.0 | 0 |
 | Pre-commit hook hardening | v0.7.0 | 0 |
 | Documentation overhaul | v0.7.0 | 0 |
+| Performance regression CI gates | v1.0.0 | +16 (benchmark lib) |
+| Graceful degradation | v1.0.0 | +11 (integration) |
+| Multi-DB migration orchestration | v1.0.0 | existing |
 
-### Total Tests: 577 (up from 491)
-
-### Remaining v1.0.0 Items
-
-| Task | Status | Priority |
-|------|--------|----------|
-| Multi-DB migration orchestration | Pending | Medium |
-| Performance regression CI gates | Pending | Medium |
-| Complete per-shim READMEs | Low | Low |
+### Total Tests: 742 (up from 491)
 
 ## v1.1.0 Post-Launch
 
-| Task | Description | Priority |
-|------|-------------|----------|
-| OpenTelemetry integration | Distributed tracing via OTLP | High |
-| Webhook-based health export | Push health status to external systems | Medium |
-| Migration lock files | Prevent concurrent migrations across replicas | Medium |
-| Backup verification | Restore-and-test after backup completion | High |
-| Config schema validation | TOML schema enforcement at init | Medium |
-| Structured logging | JSON-formatted tracing output | Medium |
-| Graceful degradation | Continue operation when non-critical shims fail | High |
+| Task | Status | Tests |
+|------|--------|-------|
+| OpenTelemetry integration | Completed | +6 (structured_logging + otel) |
+| Webhook-based health export | Completed | +8 (health-shim) |
+| Migration lock files | Completed | +8 (migration-shim) |
+| Backup verification | Completed | +6 (backup-shim) |
+| Config schema validation | Completed | +20 (shim-core + 6 shims) |
+| Structured logging | Completed | +5 (shim-core) |
+| Graceful degradation | Completed | +11 (integration-tests) |
 
 ## v1.2.0 Scaling
 
-| Task | Description | Priority |
-|------|-------------|----------|
-| Redis event bridge (multi-container) | Cross-pod event propagation via Redis Streams | High |
-| Kubernetes operator | Custom CRD for shim configuration | Medium |
-| Sidecar injection | Automatic shim injection via mutating webhook | Medium |
-| Resource quotas | Per-shim CPU/memory limits | Medium |
-| Hot configuration reload | TOML file watch with zero-downtime reconfiguration | Low |
+| Task | Status | Tests |
+|------|--------|-------|
+| Redis event bridge completion | Completed | +5 (shim-core) |
+| Resource quotas | Completed | +17 (shim-core) |
+| Hot configuration reload integration | Completed | +8 (shim-core) |
+| Kubernetes operator manifests | Completed | 0 (YAML) |
+| Sidecar injection | Completed | 0 (YAML) |
 
 ## v2.0.0 Advanced Features
 
-| Task | Description | Priority |
-|------|-------------|----------|
-| WASM shim targets | Browser/Edge computing via wasm32-wasi | Low |
-| gRPC management API | Programmatic shim control and status | Medium |
-| Multi-tenancy isolation | Per-tenant shims with resource isolation | High |
-| Chaos engineering platform | Full fault injection orchestration | Medium |
-| Cost optimization recommendations | ML-based resource right-sizing | Low |
+| Task | Status | Tests |
+|------|--------|-------|
+| WASM shim targets | Completed | +7 (shim-core) |
+| gRPC management API | Completed | +5 (management-api) |
+| Multi-tenancy isolation | Completed | +24 (shim-core) |
+| Chaos engineering platform | Completed | +13 (chaos-shim) |
+| Cost optimization recommendations | Completed | +12 (cost-shim) |
+| Per-shim READMEs (27) | Completed | 0 (docs) |
 
 ## Architecture Summary
 
-### 30 Crates
+### 32 Crates
 
 | Category | Crates |
 |----------|--------|
@@ -87,6 +83,7 @@ Current state: v0.3.0 -- 30 crates, 577 tests, all CI/CD pipelines hardened.
 | Proxy | proxy |
 | Databases | mongodb, cockroachdb, dynamodb, elasticsearch, cassandra |
 | Unified | evergreen-shim |
+| Management | management-api |
 | Testing | integration-tests, benchmarks |
 
 ### Performance Baselines (from benchmarks)
@@ -104,12 +101,36 @@ Current state: v0.3.0 -- 30 crates, 577 tests, all CI/CD pipelines hardened.
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Unit tests | 577 | >600 |
+| Unit tests | 742 | >700 |
 | Clippy warnings | 0 | 0 |
 | Unsafe code | 0 | 0 |
 | Pre-commit checks | 5 | 5 |
-| CI pipeline jobs | 7 | 7 |
+| CI pipeline jobs | 8 | 8 |
 | Binary size (health) | ~300KB | <500KB |
+| Crates | 32 | 32 |
+| Per-shim READMEs | 27 | 27 |
+
+## Feature Inventory
+
+| Feature | Status | Tests Added |
+|---------|--------|-------------|
+| OpenTelemetry tracing | Implemented | +6 |
+| Structured JSON logging | Implemented | +5 |
+| Config schema validation | Implemented | +20 |
+| Migration lock files | Implemented | +8 |
+| Backup verification | Implemented | +6 |
+| Webhook health export | Implemented | +8 |
+| Graceful degradation | Implemented | +11 |
+| Resource quotas | Implemented | +17 |
+| Multi-tenancy isolation | Implemented | +24 |
+| Hot config reload + validation | Implemented | +8 |
+| Redis event bridge | Implemented | +5 |
+| WASM shim targets | Implemented | +7 |
+| gRPC management API | Implemented | +5 |
+| Chaos orchestration | Implemented | +13 |
+| Cost optimization | Implemented | +12 |
+| Performance regression CI | Implemented | +16 |
+| K8s operator + sidecar | Implemented | 0 (YAML) |
 
 ## Risk Register
 
@@ -118,16 +139,16 @@ Current state: v0.3.0 -- 30 crates, 577 tests, all CI/CD pipelines hardened.
 | musl/aarch64 build | Mitigated | CI builds both architectures |
 | Supply chain | Mitigated | rustsec audit + cosign signing + SBOM |
 | Performance regression | Mitigated | Criterion benchmarks + CI gates |
-| Scope creep | Mitigated | Feature freeze at v1.0.0 |
+| Scope creep | Mitigated | All roadmap items completed |
 | Docker Hub availability | Known | Retry logic in CI, alternate registries |
 | aarch64 aws-lc-rs cross-compile | Known | Limited to health-shim for aarch64-musl |
 
 ## Release Strategy
 
-| Version | Scope | Timeline |
-|---------|-------|----------|
-| v0.7.0 | Audit, refactor, CI hardening | Current |
-| v1.0.0 | Production-ready, API stable | Pending remaining items |
-| v1.1.0 | Post-launch improvements | +2 weeks |
-| v1.2.0 | Scaling features | +1 month |
-| v2.0.0 | Advanced features | +3 months |
+| Version | Scope | Status |
+|---------|-------|--------|
+| v0.7.0 | Audit, refactor, CI hardening | Completed |
+| v1.0.0 | Production-ready, API stable | Completed |
+| v1.1.0 | Post-launch improvements | Completed |
+| v1.2.0 | Scaling features | Completed |
+| v2.0.0 | Advanced features | Completed |

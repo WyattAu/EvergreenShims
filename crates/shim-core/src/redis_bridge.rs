@@ -9,9 +9,10 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use prometheus::{IntCounter, IntCounterVec, Opts, Registry};
 use redis::Commands;
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::bus::ShimBus;
 use crate::error::{Error, Result};
@@ -23,6 +24,56 @@ const STREAM_PREFIX: &str = "evergreen:shimbus:events";
 const CONSUMER_GROUP: &str = "evergreen-shims";
 /// Maximum stream length (trim to ~10k events).
 const MAX_STREAM_LEN: usize = 10_000;
+/// Warning threshold ratio for consumed events before logging.
+const CONSUME_WARNING_THRESHOLD: u64 = 1000;
+
+/// Metrics for the Redis bridge.
+pub struct RedisBridgeMetrics {
+    /// Total events published to Redis.
+    pub events_published: IntCounter,
+    /// Total events consumed from Redis.
+    pub events_consumed: IntCounter,
+    /// Total errors encountered.
+    pub errors: IntCounter,
+}
+
+impl RedisBridgeMetrics {
+    /// Create and register metrics on the given registry.
+    pub fn new(registry: &Registry) -> Self {
+        let events_published = IntCounter::with_opts(Opts::new(
+            "redis_bridge_events_published",
+            "Total events published to Redis stream",
+        ))
+        .unwrap();
+        let events_consumed = IntCounter::with_opts(Opts::new(
+            "redis_bridge_events_consumed",
+            "Total events consumed from Redis stream",
+        ))
+        .unwrap();
+        let errors = IntCounter::with_opts(Opts::new(
+            "redis_bridge_errors",
+            "Total Redis bridge errors",
+        ))
+        .unwrap();
+
+        registry
+            .register(Box::new(events_published.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(events_consumed.clone()))
+            .unwrap();
+        registry.register(Box::new(errors.clone())).unwrap();
+
+        Self {
+            events_published,
+            events_consumed,
+            errors,
+        }
+    }
+}
+
+/// Callback type for processing consumed events.
+pub type EventHandler = Arc<dyn Fn(ShimEvent) + Send + Sync>;
 
 /// Connects local `ShimBus` to a Redis stream for cross-container events.
 pub struct RedisBridge {
@@ -34,6 +85,8 @@ pub struct RedisBridge {
     instance_id: String,
     /// Stream key.
     stream_key: String,
+    /// Optional metrics collector.
+    metrics: Option<Arc<RedisBridgeMetrics>>,
 }
 
 impl RedisBridge {
@@ -55,7 +108,21 @@ impl RedisBridge {
             bus,
             instance_id: instance_id.into(),
             stream_key,
+            metrics: None,
         })
+    }
+
+    /// Create a new Redis bridge with metrics collection.
+    pub fn with_metrics(
+        redis_url: &str,
+        bus: ShimBus,
+        instance_id: impl Into<String>,
+        namespace: impl Into<String>,
+        registry: &Registry,
+    ) -> Result<Self> {
+        let mut bridge = Self::new(redis_url, bus, instance_id, namespace)?;
+        bridge.metrics = Some(Arc::new(RedisBridgeMetrics::new(registry)));
+        Ok(bridge)
     }
 
     /// Initialize the consumer group (idempotent).
@@ -115,7 +182,16 @@ impl RedisBridge {
             .arg("json")
             .arg(&json)
             .query(&mut conn)
-            .map_err(|e| Error::Connection(format!("XADD: {}", e)))?;
+            .map_err(|e| {
+                if let Some(ref m) = self.metrics {
+                    m.errors.inc();
+                }
+                Error::Connection(format!("XADD: {}", e))
+            })?;
+
+        if let Some(ref m) = self.metrics {
+            m.events_published.inc();
+        }
 
         Ok(())
     }
@@ -193,6 +269,102 @@ impl RedisBridge {
         // For simplicity, the bridge itself handles this via `start_consuming`.
         Ok(())
     }
+
+    /// Start consuming from Redis and forwarding events to a handler callback.
+    ///
+    /// Unlike `start_consuming`, this method invokes the provided callback
+    /// for each consumed event instead of publishing directly to the local bus.
+    /// The callback is responsible for processing the event.
+    pub async fn start_consuming_with_handler(
+        self: Arc<Self>,
+        poll_interval_ms: u64,
+        handler: EventHandler,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .get_connection()
+            .map_err(|e| Error::Connection(format!("redis connection: {}", e)))?;
+
+        let conn = Arc::new(parking_lot::Mutex::new(conn));
+
+        info!(
+            "redis bridge: starting consumer '{}' on '{}' with handler",
+            self.instance_id, self.stream_key
+        );
+
+        let mut last_id = "0-0".to_string();
+
+        loop {
+            let result: Option<Vec<(String, Vec<(String, Vec<(String, String)>)>)>> = {
+                let mut conn = conn.lock();
+                redis::cmd("XREADGROUP")
+                    .arg("GROUP")
+                    .arg(CONSUMER_GROUP)
+                    .arg(&self.instance_id)
+                    .arg("COUNT")
+                    .arg(10)
+                    .arg("BLOCK")
+                    .arg(poll_interval_ms)
+                    .arg("STREAMS")
+                    .arg(&self.stream_key)
+                    .arg(">")
+                    .query(&mut conn)
+                    .ok()
+            };
+
+            if let Some(streams) = result {
+                for (_stream_name, messages) in streams {
+                    for (_entry_id, fields) in messages {
+                        if let Some(json_val) = fields.iter().find(|(k, _)| k == "json") {
+                            if let Ok(event) = serde_json::from_str::<ShimEvent>(&json_val.1) {
+                                if event.source != self.instance_id {
+                                    handler(event);
+                                    if let Some(ref m) = self.metrics {
+                                        m.events_consumed.inc();
+                                    }
+                                }
+                            } else if let Some(ref m) = self.metrics {
+                                m.errors.inc();
+                                warn!("redis bridge: failed to deserialize event from stream");
+                            }
+                        }
+                        last_id = _entry_id;
+                    }
+                }
+            }
+
+            if last_id != "0-0" {
+                let mut conn = conn.lock();
+                let _: std::result::Result<i64, redis::RedisError> = redis::cmd("XACK")
+                    .arg(&self.stream_key)
+                    .arg(CONSUMER_GROUP)
+                    .arg(&last_id)
+                    .query(&mut conn);
+            }
+        }
+    }
+
+    /// Consume events from Redis and relay them directly to the local `ShimBus`.
+    ///
+    /// This is a convenience wrapper around `start_consuming_with_handler` that
+    /// publishes each consumed event into the local bus. Returns the number of
+    /// events relayed so far (useful for monitoring).
+    pub async fn relay_to_local_bus(self: Arc<Self>, poll_interval_ms: u64) -> Result<u64> {
+        let bus = self.bus.clone();
+        let relayed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let relayed_clone = relayed.clone();
+
+        let handler: EventHandler = Arc::new(move |event: ShimEvent| {
+            bus.publish(event);
+            relayed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+
+        // Run the consuming loop; this never returns unless there's a fatal error
+        self.start_consuming_with_handler(poll_interval_ms, handler)
+            .await?;
+
+        Ok(relayed.load(std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 #[cfg(test)]
@@ -201,9 +373,7 @@ mod tests {
 
     #[test]
     fn test_redis_bridge_creation() {
-        // Without a real Redis server, we can only test construction params
         let bus = ShimBus::new();
-        // This will fail to connect but tests the code path
         let result = RedisBridge::new("redis://127.0.0.1:1", bus, "test-instance", "test-ns");
         assert!(result.is_ok());
     }
@@ -220,5 +390,64 @@ mod tests {
         let bus = ShimBus::new();
         let bridge = RedisBridge::new("redis://127.0.0.1:1", bus, "i1", "").unwrap();
         assert_eq!(bridge.stream_key, "evergreen:shimbus:events:");
+    }
+
+    #[test]
+    fn test_bridge_starts_without_metrics() {
+        let bus = ShimBus::new();
+        let bridge = RedisBridge::new("redis://127.0.0.1:1", bus, "i1", "ns").unwrap();
+        assert!(bridge.metrics.is_none());
+    }
+
+    #[test]
+    fn test_bridge_with_metrics() {
+        let registry = Registry::new();
+        let bus = ShimBus::new();
+        let bridge =
+            RedisBridge::with_metrics("redis://127.0.0.1:1", bus, "i1", "ns", &registry).unwrap();
+        assert!(bridge.metrics.is_some());
+
+        let m = bridge.metrics.as_ref().unwrap();
+        m.events_published.inc();
+        m.events_consumed.inc();
+        m.errors.inc();
+
+        let output = prometheus::TextEncoder::new()
+            .encode_to_string(&registry.gather())
+            .unwrap();
+        assert!(output.contains("redis_bridge_events_published"));
+        assert!(output.contains("redis_bridge_events_consumed"));
+        assert!(output.contains("redis_bridge_errors"));
+    }
+
+    #[test]
+    fn test_redis_bridge_metrics_creation() {
+        let registry = Registry::new();
+        let m = RedisBridgeMetrics::new(&registry);
+        assert_eq!(m.events_published.get(), 0);
+        assert_eq!(m.events_consumed.get(), 0);
+        assert_eq!(m.errors.get(), 0);
+    }
+
+    #[test]
+    fn test_redis_bridge_metrics_increments() {
+        let registry = Registry::new();
+        let m = RedisBridgeMetrics::new(&registry);
+        m.events_published.inc();
+        m.events_published.inc();
+        m.events_consumed.inc();
+        m.errors.inc();
+        m.errors.inc();
+        m.errors.inc();
+
+        assert_eq!(m.events_published.get(), 2);
+        assert_eq!(m.events_consumed.get(), 1);
+        assert_eq!(m.errors.get(), 3);
+    }
+
+    #[test]
+    fn test_handler_type_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<EventHandler>();
     }
 }
