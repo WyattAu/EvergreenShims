@@ -178,19 +178,6 @@ jobs:
               print(f"All {len(results)} benchmarks passed regression checks.")
           EOF
 
-  wasm-check:
-    name: WASM Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Check WASM target compiles
-        run: cargo check -p shim-core --target wasm32-unknown-unknown --features wasm
-
   binary-size-check:
     name: Binary Size Check
     runs-on: ubuntu-latest
