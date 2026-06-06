@@ -22,6 +22,7 @@ rustls-pemfile.workspace = true
 reqwest.workspace = true
 parking_lot.workspace = true
 rcgen.workspace = true
+acme-micro.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

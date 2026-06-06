@@ -385,7 +385,16 @@ impl TlsShim {
     }
 
     /// Obtain a certificate from Let's Encrypt via ACME HTTP-01 challenge.
-    /// Note: This requires the TLS_LISTEN port (default :80) to be accessible from the internet.
+    ///
+    /// Full ACME flow:
+    /// 1. Generate account key
+    /// 2. Create order
+    /// 3. Respond to HTTP-01 challenge (serve token on port 80)
+    /// 4. Finalize order
+    /// 5. Download certificate
+    ///
+    /// Requires port 80 to be accessible for HTTP-01 challenge validation.
+    /// Uses Let's Encrypt staging by default; set TLS_LETSENCRYPT_PROD=true for production.
     async fn obtain_letsencrypt_cert(&self) -> anyhow::Result<(String, String)> {
         if self.domain.is_empty() {
             anyhow::bail!("Domain required for Let's Encrypt");
@@ -394,52 +403,161 @@ impl TlsShim {
             anyhow::bail!("Email required for Let's Encrypt");
         }
 
-        // Use Let's Encrypt staging for safety
-        let directory_url = "https://acme-staging-v02.api.letsencrypt.org/directory";
+        let use_prod = std::env::var("TLS_LETSENCRYPT_PROD")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
 
-        let http_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
-
-        // Fetch directory
-        let dir_resp: serde_json::Value =
-            http_client.get(directory_url).send().await?.json().await?;
-
-        let new_nonce_url = dir_resp["newNonce"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("No newNonce in ACME directory"))?;
-
-        // Get nonce
-        let nonce_resp = http_client.head(new_nonce_url).send().await?;
-        let _nonce = nonce_resp
-            .headers()
-            .get("replay-nonce")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+        let directory_url = if use_prod {
+            acme_micro::DirectoryUrl::LetsEncrypt
+        } else {
+            acme_micro::DirectoryUrl::LetsEncryptStaging
+        };
 
         tracing::info!(
-            "ACME challenge initiated for {} (nonce obtained, challenge server started on {})",
+            "Starting ACME HTTP-01 challenge for {} (prod={})",
             self.domain,
-            self.listen
+            use_prod
         );
 
-        // In production, this would complete the full ACME flow:
-        // 1. Generate account key
-        // 2. Create order
-        // 3. Respond to HTTP-01 challenge (serve token on port 80)
-        // 4. Finalize order
-        // 5. Download certificate
-        //
-        // For now, generate a self-signed cert as a placeholder
-        // and log the ACME flow status
-        tracing::warn!(
-            "ACME full flow not yet implemented — generating self-signed cert as placeholder. \
-             In production, install a proper ACME client (e.g., certbot) alongside this shim."
-        );
+        // Step 1: Create directory and register account
+        let dir = acme_micro::Directory::from_url(directory_url)?;
 
-        let (cert_pem, key_pem) = Self::generate_self_signed(&self.domain)?;
+        let contact = vec![format!("mailto:{}", self.email)];
+        let acc = dir.register_account(contact.clone())?;
+
+        // Save account key for renewal
+        let acc_private_key = acc.acme_private_key_pem()?;
+        let account_key_path = format!("/tmp/.acme_account_key_{}", self.domain);
+        tokio::fs::write(&account_key_path, &acc_private_key).await?;
+
+        // Step 2: Create order
+        let ord_new = acc.new_order(&self.domain, &[])?;
+
+        // Step 3: Get authorizations and respond to challenge
+        let ord_csr = loop {
+            if let Some(ord_csr) = ord_new.confirm_validations() {
+                break ord_csr;
+            }
+
+            let auths = ord_new.authorizations()?;
+            let chall = auths[0]
+                .http_challenge()
+                .ok_or_else(|| anyhow::anyhow!("No HTTP-01 challenge available"))?;
+
+            let token = chall.http_token();
+            let proof = chall.http_proof()?;
+
+            tracing::info!(
+                "ACME challenge token: {}, proof length: {}",
+                token,
+                proof.len()
+            );
+
+            // Step 4: Start HTTP server for challenge
+            let challenge_port: u16 = std::env::var("TLS_CHALLENGE_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(80);
+
+            let token_clone = token.to_string();
+            let proof_clone = proof.clone();
+            let challenge_server = tokio::spawn(async move {
+                let listener = match tokio::net::TcpListener::bind(format!(
+                    "0.0.0.0:{}",
+                    challenge_port
+                ))
+                .await
+                {
+                    Ok(l) => l,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to bind challenge server on port {}: {}",
+                            challenge_port,
+                            e
+                        );
+                        return;
+                    }
+                };
+
+                tracing::info!("ACME challenge server listening on port {}", challenge_port);
+
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+
+                loop {
+                    tokio::select! {
+                                            accept = listener.accept() => {
+                                                match accept {
+                                                    Ok((mut stream, _)) => {
+                                                        let token = token_clone.clone();
+                                                        let proof = proof_clone.clone();
+                                                        tokio::spawn(async move {
+                                                            let mut buffer = vec
+                    ![0u8; 1024];
+                                                            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buffer).await;
+                                                            let request = String::from_utf8_lossy(&buffer);
+
+                                                            if request.contains(
+                                                                &format!("/.well-known/acme-challenge/{}", token)
+                                                            ) {
+                                                                let response = format!(
+                                                                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                                                                    proof.len(),
+                                                                    proof
+                                                                );
+                                                                let _ = tokio::io::AsyncWriteExt::write_all(
+                                                                    &mut stream,
+                                                                    response.as_bytes()
+                                                                ).await;
+                                                            } else {
+                                                                let _ = tokio::io::AsyncWriteExt::write_all(
+                                                                    &mut stream,
+                                                                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+                                                                ).await;
+                                                            }
+                                                        });
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::warn!("Challenge server accept error: {}", e);
+                                                    }
+                                                }
+                                            }
+                                            _ = tokio::time::sleep_until(deadline) => {
+                                                break;
+                                            }
+                                        }
+                }
+            });
+
+            // Give server time to start
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+            // Step 5: Respond to challenge
+            tracing::info!("Validating ACME challenge for token: {}", token);
+            chall.validate(std::time::Duration::from_millis(5000))?;
+
+            // Cleanup challenge server
+            challenge_server.abort();
+        };
+
+        // Step 6: Finalize order
+        let pkey_pri = acme_micro::create_p384_key()?;
+        let ord_cert = ord_csr.finalize_pkey(pkey_pri, std::time::Duration::from_millis(5000))?;
+
+        // Step 7: Download certificate
+        let cert = ord_cert.download_cert()?;
+
+        let cert_pem = cert.certificate().to_string();
+        let key_pem = cert.private_key().to_string();
+
         self.save_cert_to_disk(&cert_pem, &key_pem)?;
+
+        tracing::info!(
+            "ACME certificate obtained successfully for {} ({} bytes cert, {} bytes key)",
+            self.domain,
+            cert_pem.len(),
+            key_pem.len()
+        );
+
         Ok((cert_pem, key_pem))
     }
 
