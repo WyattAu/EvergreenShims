@@ -1,6 +1,7 @@
 //! Chaos shim — fault injection for resilience testing.
 //!
-//! Injects faults (latency, errors, partitions) to test application resilience.
+//! Injects faults (latency, errors, partitions, process kill, disk fill, CPU stress)
+//! to test application resilience against real infrastructure failures.
 //!
 //! ## Environment Variables
 //!
@@ -13,6 +14,10 @@
 //! CHAOS_DURATION_SECS    How long chaos lasts (default: 60)
 //! CHAOS_TARGET           Target to apply chaos to (default: all)
 //! CHAOS_BLAST_RADIUS     Blast radius as percentage 0.0-1.0 (default: 1.0)
+//! CHAOS_REAL_FAULTS      Enable real fault injection via system commands (default: false)
+//! CHAOS_IPTABLES_CHAIN   iptables chain for network partition (default: INPUT)
+//! CHAOS_DISK_FILL_PATH   Path for disk fill fault (default: /tmp/chaos-fill)
+//! CHAOS_DISK_FILL_SIZE   Size in MB for disk fill (default: 100)
 //! ```
 
 use std::collections::HashMap;
@@ -300,6 +305,185 @@ impl ChaosShim {
         }
         Ok(())
     }
+
+    // =========================================================================
+    // Real Fault Injection (requires elevated permissions)
+    // =========================================================================
+
+    /// Create a network partition by blocking traffic to/from a target IP using iptables.
+    ///
+    /// Requires root/sudo. Creates a rule in the specified chain (default: INPUT).
+    /// Returns a rule identifier that can be used with `remove_network_partition`.
+    #[allow(dead_code)]
+    pub async fn create_network_partition(target_ip: &str, chain: &str) -> anyhow::Result<String> {
+        let rule_id = format!("chaos-{}", uuid_short());
+
+        tracing::warn!(
+            "Creating network partition for {} (chain: {}, rule: {})",
+            target_ip,
+            chain,
+            rule_id
+        );
+
+        let output = tokio::process::Command::new("sudo")
+            .args([
+                "iptables",
+                "-A",
+                chain,
+                "-s",
+                target_ip,
+                "-j",
+                "DROP",
+                "-m",
+                "comment",
+                "--comment",
+                &rule_id,
+            ])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Failed to create network partition: {}", stderr);
+        }
+
+        tracing::info!(
+            "Network partition created for {} (rule: {})",
+            target_ip,
+            rule_id
+        );
+        Ok(rule_id)
+    }
+
+    /// Remove a network partition by deleting the iptables rule.
+    #[allow(dead_code)]
+    pub async fn remove_network_partition(rule_id: &str, chain: &str) -> anyhow::Result<()> {
+        tracing::info!("Removing network partition (rule: {})", rule_id);
+
+        let output = tokio::process::Command::new("sudo")
+            .args([
+                "iptables",
+                "-D",
+                chain,
+                "-m",
+                "comment",
+                "--comment",
+                rule_id,
+                "-j",
+                "DROP",
+            ])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Failed to remove network partition: {}", stderr);
+        }
+
+        tracing::info!("Network partition removed (rule: {})", rule_id);
+        Ok(())
+    }
+
+    /// Kill a process by PID with SIGKILL.
+    ///
+    /// Used for process crash fault injection.
+    #[allow(dead_code)]
+    pub async fn kill_process(pid: u32) -> anyhow::Result<()> {
+        tracing::warn!("Killing process PID {} (SIGKILL)", pid);
+
+        let output = tokio::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Failed to kill process {}: {}", pid, stderr);
+        }
+
+        tracing::info!("Process {} killed", pid);
+        Ok(())
+    }
+
+    /// Fill disk space at the specified path.
+    ///
+    /// Creates a large file to simulate disk-full conditions.
+    /// Use `remove_disk_fill` to clean up afterward.
+    #[allow(dead_code)]
+    pub async fn create_disk_fill(path: &str, size_mb: u64) -> anyhow::Result<()> {
+        tracing::warn!("Creating disk fill at {} ({} MB)", path, size_mb);
+
+        let output = tokio::process::Command::new("fallocate")
+            .args(["-l", &format!("{}M", size_mb), path])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            // Fall back to dd if fallocate is not available
+            let output = tokio::process::Command::new("dd")
+                .args([
+                    "if=/dev/zero",
+                    &format!("of={}", path),
+                    "bs=1M",
+                    &format!("count={}", size_mb),
+                ])
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("Failed to create disk fill: {}", stderr);
+            }
+        }
+
+        tracing::info!("Disk fill created: {} ({} MB)", path, size_mb);
+        Ok(())
+    }
+
+    /// Remove a disk fill file.
+    #[allow(dead_code)]
+    pub async fn remove_disk_fill(path: &str) -> anyhow::Result<()> {
+        tracing::info!("Removing disk fill: {}", path);
+        tokio::fs::remove_file(path).await?;
+        tracing::info!("Disk fill removed: {}", path);
+        Ok(())
+    }
+
+    /// Apply CPU stress using stress-ng.
+    ///
+    /// Runs CPU stress for the specified duration.
+    #[allow(dead_code)]
+    pub async fn apply_cpu_stress(cores: u32, duration_secs: u64) -> anyhow::Result<()> {
+        tracing::warn!("Applying CPU stress ({} cores, {}s)", cores, duration_secs);
+
+        let output = tokio::process::Command::new("stress-ng")
+            .args([
+                "--cpu",
+                &cores.to_string(),
+                "--timeout",
+                &format!("{}s", duration_secs),
+            ])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("CPU stress failed: {}", stderr);
+        }
+
+        tracing::info!("CPU stress completed ({} cores, {}s)", cores, duration_secs);
+        Ok(())
+    }
+}
+
+/// Generate a short UUID-like identifier for rule tracking.
+fn uuid_short() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{:x}", t as u64)
 }
 
 impl Default for ChaosShim {
