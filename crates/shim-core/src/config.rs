@@ -1207,13 +1207,16 @@ max_connections = 100
 
     #[test]
     fn test_config_merge_without_env_override() {
-        let mut base = Config::default();
-        base.resource_quota.max_memory_bytes = Some(1024);
-        let mut overlay = Config::default();
-        overlay.resource_quota.max_memory_bytes = Some(2048);
+        // Ensure no env var pollutes this test when running in parallel
+        temp_env::with_var("SHIM_MAX_MEMORY_BYTES", None::<&str>, || {
+            let mut base = Config::default();
+            base.resource_quota.max_memory_bytes = Some(1024);
+            let mut overlay = Config::default();
+            overlay.resource_quota.max_memory_bytes = Some(2048);
 
-        base.merge(overlay);
-        assert_eq!(base.resource_quota.max_memory_bytes, Some(1024));
+            base.merge(overlay);
+            assert_eq!(base.resource_quota.max_memory_bytes, Some(1024));
+        });
     }
 
     // --- tenant tests ---

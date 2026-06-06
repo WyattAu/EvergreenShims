@@ -1,8 +1,10 @@
 # Roadmap
 
-Current state: v0.6.0 -- 32 crates, 834+ tests, all CI/CD pipelines active.
+Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHub Pages deployed.
 
-## v0.3.0 Audit Complete
+## Completed Milestones
+
+### v0.3.0 Audit Complete
 
 | Task | Status | Impact |
 |------|--------|--------|
@@ -15,7 +17,7 @@ Current state: v0.6.0 -- 32 crates, 834+ tests, all CI/CD pipelines active.
 | Landing page redesign (brutalist/amoebic) | Completed | Brand identity |
 | Documentation overhaul | Completed | Developer experience |
 
-## v0.4.0 Hardening
+### v0.4.0 Hardening
 
 | Task | Status | Impact |
 |------|--------|--------|
@@ -29,7 +31,7 @@ Current state: v0.6.0 -- 32 crates, 834+ tests, all CI/CD pipelines active.
 | subscribe_filtered() API fix | Completed | API correctness |
 | Missing module-level doc comments | Completed | Documentation |
 
-## v0.5.0 Test Coverage Expansion
+### v0.5.0 Test Coverage Expansion
 
 | Task | Status | Impact |
 |------|--------|--------|
@@ -40,7 +42,7 @@ Current state: v0.6.0 -- 32 crates, 834+ tests, all CI/CD pipelines active.
 | Concurrency stress tests | Completed | ShimBus/Config concurrency |
 | Benchmark regression threshold tuning | Completed | CI accuracy |
 
-## v0.6.0 Production Readiness
+### v0.6.0 Production Readiness
 
 | Task | Status | Impact |
 |------|--------|--------|
@@ -50,31 +52,51 @@ Current state: v0.6.0 -- 32 crates, 834+ tests, all CI/CD pipelines active.
 | Tenant rate-limit counter reset | Completed | Rate limiting correctness |
 | WASM build verification in CI | Completed | Cross-platform |
 | Config schema versioning | Completed | Migration support |
-| Structured error types per shim | Deferred | Low priority |
+| Unused variable warning fix (health.rs) | Completed | Build hygiene |
+| Benchmark baseline recalibration | Completed | Regression accuracy |
+| Supply chain hardening (SHA-pinned actions) | Completed | CI/CD security |
+| cargo-deny integration | Completed | Dependency auditing |
+| commit-msg/pre-push hooks | Completed | Developer ergonomics |
+| Landing page accessibility (WCAG) | Completed | Accessibility |
+| Documentation metrics update | Completed | Accuracy |
 
 ## v1.0.0 Production Release
 
-| Task | Status | Impact |
-|------|--------|--------|
-| Performance regression baseline recalibration | Pending | Benchmark accuracy |
-| SBOM automation in CI | Pending | Supply chain transparency |
-| Documentation site polish | Pending | Developer experience |
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| Structured error types per shim | Pending | Medium | API ergonomics |
+| Per-crate README files | Pending | Medium | Discoverability |
+| API reference docs (cargo doc) | Pending | High | Developer experience |
+| Integration test coverage expansion | Pending | High | Reliability |
+| Chaos test automation in CI | Pending | High | Resilience validation |
+| Performance regression baseline v2 | Pending | Medium | Benchmark accuracy |
+| Docker image vulnerability remediation | Pending | High | Security |
+| aarch64 full/infra builds | Pending | Low | Platform coverage |
+| SBOM generation in CI | Pending | Medium | Supply chain transparency |
 
 ## v2.0.0 Scaling
 
-| Task | Status | Impact |
-|------|--------|--------|
-| Distributed tracing across shim instances | Pending | Observability |
-| Multi-cluster failover | Pending | HA |
-| Observability dashboard | Pending | Operations |
-| Operator maturity (Helm/CRD) | Pending | Kubernetes |
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| Distributed tracing across shim instances | Pending | High | Observability |
+| Multi-cluster failover | Pending | High | HA |
+| Observability dashboard (Grafana) | Pending | Medium | Operations |
+| Operator maturity (Helm/CRD) | Pending | High | Kubernetes |
+| Config hot-reload via Kubernetes ConfigMap | Pending | Medium | K8s integration |
+| Graceful degradation with circuit breakers | Pending | High | Fault tolerance |
+| Multi-tenant resource isolation hardening | Pending | High | Security |
+| Webhook-based alerting with retry | Pending | Medium | Reliability |
 
 ## v3.0.0 Platform
 
-| Task | Status | Impact |
-|------|--------|--------|
-| Multi-language shim SDK | Pending | Ecosystem |
-| Edge deployment targets | Pending | Deployment |
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| Multi-language shim SDK (Go, Python, Node) | Pending | High | Ecosystem |
+| Edge deployment targets (ARM, RISC-V) | Pending | Medium | Deployment |
+| Plugin system for custom shims | Pending | High | Extensibility |
+| WebAssembly shim runtime | Pending | Medium | Portability |
+| CLI management tool | Pending | Medium | Operations |
+| Terraform/Pulumi provider | Pending | Medium | IaC integration |
 
 ## Architecture Decisions
 
@@ -93,18 +115,22 @@ Current state: v0.6.0 -- 32 crates, 834+ tests, all CI/CD pipelines active.
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | aarch64 aws-lc-rs cross-compile | Known | Limited to health-shim for aarch64-musl |
-| Docker Hub availability | Known | Retry logic in CI, alternate registries |
+| Docker Hub availability | Known | Retry logic in CI, GHCR as primary |
+| Cargo-deny false positives | Low | Allowlist tuning in deny.toml |
+| Pre-push hook latency (~84s) | Low | Acceptable for safety guarantee |
 
 ## Quality Metrics
 
 | Metric | Current | Target (v1.0.0) |
 |--------|---------|-----------------|
-| Unit tests | 834+ | >900 |
+| Unit tests | 792 | >900 |
 | Clippy warnings | 0 | 0 |
 | Unsafe code | 0 | 0 |
-| Pre-commit checks | 6 | 6 |
-| CI pipeline jobs | 9 | 9 |
+| Pre-commit checks | 8 | 8 |
+| CI pipeline jobs | 10 | 10 |
 | Binary size (health) | ~2.5MB | <3MB |
 | Crates | 32 | 32 |
-| Per-shim READMEs | 27 | 27 |
 | Documentation coverage | 90% | >95% |
+| GitHub Pages | Active | Active |
+| Supply chain (SHA pins) | Active | Active |
+| Dependency audit (cargo-deny) | Active | Active |
