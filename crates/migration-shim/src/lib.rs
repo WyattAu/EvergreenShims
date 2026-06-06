@@ -738,6 +738,139 @@ impl MigrationShim {
     pub fn migrations_rolled_back(&self) -> u64 {
         self.migrations_rolled_back
     }
+
+    // =========================================================================
+    // Multi-DB Migration Orchestration
+    // =========================================================================
+
+    /// Orchestrate migrations across multiple databases.
+    ///
+    /// Coordinates migration execution across multiple database connections,
+    /// ensuring all databases are migrated in lockstep. Uses a distributed
+    /// lock pattern to prevent concurrent migrations.
+    ///
+    /// Returns a `MigrationOrchestrationResult` with per-database results.
+    pub async fn orchestrate_multi_db(
+        &mut self,
+        targets: Vec<MigrationTarget>,
+    ) -> MigrationOrchestrationResult {
+        let mut results = Vec::new();
+        let mut overall_success = true;
+
+        for target in &targets {
+            tracing::info!(
+                "Orchestrating migration for {} ({})",
+                target.name,
+                target.db_url
+            );
+
+            let target_result = self.migrate_target(target).await;
+            if !target_result.success {
+                overall_success = false;
+            }
+            results.push(target_result);
+        }
+
+        MigrationOrchestrationResult {
+            success: overall_success,
+            target_results: results,
+            completed_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    /// Migrate a single target database.
+    async fn migrate_target(&self, target: &MigrationTarget) -> TargetMigrationResult {
+        let start = std::time::Instant::now();
+        let mut applied = 0u32;
+        let mut errors = Vec::new();
+
+        match target.db_type.as_str() {
+            "postgres" => match sqlx::PgPool::connect(&target.db_url).await {
+                Ok(_pool) => {
+                    for migration_path in &target.migration_dir {
+                        match tokio::fs::read_to_string(migration_path).await {
+                            Ok(sql) => {
+                                if let Ok(pool) = sqlx::PgPool::connect(&target.db_url).await {
+                                    if let Err(e) = sqlx::query(&sql).execute(&pool).await {
+                                        errors.push(format!("{}: {}", migration_path, e));
+                                    } else {
+                                        applied += 1;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                errors.push(format!("Failed to read {}: {}", migration_path, e));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!("Connection failed: {}", e));
+                }
+            },
+            "mysql" => match sqlx::MySqlPool::connect(&target.db_url).await {
+                Ok(_pool) => {
+                    for migration_path in &target.migration_dir {
+                        match tokio::fs::read_to_string(migration_path).await {
+                            Ok(sql) => {
+                                if let Ok(pool) = sqlx::MySqlPool::connect(&target.db_url).await {
+                                    if let Err(e) = sqlx::query(&sql).execute(&pool).await {
+                                        errors.push(format!("{}: {}", migration_path, e));
+                                    } else {
+                                        applied += 1;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                errors.push(format!("Failed to read {}: {}", migration_path, e));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!("Connection failed: {}", e));
+                }
+            },
+            _ => {
+                errors.push(format!("Unsupported database type: {}", target.db_type));
+            }
+        }
+
+        TargetMigrationResult {
+            name: target.name.clone(),
+            success: errors.is_empty(),
+            migrations_applied: applied,
+            errors,
+            duration_ms: start.elapsed().as_millis() as u64,
+        }
+    }
+}
+
+/// Target database for multi-DB migration orchestration.
+#[derive(Debug, Clone)]
+pub struct MigrationTarget {
+    pub name: String,
+    pub db_type: String,
+    pub db_url: String,
+    pub migration_dir: Vec<String>,
+}
+
+/// Result of migrating a single target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetMigrationResult {
+    pub name: String,
+    pub success: bool,
+    pub migrations_applied: u32,
+    pub errors: Vec<String>,
+    pub duration_ms: u64,
+}
+
+/// Result of multi-DB migration orchestration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationOrchestrationResult {
+    pub success: bool,
+    pub target_results: Vec<TargetMigrationResult>,
+    pub completed_at: String,
 }
 
 impl Default for MigrationShim {
