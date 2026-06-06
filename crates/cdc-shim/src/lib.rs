@@ -433,6 +433,84 @@ impl CdcShim {
     pub fn recent_published(&self) -> &[CdcEvent] {
         &self.published_ring
     }
+
+    // =========================================================================
+    // Real CDC Output Methods
+    // =========================================================================
+
+    /// Publish a batch of events to Kafka via REST proxy.
+    #[allow(dead_code)]
+    async fn publish_via_kafka(&self, events: &[CdcEvent]) -> u64 {
+        let _brokers = match std::env::var("CDC_KAFKA_BROKERS") {
+            Ok(b) => b,
+            Err(_) => {
+                tracing::warn!("CDC_KAFKA_BROKERS not set, falling back to log");
+                return self.publish_via_log(events);
+            }
+        };
+        let topic = match std::env::var("CDC_KAFKA_TOPIC") {
+            Ok(t) => t,
+            Err(_) => {
+                tracing::warn!("CDC_KAFKA_TOPIC not set, falling back to log");
+                return self.publish_via_log(events);
+            }
+        };
+        let mut published = 0u64;
+        for event in events {
+            if let Ok(payload) = serde_json::to_string(event) {
+                if let Ok(rest_url) = std::env::var("CDC_KAFKA_REST_URL") {
+                    let url = format!("{}/topics/{}", rest_url, topic);
+                    let body = serde_json::json!({"records": [{"value": payload}]});
+                    match reqwest::Client::new().post(&url).json(&body).send().await {
+                        Ok(r) if r.status().is_success() => {
+                            published += 1;
+                        }
+                        _ => {}
+                    }
+                } else {
+                    tracing::info!("Kafka (log): topic={}, id={}", topic, event.event_id);
+                    published += 1;
+                }
+            }
+        }
+        published
+    }
+
+    /// Publish a batch of events to NATS via HTTP.
+    #[allow(dead_code)]
+    async fn publish_via_nats(&self, events: &[CdcEvent]) -> u64 {
+        let nats_url = match std::env::var("CDC_NATS_URL") {
+            Ok(u) => u,
+            Err(_) => return self.publish_via_log(events),
+        };
+        let subject =
+            std::env::var("CDC_NATS_SUBJECT").unwrap_or_else(|_| "cdc.events".to_string());
+        let mut published = 0u64;
+        for event in events {
+            if let Ok(payload) = serde_json::to_string(event) {
+                let url = format!("{}/pub/{}", nats_url, subject);
+                match reqwest::Client::new().post(&url).body(payload).send().await {
+                    Ok(r) if r.status().is_success() => {
+                        published += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        published
+    }
+
+    /// Log-based publishing (fallback).
+    fn publish_via_log(&self, events: &[CdcEvent]) -> u64 {
+        let mut published = 0u64;
+        for event in events {
+            if let Ok(json) = serde_json::to_string(event) {
+                tracing::info!(table = %event.table, operation = %event.operation, "CDC: {}", json);
+                published += 1;
+            }
+        }
+        published
+    }
 }
 
 impl Default for CdcShim {
