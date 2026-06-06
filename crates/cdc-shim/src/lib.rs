@@ -664,6 +664,98 @@ impl CdcShim {
             tokio::time::sleep(std::time::Duration::from_secs(poll_interval)).await;
         }
     }
+
+    /// Start CDC from Redis using keyspace notifications polling.
+    ///
+    /// Polls Redis using SCAN to detect changes in key patterns.
+    #[allow(dead_code)]
+    pub async fn start_redis_cdc(&mut self) -> anyhow::Result<()> {
+        let redis_url =
+            std::env::var("CDC_REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+        let patterns: Vec<String> = std::env::var("CDC_REDIS_PATTERNS")
+            .unwrap_or_else(|_| "*".to_string())
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+        let poll_interval: u64 = std::env::var("CDC_POLL_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5);
+
+        let mut conn = redis::Client::open(redis_url.as_str())
+            .map_err(|e| anyhow::anyhow!("Failed to create Redis client: {}", e))?
+            .get_connection()
+            .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {}", e))?;
+
+        tracing::info!("Starting Redis CDC polling (interval={}s)", poll_interval);
+
+        let mut prev_checksums: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        loop {
+            for pattern in &patterns {
+                let mut cursor: u64 = 0;
+                loop {
+                    let result: (u64, Vec<String>) = redis::cmd("SCAN")
+                        .arg(cursor)
+                        .arg("MATCH")
+                        .arg(pattern)
+                        .arg("COUNT")
+                        .arg(100)
+                        .query(&mut conn)
+                        .unwrap_or((0, Vec::new()));
+
+                    cursor = result.0;
+                    let keys = result.1;
+
+                    for key in &keys {
+                        let ttl: i64 = redis::cmd("TTL").arg(key).query(&mut conn).unwrap_or(-1);
+                        let val_type: String = redis::cmd("TYPE")
+                            .arg(key)
+                            .query(&mut conn)
+                            .unwrap_or_default();
+                        let checksum = format!("{}:{}", val_type, ttl);
+
+                        if prev_checksums.get(key.as_str()).map(|s| s.as_str()) != Some(&checksum) {
+                            let operation = if !prev_checksums.contains_key(key) {
+                                CdcOperation::Insert
+                            } else {
+                                CdcOperation::Update
+                            };
+
+                            let event = CdcEvent {
+                                event_id: format!(
+                                    "redis-cdc-{}",
+                                    chrono::Utc::now().timestamp_millis()
+                                ),
+                                lsn: format!("redis:{}", key),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                table: "redis".to_string(),
+                                operation,
+                                before: prev_checksums
+                                    .get(key)
+                                    .map(|c| serde_json::json!({"checksum": c})),
+                                after: Some(
+                                    serde_json::json!({"key": key, "type": val_type, "ttl": ttl}),
+                                ),
+                                published: false,
+                            };
+
+                            self.capture(event);
+                            prev_checksums.insert(key.clone(), checksum);
+                        }
+                    }
+
+                    if cursor == 0 {
+                        break;
+                    }
+                }
+            }
+
+            self.publish_batch().await;
+            tokio::time::sleep(std::time::Duration::from_secs(poll_interval)).await;
+        }
+    }
 }
 
 /// Parse PostgreSQL LSN string (e.g., "0/1234567") to a numeric value.

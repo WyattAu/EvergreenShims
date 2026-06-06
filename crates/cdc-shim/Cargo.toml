@@ -18,3 +18,4 @@ chrono.workspace = true
 prometheus.workspace = true
 reqwest.workspace = true
 sqlx.workspace = true
+redis.workspace = true
