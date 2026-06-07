@@ -42,6 +42,7 @@
 //! FAILOVER_CHECK_INTERVAL_SECS  Check interval in seconds (default: 5)
 //! ```
 
+use std::collections::HashMap;
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -1462,6 +1463,702 @@ impl RedisSentinelMonitor {
     }
 }
 
+// ============================================================================
+// Multi-Cluster Failover
+// ============================================================================
+
+/// Status of an individual cluster.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ClusterStatus {
+    /// Cluster is healthy and serving traffic.
+    Healthy,
+    /// Cluster is degraded — some endpoints unreachable or high latency.
+    Degraded,
+    /// Cluster is fully down.
+    Failed,
+    /// Cluster status is unknown (not yet checked).
+    Unknown,
+}
+
+impl ClusterStatus {
+    /// Numeric value for metrics.
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            ClusterStatus::Healthy => 0.0,
+            ClusterStatus::Degraded => 1.0,
+            ClusterStatus::Failed => 2.0,
+            ClusterStatus::Unknown => 3.0,
+        }
+    }
+}
+
+/// Strategy for selecting a failover cluster from multiple candidates.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MultiClusterFailoverStrategy {
+    /// Try clusters in the order they are configured (priority order).
+    #[default]
+    Sequential,
+    /// Pick the cluster with the lowest measured latency.
+    LatencyBased,
+    /// Weighted random selection based on cluster health scores.
+    WeightedRandom,
+}
+
+impl std::fmt::Display for MultiClusterFailoverStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sequential => write!(f, "sequential"),
+            Self::LatencyBased => write!(f, "latency"),
+            Self::WeightedRandom => write!(f, "weighted"),
+        }
+    }
+}
+
+/// Health information for a single cluster.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterHealth {
+    /// Cluster name.
+    pub name: String,
+    /// Endpoints to check (host:port).
+    pub endpoints: Vec<String>,
+    /// Current cluster status.
+    pub status: ClusterStatus,
+    /// When the last health check was performed.
+    pub last_check: chrono::DateTime<chrono::Utc>,
+    /// Measured replication lag in milliseconds, if available.
+    pub replication_lag_ms: Option<u64>,
+    /// Measured latency in milliseconds for the last check.
+    pub latency_ms: Option<u64>,
+    /// Number of consecutive check failures for this cluster.
+    pub consecutive_failures: u32,
+}
+
+impl ClusterHealth {
+    /// Create a new cluster health entry.
+    pub fn new(name: impl Into<String>, endpoints: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            endpoints,
+            status: ClusterStatus::Unknown,
+            last_check: chrono::Utc::now(),
+            replication_lag_ms: None,
+            latency_ms: None,
+            consecutive_failures: 0,
+        }
+    }
+}
+
+/// Monitor that tracks health across multiple clusters and promotes
+/// the best secondary when the primary cluster fails.
+pub struct MultiClusterMonitor {
+    /// Map of cluster name → health info.
+    clusters: HashMap<String, ClusterHealth>,
+    /// Name of the current primary cluster.
+    primary_cluster: String,
+    /// Strategy for selecting a failover target.
+    failover_strategy: MultiClusterFailoverStrategy,
+    /// How often to check cross-cluster health (seconds).
+    cross_cluster_check_interval_secs: u64,
+    /// Consecutive failures before marking a cluster as failed.
+    failure_threshold: u32,
+    /// Optional webhook URL for notifications.
+    webhook: Option<String>,
+    /// Bus for event emission.
+    bus: Option<ShimBus>,
+    /// Shutdown signal.
+    shutdown_tx: Option<watch::Sender<bool>>,
+    /// Number of promotions that have occurred.
+    promotions_total: AtomicU64,
+    /// The name of the cluster that was promoted.
+    current_primary: parking_lot::Mutex<String>,
+}
+
+impl MultiClusterMonitor {
+    /// Create a new monitor from environment variables.
+    ///
+    /// ## Environment Variables
+    ///
+    /// ```text
+    /// FAILOVER_CLUSTERS          Comma-separated triples: name:host:port,name:host:port,...
+    /// FAILOVER_PRIMARY           Name of the primary cluster
+    /// FAILOVER_STRATEGY          sequential|latency|weighted (default: sequential)
+    /// FAILOVER_CROSS_CHECK_SECS  Cross-cluster check interval in seconds (default: 10)
+    /// FAILOVER_FAILURE_THRESHOLD Consecutive failures before cluster is Failed (default: 3)
+    /// FAILOVER_WEBHOOK           Webhook URL for failover notifications
+    /// ```
+    pub fn from_env() -> Self {
+        let clusters_str = std::env::var("FAILOVER_CLUSTERS").unwrap_or_default();
+        let clusters = Self::parse_clusters(&clusters_str);
+
+        let primary_cluster = std::env::var("FAILOVER_PRIMARY").unwrap_or_else(|_| {
+            clusters
+                .keys()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| "primary".to_string())
+        });
+
+        let strategy_str =
+            std::env::var("FAILOVER_STRATEGY").unwrap_or_else(|_| "sequential".to_string());
+        let failover_strategy = match strategy_str.as_str() {
+            "latency" => MultiClusterFailoverStrategy::LatencyBased,
+            "weighted" => MultiClusterFailoverStrategy::WeightedRandom,
+            _ => MultiClusterFailoverStrategy::Sequential,
+        };
+
+        let cross_cluster_check_interval_secs = std::env::var("FAILOVER_CROSS_CHECK_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10);
+
+        let failure_threshold = std::env::var("FAILOVER_FAILURE_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3);
+
+        let webhook = std::env::var("FAILOVER_WEBHOOK").ok();
+
+        Self {
+            clusters,
+            primary_cluster,
+            failover_strategy,
+            cross_cluster_check_interval_secs,
+            failure_threshold,
+            webhook,
+            bus: None,
+            shutdown_tx: None,
+            promotions_total: AtomicU64::new(0),
+            current_primary: parking_lot::Mutex::new(String::new()),
+        }
+    }
+
+    /// Create a new monitor with explicit configuration.
+    pub fn new(
+        clusters: HashMap<String, ClusterHealth>,
+        primary_cluster: impl Into<String>,
+        failover_strategy: MultiClusterFailoverStrategy,
+        cross_cluster_check_interval_secs: u64,
+        failure_threshold: u32,
+        webhook: Option<String>,
+    ) -> Self {
+        let primary = primary_cluster.into();
+        Self {
+            clusters,
+            primary_cluster: primary.clone(),
+            failover_strategy,
+            cross_cluster_check_interval_secs,
+            failure_threshold,
+            webhook,
+            bus: None,
+            shutdown_tx: None,
+            promotions_total: AtomicU64::new(0),
+            current_primary: parking_lot::Mutex::new(primary),
+        }
+    }
+
+    /// Parse a comma-separated cluster spec string.
+    ///
+    /// Format: `name:host:port,name:host:port,...`
+    fn parse_clusters(spec: &str) -> HashMap<String, ClusterHealth> {
+        let mut clusters = HashMap::new();
+        for triple in spec.split(',') {
+            let triple = triple.trim();
+            if triple.is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = triple.split(':').collect();
+            if parts.len() >= 3 {
+                let name = parts[0].to_string();
+                let endpoint = format!("{}:{}", parts[1], parts[2]);
+                clusters
+                    .entry(name.clone())
+                    .or_insert_with(|| ClusterHealth::new(name, vec![]))
+                    .endpoints
+                    .push(endpoint);
+            }
+        }
+        clusters
+    }
+
+    /// Attach the ShimBus for event emission.
+    pub fn set_bus(&mut self, bus: ShimBus) {
+        self.bus = Some(bus);
+    }
+
+    /// Get a reference to the clusters map.
+    pub fn clusters(&self) -> &HashMap<String, ClusterHealth> {
+        &self.clusters
+    }
+
+    /// Get a mutable reference to the clusters map.
+    pub fn clusters_mut(&mut self) -> &mut HashMap<String, ClusterHealth> {
+        &mut self.clusters
+    }
+
+    /// Get the current primary cluster name.
+    pub fn primary_cluster(&self) -> &str {
+        &self.primary_cluster
+    }
+
+    /// Get the failover strategy.
+    pub fn failover_strategy(&self) -> &MultiClusterFailoverStrategy {
+        &self.failover_strategy
+    }
+
+    /// Get the cross-cluster check interval.
+    pub fn cross_cluster_check_interval_secs(&self) -> u64 {
+        self.cross_cluster_check_interval_secs
+    }
+
+    /// Get the failure threshold.
+    pub fn failure_threshold(&self) -> u32 {
+        self.failure_threshold
+    }
+
+    /// Perform a single cross-cluster health check round.
+    ///
+    /// Checks each cluster's endpoints via TCP, measures latency,
+    /// and updates cluster status.
+    pub async fn check_all_clusters(&mut self) {
+        for (_name, cluster) in self.clusters.iter_mut() {
+            let mut total_latency: u64 = 0;
+            let mut reachable = 0u32;
+            let total = cluster.endpoints.len() as u32;
+
+            for endpoint in &cluster.endpoints {
+                let start = tokio::time::Instant::now();
+                let addr_str = endpoint.clone();
+                let is_ok = tokio::task::spawn_blocking(move || {
+                    addr_str
+                        .parse::<std::net::SocketAddr>()
+                        .ok()
+                        .and_then(|addr| {
+                            TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3))
+                                .ok()
+                        })
+                        .is_some()
+                })
+                .await
+                .unwrap_or(false);
+
+                let elapsed_ms = start.elapsed().as_millis() as u64;
+                if is_ok {
+                    reachable += 1;
+                    total_latency += elapsed_ms;
+                }
+            }
+
+            cluster.last_check = chrono::Utc::now();
+            cluster.latency_ms = if reachable > 0 {
+                Some(total_latency / reachable as u64)
+            } else {
+                None
+            };
+
+            if reachable == total {
+                cluster.status = ClusterStatus::Healthy;
+                cluster.consecutive_failures = 0;
+            } else if reachable > 0 {
+                // Some endpoints reachable → degraded
+                if cluster.status == ClusterStatus::Failed {
+                    // Recovery from failed
+                    cluster.consecutive_failures = 0;
+                }
+                cluster.status = ClusterStatus::Degraded;
+                cluster.consecutive_failures = 0;
+            } else {
+                cluster.consecutive_failures += 1;
+                if cluster.consecutive_failures >= self.failure_threshold {
+                    cluster.status = ClusterStatus::Failed;
+                } else {
+                    cluster.status = ClusterStatus::Degraded;
+                }
+            }
+        }
+    }
+
+    /// Select the best cluster to promote based on the configured strategy.
+    pub fn select_failover_target(&self) -> Option<String> {
+        let candidates: Vec<(&String, &ClusterHealth)> = self
+            .clusters
+            .iter()
+            .filter(|(name, health)| {
+                *name != &self.primary_cluster && health.status == ClusterStatus::Healthy
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        match self.failover_strategy {
+            MultiClusterFailoverStrategy::Sequential => {
+                candidates.into_iter().next().map(|(name, _)| name.clone())
+            }
+            MultiClusterFailoverStrategy::LatencyBased => candidates
+                .into_iter()
+                .min_by_key(|(_, h)| h.latency_ms.unwrap_or(u64::MAX))
+                .map(|(name, _)| name.clone()),
+            MultiClusterFailoverStrategy::WeightedRandom => {
+                // Score = 1 / (latency_ms + 1) — higher score = better
+                // Also penalize degraded clusters
+                let scored: Vec<(String, f64)> = candidates
+                    .into_iter()
+                    .map(|(name, health)| {
+                        let latency_factor = 1.0 / (health.latency_ms.unwrap_or(1000) as f64 + 1.0);
+                        let status_factor = match health.status {
+                            ClusterStatus::Healthy => 1.0,
+                            ClusterStatus::Degraded => 0.5,
+                            ClusterStatus::Failed => 0.0,
+                            ClusterStatus::Unknown => 0.25,
+                        };
+                        (name.clone(), latency_factor * status_factor)
+                    })
+                    .collect();
+
+                let total_score: f64 = scored.iter().map(|(_, s)| s).sum();
+                if total_score <= 0.0 {
+                    return None;
+                }
+
+                // Use a simple hash of current time for randomness
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                chrono::Utc::now().timestamp_nanos_opt().hash(&mut hasher);
+                let rng_val = hasher.finish();
+
+                let target = (rng_val as f64 % (total_score * 1e9)) / 1e9;
+                let mut cumulative = 0.0;
+                for (name, score) in &scored {
+                    cumulative += score;
+                    if target <= cumulative {
+                        return Some(name.clone());
+                    }
+                }
+                scored.into_iter().last().map(|(name, _)| name)
+            }
+        }
+    }
+
+    /// Promote the best secondary cluster to primary.
+    ///
+    /// Returns the name of the promoted cluster, or None if no
+    /// eligible candidate exists.
+    pub async fn promote_secondary(&mut self) -> Option<String> {
+        let target = self.select_failover_target()?;
+        let target_name = target.clone();
+
+        tracing::info!(
+            "Multi-cluster failover: promoting cluster '{}' to primary (was '{}')",
+            target_name,
+            self.primary_cluster
+        );
+
+        // Update primary
+        let old_primary = self.primary_cluster.clone();
+        self.primary_cluster = target_name.clone();
+        *self.current_primary.lock() = target_name.clone();
+
+        self.promotions_total.fetch_add(1, Ordering::Relaxed);
+
+        // Emit events
+        if let Some(ref bus) = self.bus {
+            bus.emit(
+                "failover-shim",
+                EventType::FailoverTriggered {
+                    old_primary: format!("cluster:{}", old_primary),
+                    new_primary: format!("cluster:{}", target_name),
+                },
+                Severity::Error,
+            );
+            bus.emit(
+                "failover-shim",
+                EventType::FailoverCompleted {
+                    promoted: format!("cluster:{}", target_name),
+                },
+                Severity::Notice,
+            );
+        }
+
+        // Send webhook notification
+        if let Some(ref webhook_url) = self.webhook {
+            let client = reqwest::Client::new();
+            let payload = serde_json::json!({
+                "text": format!(
+                    "MULTI-CLUSTER FAILOVER: Promoted cluster '{}' to primary (was '{}')",
+                    target_name, old_primary
+                ),
+            });
+            if let Err(e) = client.post(webhook_url).json(&payload).send().await {
+                tracing::error!("Webhook POST failed: {}", e);
+            }
+        }
+
+        Some(target_name)
+    }
+
+    /// Start the periodic cross-cluster health check loop.
+    pub async fn start_loop(&mut self) {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        let check_interval = self.cross_cluster_check_interval_secs;
+        let failure_threshold = self.failure_threshold;
+        let webhook = self.webhook.clone();
+        let bus = self.bus.clone();
+        let strategy = self.failover_strategy.clone();
+
+        // Snapshot clusters for the spawned task
+        let mut cluster_names: Vec<String> = self.clusters.keys().cloned().collect();
+        cluster_names.sort();
+
+        // Build initial endpoint list
+        let cluster_endpoints: Vec<(String, Vec<String>)> = cluster_names
+            .iter()
+            .filter_map(|name| {
+                self.clusters
+                    .get(name)
+                    .map(|h| (name.clone(), h.endpoints.clone()))
+            })
+            .collect();
+
+        let mut primary = self.primary_cluster.clone();
+
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(check_interval));
+
+            // Track per-cluster state across iterations
+            let mut cluster_status: HashMap<String, ClusterStatus> = cluster_endpoints
+                .iter()
+                .map(|(name, _)| (name.clone(), ClusterStatus::Unknown))
+                .collect();
+            let cluster_latency: HashMap<String, Option<u64>> = cluster_endpoints
+                .iter()
+                .map(|(name, _)| (name.clone(), None))
+                .collect();
+            let mut cluster_failures: HashMap<String, u32> = cluster_endpoints
+                .iter()
+                .map(|(name, _)| (name.clone(), 0u32))
+                .collect();
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        // Check all clusters
+                        for (name, endpoints) in &cluster_endpoints {
+                            let mut reachable = 0u32;
+                            let total = endpoints.len() as u32;
+
+                            for endpoint in endpoints {
+                                let addr_str = endpoint.clone();
+                                let is_ok = tokio::task::spawn_blocking(move || {
+                                    addr_str
+                                        .parse::<std::net::SocketAddr>()
+                                        .ok()
+                                        .and_then(|addr| {
+                                            TcpStream::connect_timeout(
+                                                &addr,
+                                                std::time::Duration::from_secs(3),
+                                            )
+                                            .ok()
+                                        })
+                                        .is_some()
+                                })
+                                .await
+                                .unwrap_or(false);
+
+                                if is_ok {
+                                    reachable += 1;
+                                }
+                            }
+
+                            let new_status = if reachable == total {
+                                ClusterStatus::Healthy
+                            } else if reachable > 0 {
+                                ClusterStatus::Degraded
+                            } else {
+                                let failures = cluster_failures.entry(name.clone()).or_insert(0);
+                                *failures += 1;
+                                if *failures >= failure_threshold {
+                                    ClusterStatus::Failed
+                                } else {
+                                    ClusterStatus::Degraded
+                                }
+                            };
+
+                            // Reset failures on success
+                            if reachable > 0 {
+                                cluster_failures.insert(name.clone(), 0);
+                            }
+
+                            cluster_status.insert(name.clone(), new_status);
+                        }
+
+                        // Check if primary cluster failed
+                        let primary_status = cluster_status.get(&primary).cloned().unwrap_or(ClusterStatus::Unknown);
+                        if primary_status == ClusterStatus::Failed {
+                            tracing::warn!(
+                                "Primary cluster '{}' has failed — attempting failover",
+                                primary
+                            );
+
+                            // Select and promote a secondary
+                            let candidates: Vec<(&String, ClusterStatus, Option<u64>)> =
+                                cluster_endpoints
+                                    .iter()
+                                    .filter(|(name, _)| *name != primary)
+                                    .filter_map(|(name, _)| {
+                                        let status = cluster_status.get(name).cloned()?;
+                                        let latency = cluster_latency.get(name).cloned().flatten();
+                                        if status == ClusterStatus::Healthy {
+                                            Some((name, status, latency))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+
+                            if candidates.is_empty() {
+                                tracing::error!(
+                                    "No healthy secondary clusters available for failover"
+                                );
+                                continue;
+                            }
+
+                            let promoted_name = match strategy {
+                                MultiClusterFailoverStrategy::Sequential => {
+                                    candidates.into_iter().next().map(|(n, _, _)| n.clone())
+                                }
+                                MultiClusterFailoverStrategy::LatencyBased => candidates
+                                    .into_iter()
+                                    .min_by_key(|(_, _, lat)| lat.unwrap_or(u64::MAX))
+                                    .map(|(n, _, _)| n.clone()),
+                                MultiClusterFailoverStrategy::WeightedRandom => {
+                                    let scored: Vec<(&String, f64)> = candidates
+                                        .iter()
+                                        .map(|(name, _, lat)| {
+                                            let lat_f = lat.unwrap_or(1000) as f64;
+                                            let score = 1.0 / (lat_f + 1.0);
+                                            (*name, score)
+                                        })
+                                        .collect();
+                                    let total: f64 = scored.iter().map(|(_, s)| s).sum();
+                                    use std::collections::hash_map::DefaultHasher;
+                                    use std::hash::{Hash, Hasher};
+                                    let mut hasher = DefaultHasher::new();
+                                    chrono::Utc::now().timestamp_nanos_opt().hash(&mut hasher);
+                                    let rng_val = hasher.finish();
+                                    let target = (rng_val as f64 % (total * 1e9)) / 1e9;
+                                    let mut cum = 0.0;
+                                    let mut selected = None;
+                                    for (name, score) in &scored {
+                                        cum += score;
+                                        if target <= cum {
+                                            selected = Some(name.to_string());
+                                            break;
+                                        }
+                                    }
+                                    selected.or_else(|| scored.last().map(|(n, _)| (*n).to_string()))
+                                }
+                            };
+
+                            if let Some(promoted) = promoted_name {
+                                let old_primary = primary.clone();
+                                primary = promoted.clone();
+
+                                tracing::info!(
+                                    "Promoted cluster '{}' to primary (was '{}')",
+                                    primary, old_primary
+                                );
+
+                                if let Some(ref bus) = bus {
+                                    bus.emit(
+                                        "failover-shim",
+                                        EventType::FailoverTriggered {
+                                            old_primary: format!("cluster:{}", old_primary),
+                                            new_primary: format!("cluster:{}", primary),
+                                        },
+                                        Severity::Error,
+                                    );
+                                    bus.emit(
+                                        "failover-shim",
+                                        EventType::FailoverCompleted {
+                                            promoted: format!("cluster:{}", primary),
+                                        },
+                                        Severity::Notice,
+                                    );
+                                }
+
+                                if let Some(ref webhook_url) = webhook {
+                                    let client = reqwest::Client::new();
+                                    let payload = serde_json::json!({
+                                        "text": format!(
+                                            "MULTI-CLUSTER FAILOVER: Promoted cluster '{}' to primary (was '{}')",
+                                            primary, old_primary
+                                        ),
+                                    });
+                                    if let Err(e) = client.post(webhook_url).json(&payload).send().await {
+                                        tracing::error!("Webhook POST failed: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ = shutdown_rx.changed() => {
+                        tracing::info!("MultiClusterMonitor shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        tracing::info!(
+            "MultiClusterMonitor started (primary={}, strategy={}, interval={}s, clusters={})",
+            self.primary_cluster,
+            self.failover_strategy,
+            self.cross_cluster_check_interval_secs,
+            self.clusters.len()
+        );
+    }
+
+    /// Stop the health check loop.
+    pub fn stop(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+    }
+
+    /// Get the number of promotions that have occurred.
+    pub fn promotions_total(&self) -> u64 {
+        self.promotions_total.load(Ordering::Relaxed)
+    }
+
+    /// Get metrics for multi-cluster monitoring.
+    pub fn metrics(&self) -> Vec<Metric> {
+        let mut metrics = Vec::new();
+
+        for health in self.clusters.values() {
+            metrics.push(Metric::new(
+                "failover_cluster_status",
+                health.status.as_f64(),
+            ));
+
+            if let Some(latency) = health.latency_ms {
+                metrics.push(Metric::new("failover_cluster_latency_ms", latency as f64));
+            }
+        }
+
+        metrics.push(Metric::new(
+            "failover_promotions_total",
+            self.promotions_total.load(Ordering::Relaxed) as f64,
+        ));
+
+        metrics
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1755,5 +2452,395 @@ mod tests {
                 assert_eq!(monitor.check_interval_secs(), 5);
             },
         );
+    }
+
+    // ========================================================================
+    // Multi-Cluster Failover Tests
+    // ========================================================================
+
+    #[test]
+    fn test_cluster_status_values() {
+        assert_eq!(ClusterStatus::Healthy.as_f64(), 0.0);
+        assert_eq!(ClusterStatus::Degraded.as_f64(), 1.0);
+        assert_eq!(ClusterStatus::Failed.as_f64(), 2.0);
+        assert_eq!(ClusterStatus::Unknown.as_f64(), 3.0);
+    }
+
+    #[test]
+    fn test_cluster_status_equality() {
+        assert_eq!(ClusterStatus::Healthy, ClusterStatus::Healthy);
+        assert_ne!(ClusterStatus::Healthy, ClusterStatus::Failed);
+    }
+
+    #[test]
+    fn test_multi_cluster_failover_strategy_display() {
+        assert_eq!(
+            MultiClusterFailoverStrategy::Sequential.to_string(),
+            "sequential"
+        );
+        assert_eq!(
+            MultiClusterFailoverStrategy::LatencyBased.to_string(),
+            "latency"
+        );
+        assert_eq!(
+            MultiClusterFailoverStrategy::WeightedRandom.to_string(),
+            "weighted"
+        );
+    }
+
+    #[test]
+    fn test_multi_cluster_failover_strategy_default() {
+        assert_eq!(
+            MultiClusterFailoverStrategy::default(),
+            MultiClusterFailoverStrategy::Sequential
+        );
+    }
+
+    #[test]
+    fn test_cluster_health_new() {
+        let health = ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]);
+        assert_eq!(health.name, "us-east");
+        assert_eq!(health.endpoints, vec!["10.0.0.1:5432"]);
+        assert_eq!(health.status, ClusterStatus::Unknown);
+        assert!(health.replication_lag_ms.is_none());
+        assert!(health.latency_ms.is_none());
+        assert_eq!(health.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn test_parse_clusters_empty() {
+        let clusters = MultiClusterMonitor::parse_clusters("");
+        assert!(clusters.is_empty());
+    }
+
+    #[test]
+    fn test_parse_clusters_single() {
+        let clusters = MultiClusterMonitor::parse_clusters("us-east:10.0.0.1:5432");
+        assert_eq!(clusters.len(), 1);
+        let health = clusters.get("us-east").unwrap();
+        assert_eq!(health.endpoints, vec!["10.0.0.1:5432"]);
+    }
+
+    #[test]
+    fn test_parse_clusters_multiple() {
+        let clusters =
+            MultiClusterMonitor::parse_clusters("us-east:10.0.0.1:5432,eu-west:10.0.1.1:5432");
+        assert_eq!(clusters.len(), 2);
+        assert!(clusters.contains_key("us-east"));
+        assert!(clusters.contains_key("eu-west"));
+    }
+
+    #[test]
+    fn test_parse_clusters_with_multiple_endpoints() {
+        let clusters = MultiClusterMonitor::parse_clusters(
+            "us-east:10.0.0.1:5432,us-east:10.0.0.2:5432,eu-west:10.0.1.1:5432",
+        );
+        assert_eq!(clusters.len(), 2);
+        let us = clusters.get("us-east").unwrap();
+        assert_eq!(us.endpoints.len(), 2);
+        let eu = clusters.get("eu-west").unwrap();
+        assert_eq!(eu.endpoints.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_clusters_malformed_ignored() {
+        let clusters = MultiClusterMonitor::parse_clusters("bad-format,also:bad");
+        assert!(clusters.is_empty());
+    }
+
+    #[test]
+    fn test_multi_cluster_monitor_from_env_defaults() {
+        temp_env::with_vars(
+            [
+                ("FAILOVER_CLUSTERS", None::<&str>),
+                ("FAILOVER_PRIMARY", None::<&str>),
+                ("FAILOVER_STRATEGY", None::<&str>),
+                ("FAILOVER_CROSS_CHECK_SECS", None::<&str>),
+                ("FAILOVER_FAILURE_THRESHOLD", None::<&str>),
+                ("FAILOVER_WEBHOOK", None::<&str>),
+            ],
+            || {
+                let monitor = MultiClusterMonitor::from_env();
+                assert!(monitor.clusters.is_empty());
+                assert_eq!(monitor.primary_cluster, "primary");
+                assert_eq!(
+                    monitor.failover_strategy,
+                    MultiClusterFailoverStrategy::Sequential
+                );
+                assert_eq!(monitor.cross_cluster_check_interval_secs, 10);
+                assert_eq!(monitor.failure_threshold, 3);
+                assert!(monitor.webhook.is_none());
+            },
+        );
+    }
+
+    #[test]
+    fn test_multi_cluster_monitor_from_env_configured() {
+        temp_env::with_vars(
+            [
+                (
+                    "FAILOVER_CLUSTERS",
+                    Some("us-east:10.0.0.1:5432,eu-west:10.0.1.1:5432"),
+                ),
+                ("FAILOVER_PRIMARY", Some("us-east")),
+                ("FAILOVER_STRATEGY", Some("latency")),
+                ("FAILOVER_CROSS_CHECK_SECS", Some("30")),
+                ("FAILOVER_FAILURE_THRESHOLD", Some("5")),
+                ("FAILOVER_WEBHOOK", Some("https://hooks.slack.com/test")),
+            ],
+            || {
+                let monitor = MultiClusterMonitor::from_env();
+                assert_eq!(monitor.clusters.len(), 2);
+                assert_eq!(monitor.primary_cluster, "us-east");
+                assert_eq!(
+                    monitor.failover_strategy,
+                    MultiClusterFailoverStrategy::LatencyBased
+                );
+                assert_eq!(monitor.cross_cluster_check_interval_secs, 30);
+                assert_eq!(monitor.failure_threshold, 5);
+                assert_eq!(
+                    monitor.webhook,
+                    Some("https://hooks.slack.com/test".to_string())
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_multi_cluster_monitor_explicit() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        clusters.insert(
+            "eu-west".to_string(),
+            ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]),
+        );
+
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::LatencyBased,
+            15,
+            5,
+            None,
+        );
+
+        assert_eq!(monitor.clusters.len(), 2);
+        assert_eq!(monitor.primary_cluster(), "us-east");
+        assert_eq!(
+            monitor.failover_strategy(),
+            &MultiClusterFailoverStrategy::LatencyBased
+        );
+        assert_eq!(monitor.cross_cluster_check_interval_secs(), 15);
+        assert_eq!(monitor.failure_threshold(), 5);
+    }
+
+    #[test]
+    fn test_select_failover_target_sequential() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        clusters.insert(
+            "eu-west".to_string(),
+            ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]),
+        );
+        clusters.insert(
+            "ap-south".to_string(),
+            ClusterHealth::new("ap-south", vec!["10.0.2.1:5432".to_string()]),
+        );
+
+        // Mark secondary clusters as healthy
+        clusters.get_mut("eu-west").unwrap().status = ClusterStatus::Healthy;
+        clusters.get_mut("ap-south").unwrap().status = ClusterStatus::Healthy;
+
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        );
+
+        // Sequential should pick the first healthy secondary
+        let target = monitor.select_failover_target();
+        assert!(target.is_some());
+        let target = target.unwrap();
+        assert!(target == "eu-west" || target == "ap-south");
+    }
+
+    #[test]
+    fn test_select_failover_target_latency_based() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let mut eu = ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]);
+        eu.status = ClusterStatus::Healthy;
+        eu.latency_ms = Some(100);
+        clusters.insert("eu-west".to_string(), eu);
+
+        let mut ap = ClusterHealth::new("ap-south", vec!["10.0.2.1:5432".to_string()]);
+        ap.status = ClusterStatus::Healthy;
+        ap.latency_ms = Some(50);
+        clusters.insert("ap-south".to_string(), ap);
+
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::LatencyBased,
+            10,
+            3,
+            None,
+        );
+
+        // LatencyBased should pick the cluster with lowest latency
+        let target = monitor.select_failover_target();
+        assert_eq!(target, Some("ap-south".to_string()));
+    }
+
+    #[test]
+    fn test_select_failover_target_no_healthy_secondaries() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let mut eu = ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]);
+        eu.status = ClusterStatus::Failed;
+        clusters.insert("eu-west".to_string(), eu);
+
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        );
+
+        assert!(monitor.select_failover_target().is_none());
+    }
+
+    #[test]
+    fn test_select_failover_target_weighted_random() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let mut eu = ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]);
+        eu.status = ClusterStatus::Healthy;
+        eu.latency_ms = Some(10);
+        clusters.insert("eu-west".to_string(), eu);
+
+        let mut ap = ClusterHealth::new("ap-south", vec!["10.0.2.1:5432".to_string()]);
+        ap.status = ClusterStatus::Healthy;
+        ap.latency_ms = Some(10);
+        clusters.insert("ap-south".to_string(), ap);
+
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::WeightedRandom,
+            10,
+            3,
+            None,
+        );
+
+        // WeightedRandom should pick one of the healthy secondaries
+        let target = monitor.select_failover_target();
+        assert!(target.is_some());
+        let target = target.unwrap();
+        assert!(target == "eu-west" || target == "ap-south");
+    }
+
+    #[test]
+    fn test_metrics_includes_cluster_status_and_promotions() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let mut eu = ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]);
+        eu.status = ClusterStatus::Healthy;
+        eu.latency_ms = Some(42);
+        clusters.insert("eu-west".to_string(), eu);
+
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        );
+
+        let metrics = monitor.metrics();
+        // At least: 2 cluster statuses + 1 latency + 1 promotions_total
+        assert!(metrics.len() >= 4);
+
+        let promotions = metrics
+            .iter()
+            .find(|m| m.name == "failover_promotions_total");
+        assert!(promotions.is_some());
+        assert_eq!(promotions.unwrap().value, 0.0);
+
+        let statuses: Vec<_> = metrics
+            .iter()
+            .filter(|m| m.name == "failover_cluster_status")
+            .collect();
+        assert_eq!(statuses.len(), 2);
+    }
+
+    #[test]
+    fn test_promotions_total_increments() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let mut eu = ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]);
+        eu.status = ClusterStatus::Healthy;
+        clusters.insert("eu-west".to_string(), eu);
+
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        );
+
+        assert_eq!(monitor.promotions_total(), 0);
+    }
+
+    #[test]
+    fn test_cluster_health_serialization() {
+        let health = ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]);
+        let json = serde_json::to_string(&health).unwrap();
+        assert!(json.contains("us-east"));
+        assert!(json.contains("10.0.0.1:5432"));
+    }
+
+    #[test]
+    fn test_cluster_status_serialization() {
+        let json = serde_json::to_string(&ClusterStatus::Healthy).unwrap();
+        assert_eq!(json, "\"Healthy\"");
+
+        let json = serde_json::to_string(&ClusterStatus::Failed).unwrap();
+        assert_eq!(json, "\"Failed\"");
+    }
+
+    #[test]
+    fn test_multi_cluster_strategy_serialization() {
+        let json = serde_json::to_string(&MultiClusterFailoverStrategy::LatencyBased).unwrap();
+        assert_eq!(json, "\"LatencyBased\"");
     }
 }

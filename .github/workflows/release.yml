@@ -58,6 +58,10 @@ jobs:
             arch: aarch64-infra
             features: infra
             artifact: shim-infra-aarch64
+          - target: riscv64gc-unknown-linux-musl
+            arch: riscv64
+            features: health
+            artifact: shim-riscv64
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -79,6 +83,11 @@ jobs:
             rustup target add aarch64-unknown-linux-musl
             sudo apt-get install -y binutils-aarch64-linux-gnu
           fi
+          if [[ "${{ matrix.arch }}" == riscv64 ]]; then
+            sudo apt-get install -y gcc-riscv64-linux-gnu
+            rustup target add riscv64gc-unknown-linux-musl
+            sudo apt-get install -y binutils-riscv64-linux-gnu
+          fi
 
       - name: Build
         run: |
@@ -86,6 +95,10 @@ jobs:
             cargo build --release --target ${{ matrix.target }} \
               -p evergreen-shim --no-default-features --features ${{ matrix.features }} \
               --config "target.aarch64-unknown-linux-musl.linker='aarch64-linux-gnu-gcc'"
+          elif [[ "${{ matrix.arch }}" == riscv64 ]]; then
+            cargo build --release --target ${{ matrix.target }} \
+              -p evergreen-shim --no-default-features --features ${{ matrix.features }} \
+              --config "target.riscv64gc-unknown-linux-musl.linker='riscv64-linux-gnu-gcc'"
           else
             cargo build --release --target ${{ matrix.target }} \
               -p evergreen-shim --no-default-features --features ${{ matrix.features }}
@@ -96,6 +109,8 @@ jobs:
           cp target/${{ matrix.target }}/release/shim ${{ matrix.artifact }}
           if [[ "${{ matrix.arch }}" == aarch64* ]]; then
             aarch64-linux-gnu-strip ${{ matrix.artifact }}
+          elif [[ "${{ matrix.arch }}" == riscv64 ]]; then
+            riscv64-linux-gnu-strip ${{ matrix.artifact }}
           else
             strip ${{ matrix.artifact }}
           fi

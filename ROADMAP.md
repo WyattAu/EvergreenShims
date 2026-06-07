@@ -79,7 +79,7 @@ Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHu
 | Task | Status | Priority | Impact |
 |------|--------|----------|--------|
 | Distributed tracing across shim instances | Completed | High | Observability |
-| Multi-cluster failover | Pending | High | HA |
+| Multi-cluster failover | Completed | High | HA |
 | Observability dashboard (Grafana) | Completed | Medium | Operations |
 | Operator maturity (Helm/CRD) | Completed | High | Kubernetes |
 | Config hot-reload via Kubernetes ConfigMap | Completed | Medium | K8s integration |
@@ -91,8 +91,8 @@ Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHu
 
 | Task | Status | Priority | Impact |
 |------|--------|----------|--------|
-| Multi-language shim SDK (Go, Python, Node) | Pending | High | Ecosystem |
-| Edge deployment targets (ARM, RISC-V) | Pending | Medium | Deployment |
+| Multi-language shim SDK (Go, Python, Node) | Completed | High | Ecosystem |
+| Edge deployment targets (ARM, RISC-V) | Completed | Medium | Deployment |
 | Plugin system for custom shims | Completed | High | Extensibility |
 | WebAssembly shim runtime | Completed | Medium | Portability |
 | CLI management tool | Completed | Medium | Operations |

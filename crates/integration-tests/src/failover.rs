@@ -514,3 +514,247 @@ async fn test_failover_monitor_redis_sentinel() {
         }
     }
 }
+
+// ============================================================================
+// Multi-Cluster Failover Integration Tests
+// ============================================================================
+
+/// Test MultiClusterMonitor construction from environment variables.
+#[tokio::test]
+async fn test_multi_cluster_monitor_from_env() {
+    temp_env::with_vars(
+        [
+            (
+                "FAILOVER_CLUSTERS",
+                Some("us-east:10.0.0.1:5432,eu-west:10.0.1.1:5432"),
+            ),
+            ("FAILOVER_PRIMARY", Some("us-east")),
+            ("FAILOVER_STRATEGY", Some("latency")),
+            ("FAILOVER_CROSS_CHECK_SECS", Some("30")),
+            ("FAILOVER_FAILURE_THRESHOLD", Some("5")),
+        ],
+        || {
+            let monitor = failover_shim::MultiClusterMonitor::from_env();
+            assert_eq!(monitor.clusters().len(), 2);
+            assert_eq!(monitor.primary_cluster(), "us-east");
+            assert_eq!(
+                monitor.failover_strategy(),
+                &failover_shim::MultiClusterFailoverStrategy::LatencyBased
+            );
+            assert_eq!(monitor.cross_cluster_check_interval_secs(), 30);
+            assert_eq!(monitor.failure_threshold(), 5);
+        },
+    );
+}
+
+/// Test MultiClusterMonitor with explicit configuration.
+#[tokio::test]
+async fn test_multi_cluster_monitor_explicit_config() {
+    use std::collections::HashMap;
+
+    let mut clusters = HashMap::new();
+    clusters.insert(
+        "primary".to_string(),
+        failover_shim::ClusterHealth::new("primary", vec!["127.0.0.1:5432".to_string()]),
+    );
+    clusters.insert(
+        "secondary".to_string(),
+        failover_shim::ClusterHealth::new("secondary", vec!["127.0.0.2:5432".to_string()]),
+    );
+
+    let monitor = failover_shim::MultiClusterMonitor::new(
+        clusters,
+        "primary",
+        failover_shim::MultiClusterFailoverStrategy::Sequential,
+        10,
+        3,
+        Some("https://hooks.slack.com/test".to_string()),
+    );
+
+    assert_eq!(monitor.clusters().len(), 2);
+    assert_eq!(monitor.primary_cluster(), "primary");
+}
+
+/// Test cross-cluster health check with unreachable clusters.
+#[tokio::test]
+async fn test_multi_cluster_health_check_unreachable() {
+    use std::collections::HashMap;
+
+    let mut clusters = HashMap::new();
+    clusters.insert(
+        "primary".to_string(),
+        failover_shim::ClusterHealth::new("primary", vec!["192.0.2.1:9999".to_string()]),
+    );
+    clusters.insert(
+        "secondary".to_string(),
+        failover_shim::ClusterHealth::new("secondary", vec!["192.0.2.2:9999".to_string()]),
+    );
+
+    let mut monitor = failover_shim::MultiClusterMonitor::new(
+        clusters,
+        "primary",
+        failover_shim::MultiClusterFailoverStrategy::Sequential,
+        10,
+        3,
+        None,
+    );
+
+    monitor.check_all_clusters().await;
+
+    let clusters = monitor.clusters();
+    let primary = clusters.get("primary").unwrap();
+    // Unreachable endpoint → Degraded or Failed depending on threshold
+    assert!(
+        primary.status == failover_shim::ClusterStatus::Degraded
+            || primary.status == failover_shim::ClusterStatus::Failed
+    );
+}
+
+/// Test failover trigger: primary cluster fails, secondary is promoted.
+#[tokio::test]
+async fn test_multi_cluster_failover_trigger() {
+    use std::collections::HashMap;
+
+    let mut clusters = HashMap::new();
+    clusters.insert(
+        "us-east".to_string(),
+        failover_shim::ClusterHealth::new("us-east", vec!["192.0.2.1:9999".to_string()]),
+    );
+    let mut eu = failover_shim::ClusterHealth::new("eu-west", vec!["192.0.2.2:9999".to_string()]);
+    eu.status = failover_shim::ClusterStatus::Healthy;
+    clusters.insert("eu-west".to_string(), eu);
+
+    let mut monitor = failover_shim::MultiClusterMonitor::new(
+        clusters,
+        "us-east",
+        failover_shim::MultiClusterFailoverStrategy::Sequential,
+        10,
+        3,
+        None,
+    );
+
+    // Check all clusters — primary should fail
+    monitor.check_all_clusters().await;
+
+    // Since primary is unreachable and threshold is 3, it should be Degraded first
+    let primary_status = monitor.clusters().get("us-east").unwrap().status.clone();
+    assert_ne!(primary_status, failover_shim::ClusterStatus::Healthy);
+
+    // Simulate repeated failures to reach threshold
+    for _ in 0..5 {
+        monitor.check_all_clusters().await;
+    }
+
+    // After threshold, primary should be Failed
+    let primary_status = monitor.clusters().get("us-east").unwrap().status.clone();
+    assert_eq!(primary_status, failover_shim::ClusterStatus::Failed);
+
+    // Reset eu-west to Healthy (check_all_clusters would have marked it Degraded/Failed too)
+    monitor.clusters_mut().get_mut("eu-west").unwrap().status =
+        failover_shim::ClusterStatus::Healthy;
+
+    // Now promote secondary
+    let promoted = monitor.promote_secondary().await;
+    assert_eq!(promoted, Some("eu-west".to_string()));
+    assert_eq!(monitor.primary_cluster(), "eu-west");
+    assert_eq!(monitor.promotions_total(), 1);
+}
+
+/// Test cluster promotion with no eligible secondary.
+#[tokio::test]
+async fn test_multi_cluster_no_eligible_secondary() {
+    use std::collections::HashMap;
+
+    let mut clusters = HashMap::new();
+    clusters.insert(
+        "primary".to_string(),
+        failover_shim::ClusterHealth::new("primary", vec!["192.0.2.1:9999".to_string()]),
+    );
+    let mut sec =
+        failover_shim::ClusterHealth::new("secondary", vec!["192.0.2.2:9999".to_string()]);
+    sec.status = failover_shim::ClusterStatus::Failed;
+    clusters.insert("secondary".to_string(), sec);
+
+    let mut monitor = failover_shim::MultiClusterMonitor::new(
+        clusters,
+        "primary",
+        failover_shim::MultiClusterFailoverStrategy::Sequential,
+        10,
+        3,
+        None,
+    );
+
+    // No healthy secondary → promote_secondary returns None
+    let promoted = monitor.promote_secondary().await;
+    assert_eq!(promoted, None);
+}
+
+/// Test multi-cluster metrics report cluster status and latency.
+#[tokio::test]
+async fn test_multi_cluster_metrics() {
+    use std::collections::HashMap;
+
+    let mut clusters = HashMap::new();
+    clusters.insert(
+        "primary".to_string(),
+        failover_shim::ClusterHealth::new("primary", vec!["127.0.0.1:5432".to_string()]),
+    );
+    let mut sec =
+        failover_shim::ClusterHealth::new("secondary", vec!["127.0.0.2:5432".to_string()]);
+    sec.status = failover_shim::ClusterStatus::Healthy;
+    sec.latency_ms = Some(42);
+    clusters.insert("secondary".to_string(), sec);
+
+    let monitor = failover_shim::MultiClusterMonitor::new(
+        clusters,
+        "primary",
+        failover_shim::MultiClusterFailoverStrategy::Sequential,
+        10,
+        3,
+        None,
+    );
+
+    let metrics = monitor.metrics();
+    // Should have status metrics for both clusters + latency for secondary + promotions_total
+    assert!(metrics.len() >= 4);
+
+    let promotions = metrics
+        .iter()
+        .find(|m| m.name == "failover_promotions_total");
+    assert!(promotions.is_some());
+    assert_eq!(promotions.unwrap().value, 0.0);
+}
+
+/// Test multi-cluster failover with latency-based strategy.
+#[tokio::test]
+async fn test_multi_cluster_latency_based_strategy() {
+    use std::collections::HashMap;
+
+    let mut clusters = HashMap::new();
+    clusters.insert(
+        "primary".to_string(),
+        failover_shim::ClusterHealth::new("primary", vec!["127.0.0.1:5432".to_string()]),
+    );
+
+    let mut slow = failover_shim::ClusterHealth::new("slow", vec!["127.0.0.2:5432".to_string()]);
+    slow.status = failover_shim::ClusterStatus::Healthy;
+    slow.latency_ms = Some(200);
+    clusters.insert("slow".to_string(), slow);
+
+    let mut fast = failover_shim::ClusterHealth::new("fast", vec!["127.0.0.3:5432".to_string()]);
+    fast.status = failover_shim::ClusterStatus::Healthy;
+    fast.latency_ms = Some(10);
+    clusters.insert("fast".to_string(), fast);
+
+    let monitor = failover_shim::MultiClusterMonitor::new(
+        clusters,
+        "primary",
+        failover_shim::MultiClusterFailoverStrategy::LatencyBased,
+        10,
+        3,
+        None,
+    );
+
+    let target = monitor.select_failover_target();
+    assert_eq!(target, Some("fast".to_string()));
+}

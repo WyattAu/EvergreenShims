@@ -45,6 +45,9 @@ cassandra = ["dep:cassandra-shim"]
 # Management API
 mgmt-api = ["dep:management-api"]
 
+# Edge deployment (minimal for constrained devices)
+edge = ["health"]
+
 # Pre-built combos
 db-shim = ["health", "vault", "backup", "migration", "audit"]
 proxy-combo = ["health", "audit", "tls"]
