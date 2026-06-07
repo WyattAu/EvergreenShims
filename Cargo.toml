@@ -39,7 +39,7 @@ resolver = "2"
 exclude = ["examples/custom-shim-plugin"]
 
 [workspace.package]
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["WyattAu"]
 license = "Apache-2.0"
@@ -126,6 +126,7 @@ tempfile = "3"
 pretty_assertions = "1"
 tokio-test = "0.4"
 temp-env = "0.3"
+serial_test = "3"
 
 # Release profile: optimize for small binaries
 [profile.release]
