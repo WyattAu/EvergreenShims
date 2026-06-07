@@ -860,6 +860,7 @@ fn is_valid_cron(expr: &str) -> bool {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_process_config_default_command_is_empty() {
@@ -1172,6 +1173,7 @@ max_connections = 100
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_resource_quota() {
         temp_env::with_var("SHIM_MAX_MEMORY_BYTES", Some("2048"), || {
             temp_env::with_var("SHIM_MAX_CPU_PERCENT", Some("50.5"), || {
@@ -1186,6 +1188,7 @@ max_connections = 100
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_invalid_resource_quota() {
         temp_env::with_var("SHIM_MAX_MEMORY_BYTES", Some("not_a_number"), || {
             let config = Config::from_env();
@@ -1194,6 +1197,7 @@ max_connections = 100
     }
 
     #[test]
+    #[serial]
     fn test_config_merge_resource_quota() {
         temp_env::with_var("SHIM_MAX_MEMORY_BYTES", Some("4096"), || {
             let mut base = Config::default();
@@ -1206,6 +1210,7 @@ max_connections = 100
     }
 
     #[test]
+    #[serial]
     fn test_config_merge_without_env_override() {
         // Ensure no env var pollutes this test when running in parallel
         temp_env::with_var("SHIM_MAX_MEMORY_BYTES", None::<&str>, || {
@@ -1270,6 +1275,7 @@ max_memory_bytes = 2147483648
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_tenant() {
         temp_env::with_var("SHIM_TENANT_ID", Some("env-tenant"), || {
             temp_env::with_var("SHIM_TENANT_MAX_MEMORY", Some("4096"), || {
@@ -1285,6 +1291,7 @@ max_memory_bytes = 2147483648
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_no_tenant() {
         temp_env::with_var("SHIM_TENANT_ID", None::<String>, || {
             let config = Config::from_env();
@@ -1352,6 +1359,7 @@ max_memory_bytes = 2147483648
     }
 
     #[test]
+    #[serial]
     fn test_config_merge_tenant_env_override() {
         temp_env::with_var("SHIM_TENANT_ID", Some("env-tenant"), || {
             let mut base = Config::default();

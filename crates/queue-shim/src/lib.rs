@@ -454,6 +454,7 @@ impl Capability for QueueShim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::sync::atomic::AtomicU64;
 
     #[tokio::test]
@@ -528,6 +529,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_drain_dlq() {
         temp_env::with_vars(
             [
@@ -596,6 +598,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_env_config() {
         temp_env::with_vars(
             [

@@ -19,5 +19,6 @@ prometheus.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
+tokio.workspace = true
 temp-env.workspace = true
+serial_test.workspace = true

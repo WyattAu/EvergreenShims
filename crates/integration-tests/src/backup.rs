@@ -1,7 +1,10 @@
 //! Backup integration tests.
 
+use serial_test::serial;
+
 /// Test backup filename generation.
 #[tokio::test]
+#[serial]
 async fn test_backup_filename_generation() {
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let database = "testdb";
@@ -22,6 +25,7 @@ async fn test_backup_filename_generation() {
 
 /// Test backup metadata serialization.
 #[tokio::test]
+#[serial]
 async fn test_backup_metadata_serialization() {
     use backup_shim::BackupMeta;
 

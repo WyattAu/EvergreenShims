@@ -1,7 +1,10 @@
 //! Vault integration tests.
 
+use serial_test::serial;
+
 /// Test Vault credentials serialization.
 #[tokio::test]
+#[serial]
 async fn test_vault_credentials_serialization() {
     use vault_shim::Credentials;
 
@@ -23,6 +26,7 @@ async fn test_vault_credentials_serialization() {
 
 /// Test credential file format.
 #[tokio::test]
+#[serial]
 async fn test_credential_file_format() {
     use vault_shim::Credentials;
 

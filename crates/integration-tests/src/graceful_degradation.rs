@@ -7,6 +7,8 @@
 
 #![allow(dead_code)]
 
+use serial_test::serial;
+
 use shim_core::{Capability, Config, Metric};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -148,6 +150,7 @@ async fn run_degradation_simulation(
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_all_succeed() {
     let mut caps: Vec<Box<dyn Capability>> = vec![
         Box::new(DummyCapability::new("health")),
@@ -162,6 +165,7 @@ async fn test_all_succeed() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_non_critical_failure_does_not_block() {
     let cache = DummyCapability::new("cache").fail_init();
     let cost = DummyCapability::new("cost").fail_start();
@@ -193,6 +197,7 @@ async fn test_non_critical_failure_does_not_block() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_critical_init_failure_blocks() {
     let health_fail = DummyCapability::new("health").fail_init();
 
@@ -220,6 +225,7 @@ async fn test_critical_init_failure_blocks() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_critical_start_failure_blocks() {
     let migration_fail = DummyCapability::new("migration").fail_start();
 
@@ -245,6 +251,7 @@ async fn test_critical_start_failure_blocks() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_all_non_critical_fail_still_healthy() {
     let mut caps: Vec<Box<dyn Capability>> = vec![
         Box::new(DummyCapability::new("health")),
@@ -281,6 +288,7 @@ async fn test_all_non_critical_fail_still_healthy() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_critical_failure_returns_false() {
     let mut caps: Vec<Box<dyn Capability>> = vec![Box::new(AlwaysFailInit)];
 
@@ -293,6 +301,7 @@ async fn test_critical_failure_returns_false() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_mixed_critical_and_non_critical_failures() {
     let mut caps: Vec<Box<dyn Capability>> = vec![
         Box::new(DummyCapability::new("health")),
@@ -320,6 +329,7 @@ async fn test_mixed_critical_and_non_critical_failures() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_health_metric_value_reflects_critical_health() {
     let mut caps: Vec<Box<dyn Capability>> = vec![
         Box::new(DummyCapability::new("health")),
@@ -347,6 +357,7 @@ async fn test_health_metric_value_reflects_critical_health() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_stops_only_successful_capabilities() {
     let mut caps: Vec<Box<dyn Capability>> = vec![
         Box::new(DummyCapability::new("health")),

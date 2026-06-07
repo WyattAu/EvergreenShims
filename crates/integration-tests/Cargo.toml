@@ -2,6 +2,7 @@
 name = "evergreen-shims-integration"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]
@@ -37,7 +38,9 @@ redis.workspace = true
 sqlx.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
+serial_test.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
 temp-env.workspace = true
+serial_test.workspace = true

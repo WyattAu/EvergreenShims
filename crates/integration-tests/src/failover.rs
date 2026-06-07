@@ -1,7 +1,10 @@
 //! Failover integration tests.
 
+use serial_test::serial;
+
 /// Test that failover-shim can detect a healthy primary.
 #[tokio::test]
+#[serial]
 async fn test_failover_detects_healthy_primary() {
     use std::net::TcpStream;
     use std::time::Duration;
@@ -19,6 +22,7 @@ async fn test_failover_detects_healthy_primary() {
 
 /// Test failover state transitions.
 #[tokio::test]
+#[serial]
 async fn test_failover_state_transitions() {
     use failover_shim::FailoverState;
 
@@ -39,6 +43,7 @@ async fn test_failover_state_transitions() {
 
 /// Test failover event serialization.
 #[tokio::test]
+#[serial]
 async fn test_failover_event_serialization() {
     use failover_shim::FailoverEvent;
 
@@ -59,6 +64,7 @@ async fn test_failover_event_serialization() {
 
 /// Test patroni connector configuration via env vars.
 #[tokio::test]
+#[serial]
 async fn test_patroni_connector_config() {
     use failover_shim::{FailoverConnector, FailoverShim};
 
@@ -89,6 +95,7 @@ async fn test_patroni_connector_config() {
 
 /// Test redis sentinel connector configuration via env vars.
 #[tokio::test]
+#[serial]
 async fn test_redis_sentinel_connector_config() {
     use failover_shim::{FailoverConnector, FailoverShim};
 
@@ -111,6 +118,7 @@ async fn test_redis_sentinel_connector_config() {
 
 /// Test connector type equality.
 #[tokio::test]
+#[serial]
 async fn test_connector_type_equality() {
     use failover_shim::FailoverConnector;
 
@@ -126,6 +134,7 @@ async fn test_connector_type_equality() {
 
 /// Test patroni connector defaults.
 #[tokio::test]
+#[serial]
 async fn test_patroni_connector_defaults() {
     use failover_shim::FailoverShim;
 
@@ -152,6 +161,7 @@ async fn test_patroni_connector_defaults() {
 
 /// Test redis sentinel defaults.
 #[tokio::test]
+#[serial]
 async fn test_redis_sentinel_defaults() {
     use failover_shim::FailoverShim;
 
@@ -170,6 +180,7 @@ async fn test_redis_sentinel_defaults() {
 
 /// Test graceful shutdown with generic shutdown handler.
 #[tokio::test]
+#[serial]
 async fn test_graceful_shutdown_generic() {
     use shim_core::{DatabaseType, ShutdownManager};
 
@@ -185,6 +196,7 @@ async fn test_graceful_shutdown_generic() {
 
 /// Test graceful shutdown with postgres shutdown handler.
 #[tokio::test]
+#[serial]
 async fn test_graceful_shutdown_postgres() {
     use shim_core::{DatabaseType, ShutdownManager};
 
@@ -198,6 +210,7 @@ async fn test_graceful_shutdown_postgres() {
 
 /// Test graceful shutdown with redis shutdown handler.
 #[tokio::test]
+#[serial]
 async fn test_graceful_shutdown_redis() {
     use shim_core::{DatabaseType, ShutdownManager};
 
@@ -211,6 +224,7 @@ async fn test_graceful_shutdown_redis() {
 
 /// Test shutdown result serialization.
 #[tokio::test]
+#[serial]
 async fn test_shutdown_result_serialization() {
     use shim_core::{DatabaseType, ShutdownResult};
 
@@ -233,6 +247,7 @@ async fn test_shutdown_result_serialization() {
 
 /// Test startup probe with immediate success.
 #[tokio::test]
+#[serial]
 async fn test_startup_probe_immediate_success() {
     use shim_core::StartupProbe;
 
@@ -243,6 +258,7 @@ async fn test_startup_probe_immediate_success() {
 
 /// Test startup probe with immediate failure.
 #[tokio::test]
+#[serial]
 async fn test_startup_probe_immediate_failure() {
     use shim_core::StartupProbe;
 
@@ -253,6 +269,7 @@ async fn test_startup_probe_immediate_failure() {
 
 /// Test postgres startup probe construction.
 #[tokio::test]
+#[serial]
 async fn test_postgres_startup_probe_construction() {
     use shim_core::health::postgres_startup_probe;
 
@@ -265,6 +282,7 @@ async fn test_postgres_startup_probe_construction() {
 
 /// Test redis startup probe construction.
 #[tokio::test]
+#[serial]
 async fn test_redis_startup_probe_construction() {
     use shim_core::health::redis_startup_probe;
 
@@ -278,6 +296,7 @@ async fn test_redis_startup_probe_construction() {
 
 /// Test ChildProcess with database type.
 #[tokio::test]
+#[serial]
 async fn test_child_process_with_db_type() {
     use shim_core::config::ProcessConfig;
     use shim_core::{ChildProcess, DatabaseType};
@@ -296,6 +315,7 @@ async fn test_child_process_with_db_type() {
 
 /// Test shutdown strategy: postgres sends SIGTERM and waits.
 #[tokio::test]
+#[serial]
 async fn test_shutdown_strategy_postgres() {
     use shim_core::ShutdownStrategy;
 
@@ -310,6 +330,7 @@ async fn test_shutdown_strategy_postgres() {
 
 /// Test shutdown strategy: redis sends SIGTERM and waits for RDB.
 #[tokio::test]
+#[serial]
 async fn test_shutdown_strategy_redis() {
     use shim_core::ShutdownStrategy;
 
@@ -321,6 +342,7 @@ async fn test_shutdown_strategy_redis() {
 
 /// Test shutdown strategy: generic sends SIGTERM then SIGKILL.
 #[tokio::test]
+#[serial]
 async fn test_shutdown_strategy_generic() {
     use shim_core::ShutdownStrategy;
 
@@ -335,6 +357,7 @@ async fn test_shutdown_strategy_generic() {
 
 /// Test graceful_shutdown with a real short-lived process.
 #[tokio::test]
+#[serial]
 async fn test_graceful_shutdown_real_process() {
     use shim_core::{graceful_shutdown, ShutdownStrategy};
 
@@ -365,6 +388,7 @@ async fn test_graceful_shutdown_real_process() {
 
 /// Test startup probe: tcp type.
 #[tokio::test]
+#[serial]
 async fn test_startup_probe_tcp() {
     use shim_core::StartupProbe;
 
@@ -376,6 +400,7 @@ async fn test_startup_probe_tcp() {
 
 /// Test startup probe: postgres type (pg_isready).
 #[tokio::test]
+#[serial]
 async fn test_startup_probe_postgres() {
     use shim_core::health::postgres_startup_probe;
 
@@ -388,6 +413,7 @@ async fn test_startup_probe_postgres() {
 
 /// Test startup probe: redis type (redis-cli ping).
 #[tokio::test]
+#[serial]
 async fn test_startup_probe_redis() {
     use shim_core::health::redis_startup_probe;
 
@@ -399,6 +425,7 @@ async fn test_startup_probe_redis() {
 
 /// Test startup probe from env: tcp default.
 #[tokio::test]
+#[serial]
 async fn test_startup_probe_from_env_tcp() {
     use shim_core::health::startup_probe_from_env;
 
@@ -410,6 +437,7 @@ async fn test_startup_probe_from_env_tcp() {
 
 /// Test startup probe from env: postgres.
 #[tokio::test]
+#[serial]
 async fn test_startup_probe_from_env_postgres() {
     use shim_core::health::startup_probe_from_env;
 
@@ -430,6 +458,7 @@ async fn test_startup_probe_from_env_postgres() {
 
 /// Test startup probe from env: redis.
 #[tokio::test]
+#[serial]
 async fn test_startup_probe_from_env_redis() {
     use shim_core::health::startup_probe_from_env;
 
@@ -446,6 +475,7 @@ async fn test_startup_probe_from_env_redis() {
 
 /// Test PatroniMonitor construction and env var configuration.
 #[tokio::test]
+#[serial]
 async fn test_failover_monitor_patroni() {
     use failover_shim::PatroniMonitor;
 
@@ -485,6 +515,7 @@ async fn test_failover_monitor_patroni() {
 
 /// Test RedisSentinelMonitor construction and env var configuration.
 #[tokio::test]
+#[serial]
 async fn test_failover_monitor_redis_sentinel() {
     use failover_shim::RedisSentinelMonitor;
 
@@ -521,6 +552,7 @@ async fn test_failover_monitor_redis_sentinel() {
 
 /// Test MultiClusterMonitor construction from environment variables.
 #[tokio::test]
+#[serial]
 async fn test_multi_cluster_monitor_from_env() {
     temp_env::with_vars(
         [
@@ -549,6 +581,7 @@ async fn test_multi_cluster_monitor_from_env() {
 
 /// Test MultiClusterMonitor with explicit configuration.
 #[tokio::test]
+#[serial]
 async fn test_multi_cluster_monitor_explicit_config() {
     use std::collections::HashMap;
 
@@ -577,6 +610,7 @@ async fn test_multi_cluster_monitor_explicit_config() {
 
 /// Test cross-cluster health check with unreachable clusters.
 #[tokio::test]
+#[serial]
 async fn test_multi_cluster_health_check_unreachable() {
     use std::collections::HashMap;
 
@@ -612,6 +646,7 @@ async fn test_multi_cluster_health_check_unreachable() {
 
 /// Test failover trigger: primary cluster fails, secondary is promoted.
 #[tokio::test]
+#[serial]
 async fn test_multi_cluster_failover_trigger() {
     use std::collections::HashMap;
 
@@ -662,6 +697,7 @@ async fn test_multi_cluster_failover_trigger() {
 
 /// Test cluster promotion with no eligible secondary.
 #[tokio::test]
+#[serial]
 async fn test_multi_cluster_no_eligible_secondary() {
     use std::collections::HashMap;
 
@@ -691,6 +727,7 @@ async fn test_multi_cluster_no_eligible_secondary() {
 
 /// Test multi-cluster metrics report cluster status and latency.
 #[tokio::test]
+#[serial]
 async fn test_multi_cluster_metrics() {
     use std::collections::HashMap;
 
@@ -727,6 +764,7 @@ async fn test_multi_cluster_metrics() {
 
 /// Test multi-cluster failover with latency-based strategy.
 #[tokio::test]
+#[serial]
 async fn test_multi_cluster_latency_based_strategy() {
     use std::collections::HashMap;
 

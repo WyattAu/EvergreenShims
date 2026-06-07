@@ -3,6 +3,8 @@
 //! These tests verify shim behavior across the full shim matrix.
 //! Run with: cargo test -p evergreen-shims-integration
 
+use serial_test::serial;
+
 mod backup;
 mod failover;
 mod graceful_degradation;
@@ -14,6 +16,7 @@ mod vault;
 
 /// Test backup-shim Postgres connector env var configuration.
 #[tokio::test]
+#[serial]
 async fn test_backup_postgres_connector_config() {
     use backup_shim::BackupShim;
 
@@ -46,6 +49,7 @@ async fn test_backup_postgres_connector_config() {
 
 /// Test backup-shim Redis connector env var configuration.
 #[tokio::test]
+#[serial]
 async fn test_backup_redis_connector_config() {
     use backup_shim::BackupShim;
 
@@ -70,6 +74,7 @@ async fn test_backup_redis_connector_config() {
 
 /// Test backup SHA-256 checksum verification.
 #[tokio::test]
+#[serial]
 async fn test_backup_checksum_verification() {
     use backup_shim::BackupShim;
 
@@ -95,6 +100,7 @@ async fn test_backup_checksum_verification() {
 
 /// Test replication-shim WAL tracking configuration.
 #[tokio::test]
+#[serial]
 async fn test_replication_wal_tracking_config() {
     use replication_shim::ReplicationShim;
 
@@ -121,6 +127,7 @@ async fn test_replication_wal_tracking_config() {
 
 /// Test replication-shim lag threshold default.
 #[tokio::test]
+#[serial]
 async fn test_replication_lag_threshold_default() {
     use replication_shim::ReplicationShim;
 
@@ -130,6 +137,7 @@ async fn test_replication_lag_threshold_default() {
 
 /// Test replication-shim state transitions with lag tracking.
 #[tokio::test]
+#[serial]
 async fn test_replication_lag_state_transitions() {
     use replication_shim::{ReplicationShim, ReplicationState};
 
@@ -154,6 +162,7 @@ async fn test_replication_lag_state_transitions() {
 
 /// Test replication-shim WAL position update.
 #[tokio::test]
+#[serial]
 async fn test_replication_wal_position_update() {
     use replication_shim::ReplicationShim;
 
@@ -172,6 +181,7 @@ async fn test_replication_wal_position_update() {
 
 /// Test migration-shim DB URL override configuration.
 #[tokio::test]
+#[serial]
 async fn test_migration_db_url_override() {
     use migration_shim::MigrationShim;
 
@@ -198,6 +208,7 @@ async fn test_migration_db_url_override() {
 
 /// Test migration-shim sequential apply with checksum verification.
 #[tokio::test]
+#[serial]
 async fn test_migration_sequential_apply_with_checksum() {
     use migration_shim::{Migration, MigrationShim};
 
@@ -238,6 +249,7 @@ async fn test_migration_sequential_apply_with_checksum() {
 
 /// Test migration-shim rollback restores version.
 #[tokio::test]
+#[serial]
 async fn test_migration_rollback_restores_version() {
     use migration_shim::{Migration, MigrationShim};
 
@@ -300,6 +312,7 @@ async fn test_migration_rollback_restores_version() {
 
 /// Test migration-shim file scanning and version ordering.
 #[tokio::test]
+#[serial]
 async fn test_migration_file_scanning_ordering() {
     use migration_shim::MigrationShim;
 
@@ -331,6 +344,7 @@ async fn test_migration_file_scanning_ordering() {
 
 /// Test config-shim file hash detection with real files.
 #[tokio::test]
+#[serial]
 async fn test_config_hash_detection() {
     use config_shim::ConfigShim;
 
@@ -359,6 +373,7 @@ async fn test_config_hash_detection() {
 
 /// Test AES-GCM roundtrip with real crypto.
 #[tokio::test]
+#[serial]
 async fn test_encryption_aes_gcm_roundtrip() {
     use encryption_shim::EncryptionShim;
 
@@ -391,6 +406,7 @@ async fn test_encryption_aes_gcm_roundtrip() {
 
 /// Test ChaCha20-Poly1305 roundtrip.
 #[tokio::test]
+#[serial]
 async fn test_encryption_chacha20_roundtrip() {
     use encryption_shim::EncryptionShim;
 
@@ -417,6 +433,7 @@ async fn test_encryption_chacha20_roundtrip() {
 
 /// Test encryption with key rotation.
 #[tokio::test]
+#[serial]
 async fn test_encryption_key_rotation() {
     use encryption_shim::EncryptionShim;
 
@@ -463,6 +480,7 @@ async fn test_encryption_key_rotation() {
 
 /// Test scheduler cron parsing and task management.
 #[tokio::test]
+#[serial]
 async fn test_scheduler_cron_integration() {
     use scheduler_shim::{RetryConfig, ScheduledTask, SchedulerShim};
 
@@ -516,6 +534,7 @@ async fn test_scheduler_cron_integration() {
 
 /// Test scheduler task state lifecycle.
 #[tokio::test]
+#[serial]
 async fn test_scheduler_state_lifecycle() {
     use scheduler_shim::{RetryConfig, ScheduledTask, SchedulerShim, TaskState};
 
@@ -563,6 +582,7 @@ async fn test_scheduler_state_lifecycle() {
 
 /// Test alerting routing and dedup.
 #[tokio::test]
+#[serial]
 async fn test_alerting_routing_and_dedup() {
     use alerting_shim::{AlertingShim, Severity};
     use std::collections::HashMap;
@@ -629,6 +649,7 @@ async fn test_alerting_routing_and_dedup() {
 
 /// Test queue job lifecycle.
 #[tokio::test]
+#[serial]
 async fn test_queue_job_lifecycle() {
     use queue_shim::{JobStatus, QueueShim};
 
@@ -664,6 +685,7 @@ async fn test_queue_job_lifecycle() {
 
 /// Test queue DLQ after exhausting retries.
 #[tokio::test]
+#[serial]
 async fn test_queue_dlq_exhaustion() {
     use queue_shim::{JobStatus, QueueShim};
 
@@ -694,6 +716,7 @@ async fn test_queue_dlq_exhaustion() {
 
 /// Test auth token creation and validation.
 #[tokio::test]
+#[serial]
 async fn test_auth_token_lifecycle() {
     use auth_shim::{AuthShim, Role};
 
@@ -714,6 +737,7 @@ async fn test_auth_token_lifecycle() {
 
 /// Test API key management.
 #[tokio::test]
+#[serial]
 async fn test_auth_api_keys() {
     use auth_shim::{ApiKey, AuthShim, Role};
 
@@ -749,6 +773,7 @@ async fn test_auth_api_keys() {
 
 /// Test compliance rule checks and scoring.
 #[tokio::test]
+#[serial]
 async fn test_compliance_scoring() {
     use compliance_shim::ComplianceShim;
 
@@ -796,6 +821,7 @@ async fn test_compliance_scoring() {
 
 /// Test cache TTL and eviction.
 #[tokio::test]
+#[serial]
 async fn test_cache_lifecycle() {
     use cache_shim::CacheShim;
 
@@ -837,6 +863,7 @@ async fn test_cache_lifecycle() {
 
 /// Test CDC event capture and serialization.
 #[tokio::test]
+#[serial]
 async fn test_cdc_event_lifecycle() {
     use cdc_shim::CdcShim;
 
@@ -865,6 +892,7 @@ async fn test_cdc_event_lifecycle() {
 
 /// Test sharding hash-based routing.
 #[tokio::test]
+#[serial]
 async fn test_sharding_hash_routing() {
     use sharding_shim::ShardingShim;
 
@@ -898,6 +926,7 @@ async fn test_sharding_hash_routing() {
 
 /// Test chaos experiment lifecycle.
 #[tokio::test]
+#[serial]
 async fn test_chaos_experiment_lifecycle() {
     use chaos_shim::ChaosShim;
 
@@ -928,6 +957,7 @@ async fn test_chaos_experiment_lifecycle() {
 
 /// Test cost tracking and budget alerts.
 #[tokio::test]
+#[serial]
 async fn test_cost_budget_tracking() {
     use cost_shim::CostShim;
 
@@ -980,6 +1010,7 @@ async fn test_cost_budget_tracking() {
 
 /// Test archival lifecycle transitions.
 #[tokio::test]
+#[serial]
 async fn test_archival_lifecycle() {
     use archival_shim::ArchivalShim;
 
@@ -1017,6 +1048,7 @@ async fn test_archival_lifecycle() {
 
 /// Test the full health→failover event chain via ShimBus.
 #[tokio::test]
+#[serial]
 async fn test_cross_shim_health_to_failover() {
     use shim_core::event::EventType;
     use shim_core::wiring::HealthFailoverHandler;
@@ -1070,6 +1102,7 @@ async fn test_cross_shim_health_to_failover() {
 
 /// Test the backup→encryption event chain.
 #[tokio::test]
+#[serial]
 async fn test_cross_shim_backup_to_encryption() {
     use shim_core::event::EventType;
     use shim_core::wiring::BackupEncryptionHandler;
@@ -1112,6 +1145,7 @@ async fn test_cross_shim_backup_to_encryption() {
 
 /// Test the scheduler→backup event chain.
 #[tokio::test]
+#[serial]
 async fn test_cross_shim_scheduler_to_backup() {
     use shim_core::event::EventType;
     use shim_core::wiring::SchedulerBackupHandler;
@@ -1152,6 +1186,7 @@ async fn test_cross_shim_scheduler_to_backup() {
 
 /// Test the alert fan-in: all alertable events reach the alerting shim.
 #[tokio::test]
+#[serial]
 async fn test_cross_shim_alert_fan_in() {
     use shim_core::event::EventType;
     use shim_core::wiring::AlertFanInHandler;
@@ -1210,6 +1245,7 @@ async fn test_cross_shim_alert_fan_in() {
 
 /// Test the wire_all_handlers convenience function.
 #[tokio::test]
+#[serial]
 async fn test_wire_all_handlers() {
     use shim_core::event::{EventType, ShimEvent};
     use shim_core::{Severity, ShimBus};
@@ -1269,6 +1305,7 @@ async fn test_wire_all_handlers() {
 
 /// Test ShimBus event sequencing across multiple sources.
 #[tokio::test]
+#[serial]
 async fn test_bus_multi_source_sequencing() {
     use shim_core::event::EventType;
     use shim_core::{Severity, ShimBus};
@@ -1312,6 +1349,7 @@ async fn test_bus_multi_source_sequencing() {
 
 /// Test cache TTL expiration: entries should be unavailable after TTL.
 #[tokio::test]
+#[serial]
 async fn test_cache_ttl_expiration() {
     use cache_shim::CacheShim;
     temp_env::with_vars([("CACHE_TTL", Some("0"))], || {
@@ -1323,6 +1361,7 @@ async fn test_cache_ttl_expiration() {
 
 /// Test cache eviction under max_entries with LRU strategy.
 #[tokio::test]
+#[serial]
 async fn test_cache_lru_eviction_under_pressure() {
     use cache_shim::CacheShim;
     temp_env::with_vars(
@@ -1349,6 +1388,7 @@ async fn test_cache_lru_eviction_under_pressure() {
 
 /// Test cache eviction under max_entries with FIFO strategy.
 #[tokio::test]
+#[serial]
 async fn test_cache_fifo_eviction_under_pressure() {
     use cache_shim::CacheShim;
     temp_env::with_vars(
@@ -1373,6 +1413,7 @@ async fn test_cache_fifo_eviction_under_pressure() {
 
 /// Test cache hit rate tracking across set/get/miss operations.
 #[tokio::test]
+#[serial]
 async fn test_cache_hit_rate_tracking() {
     use cache_shim::CacheShim;
     temp_env::with_vars(
@@ -1395,6 +1436,7 @@ async fn test_cache_hit_rate_tracking() {
 
 /// Test cache purge_expired removes expired entries.
 #[tokio::test]
+#[serial]
 async fn test_cache_purge_expired_removes_old_entries() {
     use cache_shim::CacheShim;
     temp_env::with_vars([("CACHE_TTL", Some("0"))], || {
@@ -1409,6 +1451,7 @@ async fn test_cache_purge_expired_removes_old_entries() {
 
 /// Test cache eviction by size limit.
 #[tokio::test]
+#[serial]
 async fn test_cache_eviction_by_size() {
     use cache_shim::CacheShim;
     temp_env::with_vars(
@@ -1433,6 +1476,7 @@ async fn test_cache_eviction_by_size() {
 
 /// Test alerting dedup window prevents duplicates within window.
 #[tokio::test]
+#[serial]
 async fn test_alerting_dedup_window_boundary() {
     use alerting_shim::{AlertingShim, Severity};
     use std::collections::HashMap;
@@ -1459,6 +1503,7 @@ async fn test_alerting_dedup_window_boundary() {
 
 /// Test alerting webhook filtering by severity.
 #[tokio::test]
+#[serial]
 async fn test_alerting_webhook_severity_filter() {
     use alerting_shim::{AlertingShim, Severity};
     use std::collections::HashMap;
@@ -1502,6 +1547,7 @@ async fn test_alerting_webhook_severity_filter() {
 
 /// Test alerting metrics report counts correctly.
 #[tokio::test]
+#[serial]
 async fn test_alerting_metrics_counts() {
     use alerting_shim::{AlertingShim, Severity};
     use shim_core::Capability;
@@ -1535,6 +1581,7 @@ async fn test_alerting_metrics_counts() {
 
 /// Test queue worker processes jobs via handler callback.
 #[tokio::test]
+#[serial]
 async fn test_queue_worker_processes_via_handler() {
     use queue_shim::QueueShim;
     use shim_core::Capability;
@@ -1563,6 +1610,7 @@ async fn test_queue_worker_processes_via_handler() {
 
 /// Test queue retry delay is exponential and capped.
 #[tokio::test]
+#[serial]
 async fn test_queue_retry_delay_properties() {
     use queue_shim::QueueShim;
 
@@ -1583,6 +1631,7 @@ async fn test_queue_retry_delay_properties() {
 
 /// Test queue respects max_workers limit during dequeue.
 #[tokio::test]
+#[serial]
 async fn test_queue_worker_limit_enforced() {
     use queue_shim::{JobStatus, QueueShim};
 
@@ -1606,6 +1655,7 @@ async fn test_queue_worker_limit_enforced() {
 
 /// Test auth token creation and validation lifecycle.
 #[tokio::test]
+#[serial]
 async fn test_auth_token_expiration() {
     use auth_shim::{AuthShim, Role};
 
@@ -1618,6 +1668,7 @@ async fn test_auth_token_expiration() {
 
 /// Test auth HMAC hash verification for tokens.
 #[tokio::test]
+#[serial]
 async fn test_auth_token_hmac_verification() {
     use auth_shim::{AuthShim, Role};
 
@@ -1640,6 +1691,7 @@ async fn test_auth_token_hmac_verification() {
 
 /// Test auth role-based permission checking.
 #[tokio::test]
+#[serial]
 async fn test_auth_role_permissions() {
     use auth_shim::{AuthShim, Role};
 
@@ -1658,6 +1710,7 @@ async fn test_auth_role_permissions() {
 
 /// Test auth failed login lockout and recovery.
 #[tokio::test]
+#[serial]
 async fn test_auth_lockout_and_recovery() {
     use auth_shim::AuthShim;
 
@@ -1682,6 +1735,7 @@ async fn test_auth_lockout_and_recovery() {
 
 /// Test auth API key revocation.
 #[tokio::test]
+#[serial]
 async fn test_auth_api_key_revocation() {
     use auth_shim::{ApiKey, AuthShim, Role};
 
@@ -1709,6 +1763,7 @@ async fn test_auth_api_key_revocation() {
 
 /// Test compliance violation filtering by severity.
 #[tokio::test]
+#[serial]
 async fn test_compliance_violation_severity_filter() {
     use compliance_shim::{ComplianceShim, Severity};
 
@@ -1747,6 +1802,7 @@ async fn test_compliance_violation_severity_filter() {
 
 /// Test compliance violation resolution tracking.
 #[tokio::test]
+#[serial]
 async fn test_compliance_violation_resolution() {
     use compliance_shim::{ComplianceShim, Severity};
 
@@ -1771,6 +1827,7 @@ async fn test_compliance_violation_resolution() {
 
 /// Test compliance CIS check generation for postgres.
 #[tokio::test]
+#[serial]
 async fn test_compliance_cis_postgres_checks() {
     use compliance_shim::ComplianceShim;
 
@@ -1784,6 +1841,7 @@ async fn test_compliance_cis_postgres_checks() {
 
 /// Test compliance CIS check generation for mariadb.
 #[tokio::test]
+#[serial]
 async fn test_compliance_cis_mariadb_checks() {
     use compliance_shim::ComplianceShim;
 
@@ -1796,6 +1854,7 @@ async fn test_compliance_cis_mariadb_checks() {
 
 /// Test compliance violation counts by severity.
 #[tokio::test]
+#[serial]
 async fn test_compliance_violation_counts() {
     use compliance_shim::{ComplianceShim, Severity};
 
@@ -1839,6 +1898,7 @@ async fn test_compliance_violation_counts() {
 
 /// Test CDC table filtering blocks non-matching tables.
 #[tokio::test]
+#[serial]
 async fn test_cdc_table_filter_blocks_non_matching() {
     use cdc_shim::{CdcOperation, CdcShim};
 
@@ -1852,6 +1912,7 @@ async fn test_cdc_table_filter_blocks_non_matching() {
 
 /// Test CDC WAL segment rollover at 16MB boundary.
 #[tokio::test]
+#[serial]
 async fn test_cdc_wal_segment_rollover() {
     use cdc_shim::CdcShim;
 
@@ -1863,6 +1924,7 @@ async fn test_cdc_wal_segment_rollover() {
 
 /// Test CDC event lifecycle: create -> capture -> publish -> stats.
 #[tokio::test]
+#[serial]
 async fn test_cdc_full_event_lifecycle() {
     use cdc_shim::{CdcOperation, CdcShim};
 
@@ -1889,6 +1951,7 @@ async fn test_cdc_full_event_lifecycle() {
 
 /// Test CDC serialization produces valid JSON.
 #[tokio::test]
+#[serial]
 async fn test_cdc_event_serialization_roundtrip() {
     use cdc_shim::{CdcOperation, CdcShim};
 
@@ -1915,6 +1978,7 @@ async fn test_cdc_event_serialization_roundtrip() {
 
 /// Test sharding hash routing determinism and distribution.
 #[tokio::test]
+#[serial]
 async fn test_sharding_hash_determinism_and_distribution() {
     use sharding_shim::ShardingShim;
 
@@ -1942,6 +2006,7 @@ async fn test_sharding_hash_determinism_and_distribution() {
 
 /// Test sharding health-aware routing.
 #[tokio::test]
+#[serial]
 async fn test_sharding_health_aware_routing() {
     use sharding_shim::ShardingShim;
 
@@ -1963,6 +2028,7 @@ async fn test_sharding_health_aware_routing() {
 
 /// Test sharding range routing.
 #[tokio::test]
+#[serial]
 async fn test_sharding_range_routing() {
     use sharding_shim::ShardingShim;
 
@@ -1983,6 +2049,7 @@ async fn test_sharding_range_routing() {
 
 /// Test sharding directory routing.
 #[tokio::test]
+#[serial]
 async fn test_sharding_directory_routing() {
     use sharding_shim::ShardingShim;
 
@@ -2006,6 +2073,7 @@ async fn test_sharding_directory_routing() {
 
 /// Test chaos experiment lifecycle: start -> active -> stop.
 #[tokio::test]
+#[serial]
 async fn test_chaos_experiment_full_lifecycle() {
     use chaos_shim::{ChaosShim, FaultType};
 
@@ -2021,6 +2089,7 @@ async fn test_chaos_experiment_full_lifecycle() {
 
 /// Test chaos injection result for latency fault.
 #[tokio::test]
+#[serial]
 async fn test_chaos_injection_result_latency() {
     use chaos_shim::{ChaosShim, FaultType};
 
@@ -2043,6 +2112,7 @@ async fn test_chaos_injection_result_latency() {
 
 /// Test chaos blast radius clamping.
 #[tokio::test]
+#[serial]
 async fn test_chaos_blast_radius_clamping() {
     use chaos_shim::ChaosShim;
 
@@ -2054,6 +2124,7 @@ async fn test_chaos_blast_radius_clamping() {
 
 /// Test chaos orchestrator schedule management.
 #[tokio::test]
+#[serial]
 async fn test_chaos_orchestrator_schedule() {
     use chaos_shim::ChaosOrchestrator;
 
@@ -2073,6 +2144,7 @@ async fn test_chaos_orchestrator_schedule() {
 
 /// Test chaos orchestrator tick expires experiments.
 #[tokio::test]
+#[serial]
 async fn test_chaos_orchestrator_tick_expiration() {
     use chaos_shim::ChaosOrchestrator;
 
@@ -2090,6 +2162,7 @@ async fn test_chaos_orchestrator_tick_expiration() {
 
 /// Test chaos metrics report correctly.
 #[tokio::test]
+#[serial]
 async fn test_chaos_metrics_report() {
     use chaos_shim::{ChaosShim, FaultType};
     use shim_core::Capability;
@@ -2124,6 +2197,7 @@ async fn test_chaos_metrics_report() {
 
 /// Test cost budget tracking across multiple tenants.
 #[tokio::test]
+#[serial]
 async fn test_cost_multi_tenant_budgets() {
     use cost_shim::{CostShim, ResourceType};
 
@@ -2141,6 +2215,7 @@ async fn test_cost_multi_tenant_budgets() {
 
 /// Test cost projection calculation.
 #[tokio::test]
+#[serial]
 async fn test_cost_projection() {
     use cost_shim::{CostShim, ResourceType};
 
@@ -2155,6 +2230,7 @@ async fn test_cost_projection() {
 
 /// Test cost alert threshold triggering.
 #[tokio::test]
+#[serial]
 async fn test_cost_alert_threshold() {
     use cost_shim::{CostShim, ResourceType};
 
@@ -2170,6 +2246,7 @@ async fn test_cost_alert_threshold() {
 
 /// Test cost budget reset for new billing period.
 #[tokio::test]
+#[serial]
 async fn test_cost_budget_reset() {
     use cost_shim::{CostShim, ResourceType};
 
@@ -2183,6 +2260,7 @@ async fn test_cost_budget_reset() {
 
 /// Test cost optimizer generates recommendations for idle resources.
 #[tokio::test]
+#[serial]
 async fn test_cost_optimizer_idle_recommendations() {
     use cost_shim::CostOptimizer;
 
@@ -2202,6 +2280,7 @@ async fn test_cost_optimizer_idle_recommendations() {
 
 /// Test archival retention expiration and purge.
 #[tokio::test]
+#[serial]
 async fn test_archival_retention_expiration() {
     use archival_shim::ArchivalShim;
 
@@ -2225,6 +2304,7 @@ async fn test_archival_retention_expiration() {
 
 /// Test archival compression ratio tracking.
 #[tokio::test]
+#[serial]
 async fn test_archival_compression_ratio() {
     use archival_shim::ArchivalShim;
 
@@ -2248,6 +2328,7 @@ async fn test_archival_compression_ratio() {
 
 /// Test archival with real file source copy.
 #[tokio::test]
+#[serial]
 async fn test_archival_real_file_copy() {
     use archival_shim::ArchivalShim;
 
@@ -2276,6 +2357,7 @@ async fn test_archival_real_file_copy() {
 
 /// Test real PostgreSQL migration via sqlx against Docker service.
 #[tokio::test]
+#[serial]
 async fn test_real_postgres_migration() {
     let url = "postgres://test:test@localhost:15432/testdb";
 
@@ -2321,6 +2403,7 @@ async fn test_real_postgres_migration() {
 
 /// Test real MariaDB migration against Docker service.
 #[tokio::test]
+#[serial]
 async fn test_real_mariadb_migration() {
     let url = "mysql://root:test@localhost:13306/testdb";
 
@@ -2364,6 +2447,7 @@ async fn test_real_mariadb_migration() {
 
 /// Test real Vault secrets rotation against Docker service.
 #[tokio::test]
+#[serial]
 async fn test_real_vault_secrets_rotation() {
     use vault_shim::VaultShim;
 
@@ -2392,6 +2476,7 @@ async fn test_real_vault_secrets_rotation() {
 
 /// Test real Redis connectivity against Docker service.
 #[tokio::test]
+#[serial]
 async fn test_real_redis_connectivity() {
     let url = "redis://localhost:6380";
 
@@ -2443,6 +2528,7 @@ async fn test_real_redis_connectivity() {
 
 /// Test compliance-shim against real PostgreSQL.
 #[tokio::test]
+#[serial]
 async fn test_real_compliance_postgres() {
     use compliance_shim::ComplianceShim;
 
@@ -2471,6 +2557,7 @@ async fn test_real_compliance_postgres() {
 
 /// Test graceful degradation env var configuration.
 #[tokio::test]
+#[serial]
 async fn test_proxy_graceful_degradation_config() {
     use proxy_shim::ProxyShim;
 
@@ -2491,6 +2578,7 @@ async fn test_proxy_graceful_degradation_config() {
 
 /// Test graceful degradation serves cached response when circuit is open.
 #[tokio::test]
+#[serial]
 async fn test_proxy_serves_stale_when_circuit_open() {
     use proxy_shim::{HandleRequestResult, ProxyShim};
 
@@ -2536,6 +2624,7 @@ async fn test_proxy_serves_stale_when_circuit_open() {
 
 /// Test graceful degradation disabled falls back to rejection.
 #[tokio::test]
+#[serial]
 async fn test_proxy_degradation_disabled_rejects() {
     use proxy_shim::{HandleRequestResult, ProxyShim};
 
@@ -2562,6 +2651,7 @@ async fn test_proxy_degradation_disabled_rejects() {
 
 /// Test stale responses metric is reported correctly.
 #[tokio::test]
+#[serial]
 async fn test_proxy_stale_responses_metric() {
     use proxy_shim::ProxyShim;
     use shim_core::Capability;
@@ -2600,6 +2690,7 @@ async fn test_proxy_stale_responses_metric() {
 
 /// Test graceful degradation: circuit recovery stops serving stale.
 #[tokio::test]
+#[serial]
 async fn test_proxy_recovery_after_degradation() {
     use proxy_shim::{HandleRequestResult, ProxyShim};
 

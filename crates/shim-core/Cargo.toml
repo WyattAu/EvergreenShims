@@ -44,4 +44,5 @@ wasmtime = { version = "28", optional = true }
 tempfile.workspace = true
 pretty_assertions.workspace = true
 temp-env.workspace = true
+serial_test.workspace = true
 wat = "1"
