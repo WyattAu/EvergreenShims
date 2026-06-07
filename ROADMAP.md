@@ -1,6 +1,6 @@
 # Roadmap
 
-Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHub Pages deployed.
+Current state: v1.0.1 -- 34 crates, 970 tests, all CI/CD pipelines green, GitHub Pages deployed.
 
 ## Completed Milestones
 
@@ -74,6 +74,24 @@ Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHu
 | aarch64/riscv64 full/infra builds | Completed | Low | Platform coverage |
 | SBOM generation in CI | Completed | Medium | Supply chain transparency |
 
+## v1.0.1 Quality Hardening (Completed)
+
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| Eliminate 47 unwrap() calls in production library code | Completed | High | Runtime safety |
+| Fix critical tenant.rs HashMap unwrap (panic on missing tenant) | Completed | High | Fault tolerance |
+| Add graceful error handling in metrics/healthz HTTP handlers | Completed | High | Availability |
+| Remove crate-level #![allow(dead_code)] from integration-tests | Completed | Medium | Code hygiene |
+| Add missing module-level doc comment on shimctl | Completed | Low | Documentation |
+| Fix all 19 documentation issues (stale metrics, broken links, etc.) | Completed | Medium | Accuracy |
+| Fix CI: add protobuf-compiler to 8 pipeline jobs | Completed | High | CI/CD reliability |
+| Fix CI: replace broken rustsec/audit-check SHA | Completed | High | Security pipeline |
+| Fix CI: cargo-sbom CLI flag migration | Completed | Medium | SBOM pipeline |
+| Fix CI: add go mod tidy for terraform build | Completed | Medium | IaC pipeline |
+| Update Dockerfile base image to rust:1-alpine | Completed | High | Docker builds |
+| Fix migration-shim env var pollution in connection string tests | Completed | Medium | Test reliability |
+| Apply cargo fmt across workspace | Completed | Low | Code style |
+
 ## v2.0.0 Scaling
 
 | Task | Status | Priority | Impact |
@@ -91,12 +109,12 @@ Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHu
 
 | Task | Status | Priority | Impact |
 |------|--------|----------|--------|
-| Multi-language shim SDK (Go, Python, Node) | Completed (skeleton) | High | Ecosystem |
+| Multi-language shim SDK (Go, Python, Node) | Completed | High | Ecosystem |
 | Edge deployment targets (ARM, RISC-V) | Completed | Medium | Deployment |
 | Plugin system for custom shims | Completed | High | Extensibility |
 | WebAssembly shim runtime | Completed | Medium | Portability |
 | CLI management tool (shimctl) | Completed | Medium | Operations |
-| Terraform provider (scaffolding) | Completed | Medium | IaC integration |
+| Terraform provider | Completed | Medium | IaC integration |
 
 ### v3.x Known Gaps (Post-Release Work)
 
@@ -104,11 +122,14 @@ Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHu
 |-----|----------|--------|-------------|
 | SDK HTTP client implementation | High | Fixed | Go/Python/Node SDKs now have working HTTP clients with tests |
 | Terraform provider compilation | High | Fixed | Simplified to use management API, removed k8s dependency |
-| Helm chart (was lost) | Fixed | Fixed | Recreated in Phase A (helm/evergreen-shims/) |
-| Grafana dashboard (was lost) | Fixed | Fixed | Recreated with correct metric names from codebase |
-| k8s sample configmap | Fixed | Fixed | Created in Phase A (k8s/sample-configmap.yaml) |
+| Helm chart | Fixed | Fixed | Recreated (helm/evergreen-shims/) |
+| Grafana dashboard | Fixed | Fixed | Recreated with correct metric names from codebase |
+| k8s sample configmap | Fixed | Fixed | Created (k8s/sample-configmap.yaml) |
 | Coverage measurement | Fixed | Fixed | 73% baseline established, CI job active |
 | Auth test flakiness | Fixed | Fixed | serial_test added to prevent parallel pollution |
+| CI protobuf-compiler missing | Fixed | Fixed | Added protoc install to 8 CI jobs |
+| Docker base image too old | Fixed | Fixed | Updated from rust:1.85 to rust:1-alpine |
+| Migration-shim env var pollution | Fixed | Fixed | Clear db_url in connection string tests |
 
 ## Architecture Decisions
 
@@ -121,16 +142,17 @@ Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHu
 | ADR-005 | Environment variables as primary config | Accepted |
 | ADR-006 | Feature-gated binary composition | Accepted |
 | ADR-007 | ring-free aws-lc-rs for musl compatibility | Accepted |
+| ADR-008 | expect() with descriptive messages over unwrap() | Accepted |
+| ADR-009 | #[cfg(test)] modules for integration test helpers | Accepted |
 
 ## Risk Register
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| aarch64/riscv64 cross-compile failures | Known | Limited to health-shim for non-x86 |
-| Docker Hub availability | Known | Retry logic in CI, GHCR as primary |
-| Cargo-deny false positives | Low | Allowlist tuning in deny.toml |
-| Pre-push hook latency (~84s) | Low | Acceptable for safety guarantee |
+| Docker image rust:1-alpine is non-deterministic | Low | Cargo.lock pins dependency versions |
+| Pre-push hook latency (~294s full, ~30s unit) | Low | Acceptable for safety guarantee |
 | SDK/Provider not tested in target language | Known | Requires Go/Node/Python toolchains in CI |
+| Node.js 20 actions deprecation (June 2026) | Medium | Update to Node.js 24 compatible actions |
 
 ## Quality Metrics
 
@@ -139,12 +161,12 @@ Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHu
 | Unit tests | 970 | >900 |
 | Code coverage (excl. integration) | 73% | >80% |
 | Clippy warnings | 0 | 0 |
-| Unsafe code | 0 | 0 |
-| Pre-commit checks | 8 | 8 |
-| CI pipeline jobs | 14 | 14 |
+| Unsafe code | 0 (library) | 0 |
+| Pre-commit checks | 6 | 6 |
+| CI pipeline jobs | 15 | 15 |
 | Binary size (health) | ~2.5MB | <3MB |
 | Crates | 34 | 34 |
-| Documentation coverage | 90% | >95% |
+| Documentation coverage | 95% | >95% |
 | GitHub Pages | Active | Active |
 | Supply chain (SHA pins) | Active | Active |
 | Dependency audit (cargo-deny) | Active | Active |
@@ -191,6 +213,38 @@ Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHu
 | failover-shim: TCP checks, serialization, env config | Completed | High | 51% -> 55% |
 | compliance-shim: CIS rule generation, severity, violations | Completed | Medium | 36% -> 45% |
 
+## Forward-Looking Roadmap
+
+### v1.4.0 -- Coverage Push to 80%
+
+| Task | Priority | Impact |
+|------|----------|--------|
+| Failover-shim: 55% -> 70% (Patroni/Sentinel mock tests) | High | Coverage |
+| Compliance-shim: 45% -> 60% (STIG rule expansion) | Medium | Coverage |
+| shimctl: 25% -> 40% (command dispatch, error paths) | High | Coverage |
+| Backup-shim: S3 upload path tests with mock server | High | Coverage |
+| Integration test coverage: chaos-shim ignored tests in CI | Medium | Coverage |
+
+### v1.5.0 -- Security Hardening
+
+| Task | Priority | Impact |
+|------|----------|--------|
+| Fuzz testing with cargo-fuzz on parser-heavy shims | High | Security |
+| SBOM attestation in release workflow (SLSA Level 3) | High | Supply chain |
+| CVE remediation pipeline (automated Dependabot/Renovate) | Medium | Security |
+| TLS 1.3 enforcement audit across all network paths | High | Security |
+| Encryption key rotation interval validation | Medium | Security |
+
+### v1.6.0 -- Developer Experience
+
+| Task | Priority | Impact |
+|------|----------|--------|
+| Architecture Decision Records (ADRs) formalized | Medium | DX |
+| Interactive playground (Docker Compose with all shims) | High | DX |
+| CLI auto-completion (bash/zsh/fish) | Medium | DX |
+| Configuration schema validation at startup | High | DX |
+| Hot-reload documentation with live examples | Low | DX |
+
 ### v2.0.0 -- Advanced Platform Features
 
 | Task | Priority | Impact |
@@ -200,3 +254,4 @@ Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHu
 | Multi-cluster failover live testing | High | HA |
 | Load testing proxy-shim circuit breaker | High | Performance |
 | Chaos testing with real databases | High | Resilience |
+| OpenTelemetry SDK integration for shims | Medium | Observability |
