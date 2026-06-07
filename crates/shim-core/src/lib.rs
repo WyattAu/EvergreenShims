@@ -3,19 +3,33 @@
 //! This crate provides the foundational abstractions that all shims implement.
 //! Includes the `ShimBus` event system for cross-shim communication.
 
+/// In-process event broadcast bus for cross-shim communication.
 pub mod bus;
+/// Configuration types and validation for all shims.
 pub mod config;
+/// Error types and the [`Result`] alias for shim operations.
 pub mod error;
+/// Typed event system: [`ShimEvent`], [`EventType`], and [`EventHandler`] trait.
 pub mod event;
+/// Health check traits, status types, and startup probes.
 pub mod health;
+/// Config hot-reload via filesystem watching.
 pub mod hotreload;
+/// Prometheus metrics collector and HTTP server for shim observability.
 pub mod metrics;
+/// Child process lifecycle management.
 pub mod process;
+/// Resource quota monitoring and enforcement.
 pub mod resource;
+/// Graceful shutdown sequences for different database types.
 pub mod shutdown;
+/// Signal handling for SIGTERM, SIGINT, and SIGHUP.
 pub mod signal;
+/// Structured logging initialization (JSON or human-readable).
 pub mod structured_logging;
+/// Multi-tenancy isolation, quota enforcement, and per-tenant metrics.
 pub mod tenant;
+/// Pre-built cross-shim event wiring handlers.
 pub mod wiring;
 
 #[cfg(feature = "redis-bus")]

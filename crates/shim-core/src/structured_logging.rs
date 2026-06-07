@@ -1,3 +1,8 @@
+//! Structured logging initialization for shim processes.
+//!
+//! Provides `init_structured_logging` which sets up the global tracing
+//! subscriber with either human-readable or JSON-formatted output.
+
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};

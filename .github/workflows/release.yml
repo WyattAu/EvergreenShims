@@ -46,6 +46,18 @@ jobs:
             arch: aarch64
             features: health
             artifact: shim-aarch64
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64-db
+            features: db-shim
+            artifact: shim-db-aarch64
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64-full
+            features: full
+            artifact: shim-full-aarch64
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64-infra
+            features: infra
+            artifact: shim-infra-aarch64
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -148,17 +160,27 @@ jobs:
     name: Generate SBOM
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: Install cargo-sbom
         run: cargo install cargo-sbom
 
       - name: Generate SBOM
-        run: cargo sbom > sbom.spdx
+        run: cargo sbom --output-file sbom.spdx
+
+      - name: Validate SBOM
+        run: |
+          if [ ! -s sbom.spdx ]; then
+            echo "::error::SBOM file is empty"
+            exit 1
+          fi
+          echo "SBOM generated successfully ($(wc -c < sbom.spdx) bytes)"
 
       - name: Upload SBOM to release
         run: gh release upload "${{ github.ref_name }}" sbom.spdx --clobber

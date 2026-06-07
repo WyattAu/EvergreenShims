@@ -44,34 +44,54 @@ use tokio::sync::watch;
 /// Backup metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupMeta {
+    /// Database name that was backed up.
     pub database: String,
+    /// Database type (postgres, mysql, etc.).
     pub db_type: String,
+    /// ISO 8601 timestamp when the backup started.
     pub started_at: String,
+    /// ISO 8601 timestamp when the backup completed (None if still running).
     pub completed_at: Option<String>,
+    /// Path to the backup file.
     pub path: String,
+    /// Size of the backup in bytes.
     pub size_bytes: u64,
+    /// Whether the backup completed successfully.
     pub success: bool,
+    /// Error message if the backup failed.
     pub error: Option<String>,
+    /// SHA-256 checksum of the backup file.
     pub checksum: Option<String>,
 }
 
 /// Validated backup entry used for retention tracking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupEntry {
+    /// Backup filename.
     pub filename: String,
+    /// When the backup was created.
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Size of the backup in bytes.
     pub size_bytes: u64,
+    /// SHA-256 checksum of the backup.
     pub checksum: String,
 }
 
 /// Shared backup state between parent and spawned task.
 pub struct BackupState {
+    /// Total successful backups.
     pub backup_success: u64,
+    /// Total failed backup attempts.
     pub backup_failure: u64,
+    /// Number of backups currently retained.
     pub backups_retained: u64,
+    /// Number of backups expired and cleaned up.
     pub backups_expired: u64,
+    /// Timestamp of the last successful backup.
     pub last_backup: Option<chrono::DateTime<chrono::Utc>>,
+    /// Size of the last backup in bytes.
     pub last_backup_size: u64,
+    /// History of recent backups for retention tracking.
     pub backup_history: Vec<BackupEntry>,
 }
 
@@ -173,6 +193,7 @@ pub struct BackupShim {
 }
 
 impl BackupShim {
+    /// Create a new backup shim from environment variables.
     pub fn new() -> Self {
         Self {
             schedule: std::env::var("BACKUP_SCHEDULE").unwrap_or_else(|_| "0 2 * * *".to_string()),
@@ -688,11 +709,17 @@ impl BackupShim {
 /// Result of backup verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationResult {
+    /// Whether all verification checks passed.
     pub success: bool,
+    /// Whether the backup file exists on disk.
     pub file_exists: bool,
+    /// Size of the backup file in bytes.
     pub file_size: u64,
+    /// Whether the checksum matched (None if verification was skipped).
     pub checksum_match: Option<bool>,
+    /// Whether the restore test succeeded (None if not requested).
     pub restore_test: Option<bool>,
+    /// List of verification errors encountered.
     pub errors: Vec<String>,
 }
 

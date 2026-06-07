@@ -62,6 +62,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  chaos-tests:
+    name: Chaos Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run chaos-shim unit tests
+        run: cargo test --package chaos-shim --lib
+      - name: Run chaos-shim ignored tests
+        run: cargo test --package chaos-shim --lib -- --ignored
+
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -89,6 +102,19 @@ jobs:
         run: cargo deny check advisories
       - name: Check bans
         run: cargo deny check bans
+
+  sbom-check:
+    name: SBOM Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-sbom
+        run: cargo install cargo-sbom
+      - name: Validate cargo-sbom can run
+        run: cargo sbom --output-file /dev/null
 
   benchmark-check:
     name: Benchmark Check

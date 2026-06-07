@@ -1,3 +1,8 @@
+//! gRPC management API for EvergreenShim.
+//!
+//! Provides a gRPC service for querying shim status, metrics,
+//! configuration reload, and capability discovery.
+
 pub mod proto {
     tonic::include_proto!("evergreen.shim");
 }
@@ -22,6 +27,7 @@ pub struct ShimState {
 }
 
 impl ShimState {
+    /// Create a new management state with default metrics and capabilities.
     pub fn new() -> Self {
         let mut metrics = HashMap::new();
 

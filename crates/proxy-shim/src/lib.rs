@@ -32,8 +32,11 @@ use tokio::sync::watch;
 /// Circuit breaker state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum CircuitState {
+    /// Circuit is closed — requests flow normally.
     Closed,
+    /// Circuit is open — requests are rejected.
     Open,
+    /// Circuit is testing recovery — one request allowed through.
     HalfOpen,
 }
 
@@ -50,34 +53,48 @@ impl std::fmt::Display for CircuitState {
 /// Connection pool statistics.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PoolStats {
+    /// Number of active (in-use) connections.
     pub active: u64,
+    /// Number of idle connections in the pool.
     pub idle: u64,
+    /// Total connections managed by the pool.
     pub total: u64,
+    /// Number of requests waiting for a connection.
     pub waiters: u64,
 }
 
 /// Route rule for URL-based routing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteRule {
+    /// URL path prefix to match (e.g., "/api/v1").
     pub path_prefix: String,
+    /// Target backend address (e.g., "backend:5432").
     pub target: String,
+    /// Weight for weighted round-robin selection.
     pub weight: u32,
+    /// Whether this backend is healthy and should receive traffic.
     pub healthy: bool,
 }
 
 /// Rate limit config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
+    /// Maximum requests per second.
     pub max_requests_per_sec: u64,
+    /// Burst capacity (max tokens in the bucket).
     pub burst: u64,
+    /// Sliding window size in seconds.
     pub window_secs: u64,
 }
 
 /// Backend entry with weight for weighted round-robin selection.
 #[derive(Debug, Clone)]
 pub struct BackendEntry {
+    /// Backend address (e.g., "10.0.0.1:5432").
     pub addr: String,
+    /// Weight for load balancing.
     pub weight: u32,
+    /// Whether this backend is healthy.
     pub healthy: bool,
 }
 
@@ -156,6 +173,7 @@ pub struct ProxyShim {
 }
 
 impl ProxyShim {
+    /// Create a new proxy shim from environment variables.
     pub fn new() -> Self {
         let circuit_threshold: u32 = std::env::var("PROXY_CIRCUIT_THRESHOLD")
             .ok()

@@ -65,21 +65,32 @@ pub enum FailoverConnector {
 /// Failover state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FailoverState {
+    /// Primary is healthy and serving traffic.
     Healthy,
+    /// Primary is suspect — some checks failing.
     Suspect,
+    /// Failover is in progress.
     FailingOver,
+    /// Failover complete — replica is now primary.
     FailedOver,
+    /// Original primary is recovering.
     Recovering,
+    /// Original primary has recovered and is ready for failback.
     Recovered,
 }
 
 /// Failover event for notifications.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FailoverEvent {
+    /// Event type (e.g., "failover_triggered", "failover_completed").
     pub event: String,
+    /// Address of the old primary.
     pub old_primary: String,
+    /// Address of the new primary.
     pub new_primary: String,
+    /// ISO 8601 timestamp of the event.
     pub timestamp: String,
+    /// Human-readable reason for the event.
     pub reason: String,
 }
 
@@ -244,6 +255,7 @@ pub struct FailoverShim {
 }
 
 impl FailoverShim {
+    /// Create a new failover shim from environment variables.
     pub fn new() -> Self {
         let connector_str =
             std::env::var("FAILOVER_CONNECTOR").unwrap_or_else(|_| "tcp".to_string());
@@ -431,17 +443,28 @@ impl FailoverShim {
 /// Result of a Patroni health check.
 #[derive(Debug)]
 pub enum PatroniCheckResult {
+    /// Node is reachable and healthy.
     Healthy {
+        /// Whether the node is in recovery mode (i.e., a replica).
         in_recovery: bool,
+        /// Maximum replication lag in seconds across all replicas.
         max_lag_secs: f64,
     },
+    /// Node is unreachable (connection refused or psql failed).
     Unreachable,
 }
 
 /// Result of a Redis Sentinel check.
 #[derive(Debug)]
 pub enum RedisSentinelCheckResult {
-    MasterInfo { ip: String, port: String },
+    /// Master info returned by Sentinel.
+    MasterInfo {
+        /// Master IP address.
+        ip: String,
+        /// Master port.
+        port: String,
+    },
+    /// Sentinel is unreachable.
     Unreachable,
 }
 

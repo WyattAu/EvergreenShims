@@ -1,0 +1,30 @@
+# Build artifacts
+target/
+
+# Git metadata
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# Documentation
+docs/
+*.md
+
+# Tests and benchmarks
+tests/
+benches/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc
+LICENSE
+k8s/
+scripts/
+.cargo/
+.githooks/

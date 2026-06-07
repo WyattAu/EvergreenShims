@@ -1,37 +1,60 @@
+//! Benchmark regression detection for EvergreenShims.
+//!
+//! Parses Criterion output, compares against baselines, and reports
+//! regressions that exceed configurable tolerance thresholds.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 
+/// Baseline file containing known-good benchmark results.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BaselineFile {
+    /// Schema version of the baseline file.
     pub version: u32,
+    /// Map of benchmark name to its baseline measurement.
     pub benchmarks: HashMap<String, BenchmarkBaseline>,
 }
 
+/// A single benchmark baseline measurement.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BenchmarkBaseline {
+    /// Mean execution time in nanoseconds.
     pub mean_ns: f64,
+    /// Allowed regression tolerance as a fraction (e.g., 0.1 = 10%).
     pub tolerance: f64,
 }
 
+/// A parsed benchmark result from Criterion output.
 #[derive(Debug)]
 pub struct BenchmarkResult {
+    /// Benchmark name.
     pub name: String,
+    /// Measured mean execution time in nanoseconds.
     pub mean_ns: f64,
 }
 
+/// Summary of regression check results.
 #[derive(Debug)]
 pub struct RegressionReport {
+    /// Benchmarks that passed regression checks.
     pub passed: Vec<String>,
+    /// Benchmarks that failed (regressed beyond tolerance).
     pub failed: Vec<RegressionFailure>,
 }
 
+/// A single benchmark regression failure.
 #[derive(Debug)]
 pub struct RegressionFailure {
+    /// Benchmark name.
     pub name: String,
+    /// Baseline mean time in nanoseconds.
     pub baseline_ns: f64,
+    /// Measured mean time in nanoseconds.
     pub measured_ns: f64,
+    /// Percentage regression (positive = slower).
     pub regression_pct: f64,
+    /// Allowed tolerance as a fraction.
     pub tolerance: f64,
 }
 

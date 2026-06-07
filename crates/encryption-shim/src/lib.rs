@@ -29,27 +29,39 @@ const KEY_SIZE: usize = 32;
 /// Encryption key with metadata for rotation tracking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptionKey {
+    /// Unique key identifier.
     pub id: String,
+    /// Raw key material (32 bytes for AES-256 / ChaCha20).
     pub material: Vec<u8>,
+    /// When this key was created.
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Whether this is the currently active encryption key.
     pub active: bool,
 }
 
 /// Encrypted payload in envelope format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedPayload {
+    /// ID of the key used for encryption.
     pub key_id: String,
+    /// Nonce used for AEAD encryption.
     pub nonce: Vec<u8>,
+    /// Encrypted ciphertext (without tag).
     pub ciphertext: Vec<u8>,
+    /// AEAD authentication tag.
     pub tag: Vec<u8>,
+    /// Encryption method used (e.g., "aes-gcm", "chacha20").
     pub method: String,
+    /// Additional authenticated data, if configured.
     pub aad: Option<Vec<u8>>,
 }
 
 /// Supported encryption methods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EncryptionMethod {
+    /// AES-256-GCM (hardware-accelerated on x86_64).
     AesGcm,
+    /// ChaCha20-Poly1305 (constant-time, good for ARM/mobile).
     ChaCha20,
 }
 
@@ -111,7 +123,7 @@ impl EncryptionShim {
     /// # Panics
     ///
     /// Panics if the encryption key configuration is invalid (file unreadable,
-    /// invalid hex encoding, or wrong key length). Use [`try_new`] for
+    /// invalid hex encoding, or wrong key length). Use [`EncryptionShim::try_new`] for
     /// non-panicking construction.
     pub fn new() -> Self {
         Self::try_new().expect("EncryptionShim configuration is invalid")

@@ -14,9 +14,13 @@ use crate::Metric;
 /// Per-tenant resource usage snapshot.
 #[derive(Debug, Clone)]
 pub struct TenantUsage {
+    /// Memory usage in bytes.
     pub memory_bytes: u64,
+    /// CPU usage as a percentage.
     pub cpu_percent: f64,
+    /// Number of requests in the current period.
     pub requests_count: u64,
+    /// When the request counter was last reset.
     pub last_reset: Instant,
 }
 
@@ -89,12 +93,19 @@ impl Default for TenantUsage {
 /// Per-tenant metrics returned by the isolator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TenantMetrics {
+    /// Unique tenant identifier.
     pub tenant_id: String,
+    /// Current memory usage in bytes.
     pub memory_bytes: u64,
+    /// Current CPU usage as a percentage.
     pub cpu_percent: f64,
+    /// Number of requests in the current period.
     pub requests_count: u64,
+    /// Whether the tenant has exceeded its memory limit.
     pub memory_limit_reached: bool,
+    /// Whether the tenant has exceeded its CPU limit.
     pub cpu_limit_reached: bool,
+    /// Whether the tenant has exceeded its rate limit.
     pub rate_limit_reached: bool,
 }
 

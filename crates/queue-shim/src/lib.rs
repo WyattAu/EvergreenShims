@@ -529,19 +529,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_dlq() {
-        let mut shim = QueueShim::new();
-        let id = shim.enqueue("dlq-test".into(), vec![]).await;
-        shim.dequeue().await;
-        for _ in 0..4 {
-            let status = shim.fail_job(&id, "boom".into()).await.unwrap();
-            if status == JobStatus::Retrying {
+        temp_env::with_vars(
+            [
+                ("QUEUE_RETRY_BASE_SECS", Some("0")),
+                ("QUEUE_RETRY_MAX_SECS", Some("0")),
+            ],
+            || async {
+                let mut shim = QueueShim::new();
+                let id = shim.enqueue("dlq-test".into(), vec![]).await;
                 shim.dequeue().await;
-            }
-        }
-        let dlq = shim.drain_dlq().await;
-        assert_eq!(dlq.len(), 1);
-        assert_eq!(dlq[0].job.id, id);
-        assert_eq!(shim.dlq_length().await, 0);
+                for _ in 0..4 {
+                    let status = shim.fail_job(&id, "boom".into()).await.unwrap();
+                    if status == JobStatus::Retrying {
+                        shim.dequeue().await;
+                    }
+                }
+                let dlq = shim.drain_dlq().await;
+                assert_eq!(dlq.len(), 1);
+                assert_eq!(dlq[0].job.id, id);
+                assert_eq!(shim.dlq_length().await, 0);
+            },
+        )
+        .await;
     }
 
     #[tokio::test]

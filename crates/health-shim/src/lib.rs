@@ -109,9 +109,13 @@ impl Capability for HealthShim {
 /// Health status payload sent to the webhook.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HealthPayload {
+    /// Current liveness status ("healthy" or "unhealthy").
     pub liveness: String,
+    /// Current readiness status ("healthy" or "unhealthy").
     pub readiness: String,
+    /// ISO 8601 timestamp of when the payload was created.
     pub timestamp: String,
+    /// Name of the shim that produced this payload.
     pub shim: String,
 }
 

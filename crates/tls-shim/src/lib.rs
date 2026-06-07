@@ -38,12 +38,19 @@ use tokio::sync::watch;
 /// TLS certificate info.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertInfo {
+    /// Domain name the certificate was issued for.
     pub domain: String,
+    /// Certificate issuer (e.g., "Let's Encrypt", "Internal CA").
     pub issuer: String,
+    /// Not-before date in RFC 3339 format.
     pub not_before: String,
+    /// Not-after date in RFC 3339 format.
     pub not_after: String,
+    /// Certificate serial number.
     pub serial: String,
+    /// SHA-256 fingerprint of the certificate.
     pub fingerprint: String,
+    /// Days until the certificate expires (negative if expired).
     pub days_until_expiry: i64,
     /// PEM-encoded certificate.
     pub cert_pem: Option<String>,
@@ -54,9 +61,13 @@ pub struct CertInfo {
 /// TLS version enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum TlsVersion {
+    /// TLS 1.0 (deprecated, insecure).
     Tls1_0,
+    /// TLS 1.1 (deprecated).
     Tls1_1,
+    /// TLS 1.2 (minimum recommended).
     Tls1_2,
+    /// TLS 1.3 (latest, preferred).
     Tls1_3,
 }
 
@@ -87,8 +98,11 @@ impl std::str::FromStr for TlsVersion {
 /// Certificate validation result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertValidation {
+    /// Whether the certificate passed all validation checks.
     pub valid: bool,
+    /// Validation errors (certificate is invalid if non-empty).
     pub errors: Vec<String>,
+    /// Validation warnings (certificate is valid but may need attention).
     pub warnings: Vec<String>,
 }
 
@@ -122,6 +136,7 @@ pub struct TlsShim {
 }
 
 impl TlsShim {
+    /// Create a new TLS shim from environment variables.
     pub fn new() -> Self {
         let min_ver = std::env::var("TLS_MIN_VERSION")
             .ok()
