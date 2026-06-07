@@ -191,6 +191,10 @@ pub enum Error {
     #[error("toml error: {0}")]
     Toml(#[from] toml::de::Error),
 
+    /// Plugin error.
+    #[error("plugin error: {0}")]
+    Plugin(String),
+
     /// Any other error.
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),

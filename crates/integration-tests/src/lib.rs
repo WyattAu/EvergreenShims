@@ -2464,3 +2464,177 @@ async fn test_real_compliance_postgres() {
         assert_eq!(checks[0].benchmark, "cis");
     });
 }
+
+// ============================================================================
+// Proxy Shim — Graceful Degradation Integration Tests
+// ============================================================================
+
+/// Test graceful degradation env var configuration.
+#[tokio::test]
+async fn test_proxy_graceful_degradation_config() {
+    use proxy_shim::ProxyShim;
+
+    temp_env::with_vars([("PROXY_GRACEFUL_DEGRADATION", Some("true"))], || {
+        let shim = ProxyShim::new();
+        assert!(shim.is_graceful_degradation_enabled());
+    });
+
+    temp_env::with_vars([("PROXY_GRACEFUL_DEGRADATION", Some("false"))], || {
+        let shim = ProxyShim::new();
+        assert!(!shim.is_graceful_degradation_enabled());
+    });
+
+    // Default (unset) should be disabled
+    let shim = ProxyShim::new();
+    assert!(!shim.is_graceful_degradation_enabled());
+}
+
+/// Test graceful degradation serves cached response when circuit is open.
+#[tokio::test]
+async fn test_proxy_serves_stale_when_circuit_open() {
+    use proxy_shim::{HandleRequestResult, ProxyShim};
+
+    temp_env::with_vars(
+        [
+            ("PROXY_GRACEFUL_DEGRADATION", Some("true")),
+            ("PROXY_CIRCUIT_THRESHOLD", Some("2")),
+        ],
+        || {
+            let shim = ProxyShim::new();
+
+            // Cache responses before circuit opens
+            shim.cache_response("/api/users", b"{\"users\":[]}".to_vec());
+            shim.cache_response("/api/orders", b"{\"orders\":[]}".to_vec());
+
+            // Open the circuit
+            for _ in 0..3 {
+                shim.record_failure();
+            }
+
+            // Cached key should return stale response
+            let result = shim.handle_request_with_degradation("/api/users");
+            match result {
+                HandleRequestResult::ServedFromCache(data) => {
+                    assert_eq!(data, b"{\"users\":[]}");
+                }
+                other => panic!("Expected ServedFromCache, got {:?}", other),
+            }
+
+            // Second cached key also works
+            let result = shim.handle_request_with_degradation("/api/orders");
+            assert!(matches!(result, HandleRequestResult::ServedFromCache(_)));
+
+            // Uncached key should be rejected
+            let result = shim.handle_request_with_degradation("/api/unknown");
+            assert_eq!(result, HandleRequestResult::Rejected);
+
+            // Verify stale_responses_total metric
+            assert_eq!(shim.stale_responses_total(), 2);
+        },
+    );
+}
+
+/// Test graceful degradation disabled falls back to rejection.
+#[tokio::test]
+async fn test_proxy_degradation_disabled_rejects() {
+    use proxy_shim::{HandleRequestResult, ProxyShim};
+
+    temp_env::with_vars(
+        [
+            ("PROXY_GRACEFUL_DEGRADATION", Some("false")),
+            ("PROXY_CIRCUIT_THRESHOLD", Some("2")),
+        ],
+        || {
+            let shim = ProxyShim::new();
+            shim.cache_response("/api/users", b"data".to_vec());
+
+            for _ in 0..3 {
+                shim.record_failure();
+            }
+
+            // Even with cache present, degradation disabled -> rejected
+            let result = shim.handle_request_with_degradation("/api/users");
+            assert_eq!(result, HandleRequestResult::Rejected);
+            assert_eq!(shim.stale_responses_total(), 0);
+        },
+    );
+}
+
+/// Test stale responses metric is reported correctly.
+#[tokio::test]
+async fn test_proxy_stale_responses_metric() {
+    use proxy_shim::ProxyShim;
+    use shim_core::Capability;
+
+    temp_env::with_vars(
+        [
+            ("PROXY_GRACEFUL_DEGRADATION", Some("true")),
+            ("PROXY_CIRCUIT_THRESHOLD", Some("2")),
+        ],
+        || {
+            let shim = ProxyShim::new();
+            shim.cache_response("key1", b"val1".to_vec());
+
+            // Open circuit
+            for _ in 0..3 {
+                shim.record_failure();
+            }
+
+            // Serve 3 stale responses
+            for _ in 0..3 {
+                let _ = shim.handle_request_with_degradation("key1");
+            }
+
+            assert_eq!(shim.stale_responses_total(), 3);
+
+            // Check metrics includes the stale counter
+            let metrics = shim.metrics();
+            let stale_metric = metrics
+                .iter()
+                .find(|m| m.name == "proxy_stale_responses_total")
+                .expect("proxy_stale_responses_total metric should exist");
+            assert_eq!(stale_metric.value, 3.0);
+        },
+    );
+}
+
+/// Test graceful degradation: circuit recovery stops serving stale.
+#[tokio::test]
+async fn test_proxy_recovery_after_degradation() {
+    use proxy_shim::{HandleRequestResult, ProxyShim};
+
+    temp_env::with_vars(
+        [
+            ("PROXY_GRACEFUL_DEGRADATION", Some("true")),
+            ("PROXY_CIRCUIT_THRESHOLD", Some("2")),
+            ("PROXY_CIRCUIT_RESET_SECS", Some("0")),
+        ],
+        || {
+            let shim = ProxyShim::new();
+            shim.cache_response("key1", b"stale".to_vec());
+
+            // Open circuit
+            for _ in 0..3 {
+                shim.record_failure();
+            }
+
+            // Serve stale while open
+            let r = shim.handle_request_with_degradation("key1");
+            assert!(matches!(r, HandleRequestResult::ServedFromCache(_)));
+
+            // Probe with uncached key triggers half-open transition
+            let r = shim.handle_request_with_degradation("key-uncached");
+            assert_eq!(r, HandleRequestResult::Allowed);
+
+            // Success closes the circuit
+            shim.record_success();
+
+            // Now requests flow normally (not from cache)
+            let r = shim.handle_request_with_degradation("key1");
+            assert_eq!(r, HandleRequestResult::Allowed);
+
+            // Stale cache still present but not used when circuit is closed
+            assert_eq!(shim.stale_responses_total(), 1);
+        },
+    );
+}

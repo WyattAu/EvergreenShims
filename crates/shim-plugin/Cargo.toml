@@ -1,0 +1,24 @@
+[package]
+name = "shim-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Runtime plugin loader for custom shim capabilities via shared libraries"
+
+[features]
+default = []
+plugin = ["dep:libloading"]
+
+[dependencies]
+shim-core = { path = "../shim-core", default-features = false }
+libloading = { version = "0.8", optional = true }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

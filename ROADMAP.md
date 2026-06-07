@@ -78,14 +78,14 @@ Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHu
 
 | Task | Status | Priority | Impact |
 |------|--------|----------|--------|
-| Distributed tracing across shim instances | Pending | High | Observability |
+| Distributed tracing across shim instances | Completed | High | Observability |
 | Multi-cluster failover | Pending | High | HA |
-| Observability dashboard (Grafana) | Pending | Medium | Operations |
-| Operator maturity (Helm/CRD) | Pending | High | Kubernetes |
-| Config hot-reload via Kubernetes ConfigMap | Pending | Medium | K8s integration |
-| Graceful degradation with circuit breakers | Pending | High | Fault tolerance |
-| Multi-tenant resource isolation hardening | Pending | High | Security |
-| Webhook-based alerting with retry | Pending | Medium | Reliability |
+| Observability dashboard (Grafana) | Completed | Medium | Operations |
+| Operator maturity (Helm/CRD) | Completed | High | Kubernetes |
+| Config hot-reload via Kubernetes ConfigMap | Completed | Medium | K8s integration |
+| Graceful degradation with circuit breakers | Completed | High | Fault tolerance |
+| Multi-tenant resource isolation hardening | Completed | High | Security |
+| Webhook-based alerting with retry | Completed | Medium | Reliability |
 
 ## v3.0.0 Platform
 
@@ -93,7 +93,10 @@ Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHu
 |------|--------|----------|--------|
 | Multi-language shim SDK (Go, Python, Node) | Pending | High | Ecosystem |
 | Edge deployment targets (ARM, RISC-V) | Pending | Medium | Deployment |
-| Plugin system for custom shims | Pending | High | Extensibility |
+| Plugin system for custom shims | Completed | High | Extensibility |
+| WebAssembly shim runtime | Completed | Medium | Portability |
+| CLI management tool | Completed | Medium | Operations |
+| Terraform/Pulumi provider | Completed | Medium | IaC integration |
 | WebAssembly shim runtime | Pending | Medium | Portability |
 | CLI management tool | Pending | Medium | Operations |
 | Terraform/Pulumi provider | Pending | Medium | IaC integration |

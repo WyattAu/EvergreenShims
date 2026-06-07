@@ -32,8 +32,11 @@ members = [
     "crates/cassandra-shim",
     "crates/benchmarks",
     "crates/management-api",
+    "crates/shimctl",
+    "crates/shim-plugin",
 ]
 resolver = "2"
+exclude = ["examples/custom-shim-plugin"]
 
 [workspace.package]
 version = "0.3.0"
@@ -114,6 +117,9 @@ clap = { version = "4", features = ["derive"] }
 dirs = "6"
 parking_lot = "0.12"
 regex = "1"
+
+# WASM runtime
+wasmtime = { version = "28", features = ["cranelift", "async"] }
 
 # Testing (used by individual crates)
 tempfile = "3"

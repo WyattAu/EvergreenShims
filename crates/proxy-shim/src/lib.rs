@@ -4,23 +4,26 @@
 //! - Connection pooling (reuse connections)
 //! - Automatic retries with exponential backoff
 //! - Circuit breaker (stop hammering failing databases)
+//! - Graceful degradation (serve stale/cached responses when circuit is open)
 //!
 //! ## Environment Variables
 //!
 //! ```text
-//! PROXY_LISTEN            Listen address (default: 0.0.0.0:5432)
-//! PROXY_TARGET            Target database address (required)
-//! PROXY_MAX_CONNECTIONS   Max pool connections (default: 20)
-//! PROXY_MIN_IDLE          Min idle connections (default: 5)
-//! PROXY_MAX_LIFETIME_SECS Max connection lifetime (default: 1800)
-//! PROXY_IDLE_TIMEOUT_SECS Idle connection timeout (default: 600)
-//! PROXY_CONNECT_TIMEOUT   Connect timeout (default: 5)
-//! PROXY_RETRY_ATTEMPTS    Max retry attempts (default: 3)
-//! PROXY_RETRY_BASE_MS     Base retry delay (default: 100)
-//! PROXY_CIRCUIT_THRESHOLD Failures before open circuit (default: 5)
-//! PROXY_CIRCUIT_RESET_SECS Seconds before half-open (default: 30)
+//! PROXY_LISTEN                  Listen address (default: 0.0.0.0:5432)
+//! PROXY_TARGET                  Target database address (required)
+//! PROXY_MAX_CONNECTIONS         Max pool connections (default: 20)
+//! PROXY_MIN_IDLE                Min idle connections (default: 5)
+//! PROXY_MAX_LIFETIME_SECS       Max connection lifetime (default: 1800)
+//! PROXY_IDLE_TIMEOUT_SECS       Idle connection timeout (default: 600)
+//! PROXY_CONNECT_TIMEOUT         Connect timeout (default: 5)
+//! PROXY_RETRY_ATTEMPTS          Max retry attempts (default: 3)
+//! PROXY_RETRY_BASE_MS           Base retry delay (default: 100)
+//! PROXY_CIRCUIT_THRESHOLD       Failures before open circuit (default: 5)
+//! PROXY_CIRCUIT_RESET_SECS      Seconds before half-open (default: 30)
+//! PROXY_GRACEFUL_DEGRADATION    Serve stale cache when circuit open (default: false)
 //! ```
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -28,6 +31,17 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::watch;
+
+/// Result of handling a request through the proxy.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HandleRequestResult {
+    /// Request allowed — forwarded to backend.
+    Allowed,
+    /// Request rejected — circuit is open.
+    Rejected,
+    /// Response served from stale cache — circuit is open but cache had data.
+    ServedFromCache(Vec<u8>),
+}
 
 /// Circuit breaker state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -164,6 +178,9 @@ struct ProxyState {
     token_bucket: Option<TokenBucket>,
     backends: Vec<BackendEntry>,
     rr_index: usize,
+    graceful_degradation_enabled: bool,
+    stale_cache: HashMap<String, Vec<u8>>,
+    stale_responses_total: u64,
 }
 
 /// Proxy shim providing connection pooling and resilience.
@@ -183,6 +200,10 @@ impl ProxyShim {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
+        let graceful_degradation_enabled: bool = std::env::var("PROXY_GRACEFUL_DEGRADATION")
+            .ok()
+            .map(|s| s == "true" || s == "1")
+            .unwrap_or(false);
 
         Self {
             state: Arc::new(RwLock::new(ProxyState {
@@ -234,6 +255,9 @@ impl ProxyShim {
                 token_bucket: None,
                 backends: Vec::new(),
                 rr_index: 0,
+                graceful_degradation_enabled,
+                stale_cache: HashMap::new(),
+                stale_responses_total: 0,
             })),
             shutdown_tx: None,
         }
@@ -333,6 +357,88 @@ impl ProxyShim {
         state.connections_total += 1;
         state.connections_active = state.connections_active.saturating_sub(1) + 1;
         true
+    }
+
+    /// Handle a request with graceful degradation support.
+    ///
+    /// When the circuit is open and graceful degradation is enabled, attempts
+    /// to serve a cached response. Returns `Rejected` only when no cached
+    /// response is available.
+    pub fn handle_request_with_degradation(&self, request_key: &str) -> HandleRequestResult {
+        let mut state = self.state.write();
+        state.requests_total += 1;
+
+        if state.circuit_state == CircuitState::Open {
+            // Serve from cache first when circuit is open
+            if state.graceful_degradation_enabled {
+                if let Some(cached) = state.stale_cache.get(request_key) {
+                    let data = cached.clone();
+                    state.stale_responses_total += 1;
+                    tracing::debug!(
+                        "Serving stale response for key '{}' (circuit open)",
+                        request_key
+                    );
+                    return HandleRequestResult::ServedFromCache(data);
+                }
+            }
+            // No cache hit — try Open -> HalfOpen transition
+            if let Some(opened_at) = state.open_since {
+                if opened_at.elapsed() >= Duration::from_secs(state.circuit_reset_secs) {
+                    state.circuit_state = CircuitState::HalfOpen;
+                    state.half_open_inflight = false;
+                    tracing::info!("Circuit breaker transitioning to half-open");
+                }
+            }
+        }
+
+        match state.circuit_state {
+            CircuitState::Open => {
+                state.requests_circuit_broken += 1;
+                HandleRequestResult::Rejected
+            }
+            CircuitState::HalfOpen => {
+                if state.half_open_inflight {
+                    state.requests_circuit_broken += 1;
+                    HandleRequestResult::Rejected
+                } else {
+                    state.half_open_inflight = true;
+                    state.connections_total += 1;
+                    state.connections_active = state.connections_active.saturating_sub(1) + 1;
+                    HandleRequestResult::Allowed
+                }
+            }
+            _ => {
+                state.connections_total += 1;
+                state.connections_active = state.connections_active.saturating_sub(1) + 1;
+                HandleRequestResult::Allowed
+            }
+        }
+    }
+
+    /// Cache a successful response for a given request key.
+    ///
+    /// When the circuit later opens, cached responses can be served via
+    /// `handle_request_with_degradation`.
+    pub fn cache_response(&self, request_key: &str, response: Vec<u8>) {
+        self.state
+            .write()
+            .stale_cache
+            .insert(request_key.to_string(), response);
+    }
+
+    /// Get a cached response for a request key, if available.
+    pub fn get_cached_response(&self, request_key: &str) -> Option<Vec<u8>> {
+        self.state.read().stale_cache.get(request_key).cloned()
+    }
+
+    /// Check if graceful degradation is enabled.
+    pub fn is_graceful_degradation_enabled(&self) -> bool {
+        self.state.read().graceful_degradation_enabled
+    }
+
+    /// Get the number of stale responses served.
+    pub fn stale_responses_total(&self) -> u64 {
+        self.state.read().stale_responses_total
     }
 
     /// Calculate retry delay for a given attempt number (exponential backoff).
@@ -729,6 +835,10 @@ impl Capability for ProxyShim {
             ),
             Metric::new("proxy_circuit_state", circuit_val),
             Metric::new("proxy_circuit_failures", state.circuit_failures as f64),
+            Metric::new(
+                "proxy_stale_responses_total",
+                state.stale_responses_total as f64,
+            ),
         ]
     }
 }
@@ -1082,6 +1192,146 @@ mod tests {
         assert_eq!(CircuitState::HalfOpen.to_string(), "half_open");
     }
 
+    // =====================================================================
+    // Graceful degradation tests
+    // =====================================================================
+
+    #[test]
+    fn test_graceful_degradation_disabled_by_default() {
+        let shim = ProxyShim::new();
+        assert!(!shim.is_graceful_degradation_enabled());
+    }
+
+    #[test]
+    fn test_graceful_degradation_cache_and_serve() {
+        let shim = ProxyShim {
+            state: Arc::new(RwLock::new(ProxyState {
+                circuit_threshold: 1,
+                graceful_degradation_enabled: true,
+                ..make_default_state()
+            })),
+            shutdown_tx: None,
+        };
+
+        // Cache a response before circuit opens
+        shim.cache_response("req-1", b"cached-data".to_vec());
+        assert_eq!(
+            shim.get_cached_response("req-1"),
+            Some(b"cached-data".to_vec())
+        );
+        assert!(shim.get_cached_response("req-2").is_none());
+
+        // Open the circuit
+        shim.record_failure();
+        assert_eq!(shim.state.read().circuit_state, CircuitState::Open);
+
+        // handle_request returns false (backward compat)
+        assert!(!shim.handle_request());
+
+        // handle_request_with_degradation returns cached response
+        let result = shim.handle_request_with_degradation("req-1");
+        assert_eq!(
+            result,
+            HandleRequestResult::ServedFromCache(b"cached-data".to_vec())
+        );
+        assert_eq!(shim.stale_responses_total(), 1);
+
+        // Unknown key returns Rejected
+        let result = shim.handle_request_with_degradation("req-unknown");
+        assert_eq!(result, HandleRequestResult::Rejected);
+        assert_eq!(shim.stale_responses_total(), 1);
+    }
+
+    #[test]
+    fn test_graceful_degradation_disabled_rejects_when_open() {
+        let shim = ProxyShim {
+            state: Arc::new(RwLock::new(ProxyState {
+                circuit_threshold: 1,
+                graceful_degradation_enabled: false,
+                ..make_default_state()
+            })),
+            shutdown_tx: None,
+        };
+        shim.cache_response("req-1", b"cached-data".to_vec());
+        shim.record_failure();
+
+        // Even though cache exists, degradation is disabled -> Rejected
+        let result = shim.handle_request_with_degradation("req-1");
+        assert_eq!(result, HandleRequestResult::Rejected);
+        assert_eq!(shim.stale_responses_total(), 0);
+    }
+
+    #[test]
+    fn test_graceful_degradation_allows_when_closed() {
+        let shim = ProxyShim {
+            state: Arc::new(RwLock::new(ProxyState {
+                graceful_degradation_enabled: true,
+                ..make_default_state()
+            })),
+            shutdown_tx: None,
+        };
+
+        let result = shim.handle_request_with_degradation("any-key");
+        assert_eq!(result, HandleRequestResult::Allowed);
+        assert_eq!(shim.stale_responses_total(), 0);
+    }
+
+    #[test]
+    fn test_graceful_degradation_half_open_rejects_concurrent() {
+        let shim = ProxyShim {
+            state: Arc::new(RwLock::new(ProxyState {
+                circuit_threshold: 1,
+                circuit_reset_secs: 0,
+                graceful_degradation_enabled: true,
+                ..make_default_state()
+            })),
+            shutdown_tx: None,
+        };
+        // No cache for "req-1" — circuit open + no cache -> transition to half-open
+        shim.record_failure();
+
+        // First check transitions to half-open, allows probe request
+        let r1 = shim.handle_request_with_degradation("req-1");
+        assert_eq!(r1, HandleRequestResult::Allowed);
+
+        // Second check should reject (probe already in-flight)
+        let r2 = shim.handle_request_with_degradation("req-1");
+        assert_eq!(r2, HandleRequestResult::Rejected);
+    }
+
+    #[test]
+    fn test_stale_cache_cleared_on_recovery() {
+        let shim = ProxyShim {
+            state: Arc::new(RwLock::new(ProxyState {
+                circuit_threshold: 1,
+                circuit_reset_secs: 0,
+                graceful_degradation_enabled: true,
+                ..make_default_state()
+            })),
+            shutdown_tx: None,
+        };
+        shim.cache_response("req-1", b"cached".to_vec());
+        shim.record_failure();
+
+        // Serve from cache while open
+        let result = shim.handle_request_with_degradation("req-1");
+        assert_eq!(
+            result,
+            HandleRequestResult::ServedFromCache(b"cached".to_vec())
+        );
+
+        // Use a key with no cache to trigger half-open transition and probe
+        let r = shim.handle_request_with_degradation("req-uncached");
+        assert_eq!(r, HandleRequestResult::Allowed); // half-open probe
+
+        shim.record_success();
+        assert_eq!(shim.state.read().circuit_state, CircuitState::Closed);
+
+        // Cache still exists but circuit is closed, so requests flow normally
+        let result = shim.handle_request_with_degradation("req-1");
+        assert_eq!(result, HandleRequestResult::Allowed);
+    }
+
     #[tokio::test]
     async fn test_metrics() {
         let shim = ProxyShim {
@@ -1098,10 +1348,12 @@ mod tests {
             shutdown_tx: None,
         };
         let metrics = shim.metrics();
-        assert_eq!(metrics.len(), 7);
+        assert_eq!(metrics.len(), 8);
         assert_eq!(metrics[4].name, "proxy_requests_circuit_broken");
         assert_eq!(metrics[4].value, 3.0);
         assert_eq!(metrics[5].value, 2.0);
+        assert_eq!(metrics[7].name, "proxy_stale_responses_total");
+        assert_eq!(metrics[7].value, 0.0);
     }
 
     fn make_default_state() -> ProxyState {
@@ -1131,6 +1383,9 @@ mod tests {
             token_bucket: None,
             backends: Vec::new(),
             rr_index: 0,
+            graceful_degradation_enabled: false,
+            stale_cache: HashMap::new(),
+            stale_responses_total: 0,
         }
     }
 }

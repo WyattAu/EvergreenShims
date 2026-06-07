@@ -12,6 +12,7 @@ http = ["dep:reqwest"]
 redis-bus = ["dep:redis"]
 otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
 wasm = []
+wasm-runtime = ["wasm", "dep:wasmtime"]
 
 [dependencies]
 anyhow.workspace = true
@@ -37,8 +38,10 @@ opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
+wasmtime = { version = "28", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
 pretty_assertions.workspace = true
 temp-env.workspace = true
+wat = "1"

@@ -58,7 +58,10 @@ pub use shutdown::{
     ShutdownStrategy,
 };
 pub use signal::{Signal, SignalHandler};
-pub use tenant::{TenantIsolator, TenantMetrics, TenantUsage};
+pub use tenant::{
+    AuditEntry, CpuTimeTracker, InvalidTenantId, TenantIsolator, TenantMetrics, TenantQuotaResult,
+    TenantUsage, TokenBucket,
+};
 
 /// A shim capability that can be enabled/disabled.
 #[async_trait::async_trait]
