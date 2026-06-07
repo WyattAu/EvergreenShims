@@ -1,0 +1,56 @@
+# Sample Kubernetes ConfigMap for EvergreenShims hot-reload.
+#
+# When mounted at /etc/shim/config.toml and watched via CONFIG_PATH,
+# the config-shim detects changes via SHA-256 content hashing and
+# sends a configurable signal (default SIGHUP) to the child process.
+#
+# Usage:
+#   kubectl apply -f sample-configmap.yaml
+#
+# The deployment template mounts this ConfigMap automatically.
+# To trigger a reload: edit the ConfigMap and apply again.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: evergreen-shims-config
+  labels:
+    app.kubernetes.io/name: evergreen-shims
+    app.kubernetes.io/component: config
+data:
+  config.toml: |
+    # EvergreenShims configuration
+    # Schema version for migration support
+    version = "1.0"
+
+    [health]
+    listen = "0.0.0.0:9101"
+
+    [proxy]
+    listen = "0.0.0.0:5432"
+    target = "127.0.0.1:5432"
+    max_connections = 20
+    min_idle = 5
+    max_lifetime_secs = 1800
+    idle_timeout_secs = 600
+    connect_timeout = 5
+    retry_attempts = 3
+    retry_base_ms = 100
+    circuit_threshold = 5
+    circuit_reset_secs = 30
+    graceful_degradation = true
+
+    [failover]
+    primary = "127.0.0.1:5432"
+    replica = "127.0.0.1:5433"
+    check_interval = 5
+    timeout = 3
+    failure_threshold = 3
+    db_type = "postgres"
+    connector = "tcp"
+
+    [config]
+    path = "/etc/app/config.toml"
+    watch = true
+    reload_signal = "SIGHUP"
+    reload_debounce = 5
+    keep_backup = true
