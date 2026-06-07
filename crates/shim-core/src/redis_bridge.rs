@@ -44,25 +44,27 @@ impl RedisBridgeMetrics {
             "redis_bridge_events_published",
             "Total events published to Redis stream",
         ))
-        .unwrap();
+        .expect("metric opts for redis_bridge_events_published are valid");
         let events_consumed = IntCounter::with_opts(Opts::new(
             "redis_bridge_events_consumed",
             "Total events consumed from Redis stream",
         ))
-        .unwrap();
+        .expect("metric opts for redis_bridge_events_consumed are valid");
         let errors = IntCounter::with_opts(Opts::new(
             "redis_bridge_errors",
             "Total Redis bridge errors",
         ))
-        .unwrap();
+        .expect("metric opts for redis_bridge_errors are valid");
 
         registry
             .register(Box::new(events_published.clone()))
-            .unwrap();
+            .expect("register events_published must not conflict");
         registry
             .register(Box::new(events_consumed.clone()))
-            .unwrap();
-        registry.register(Box::new(errors.clone())).unwrap();
+            .expect("register events_consumed must not conflict");
+        registry
+            .register(Box::new(errors.clone()))
+            .expect("register errors must not conflict");
 
         Self {
             events_published,

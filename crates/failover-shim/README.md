@@ -25,7 +25,6 @@ Automatic failover for HA databases. Monitors a primary database, detects failur
 | `FAILOVER_DB_USER` | Database user for psql | `postgres` |
 | `FAILOVER_DB_PASSWORD` | Database password for psql | — |
 | `FAILOVER_DB_NAME` | Database name for psql | `postgres` |
-| `FAILOVER_CHECK_INTERVAL_SECS` | Check interval (seconds) | `10` |
 | `FAILOVER_LAG_THRESHOLD_SECS` | Replication lag threshold (seconds) | `30` |
 | `REDIS_SENTINEL_URL` | Sentinel URL | `redis://localhost:26379` |
 | `REDIS_SENTINEL_MASTER` | Master name | `mymaster` |

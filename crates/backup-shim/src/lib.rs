@@ -939,8 +939,9 @@ impl Capability for BackupShim {
         let retry_base_delay_ms = self.retry_base_delay_ms;
         let retry_max_delay_ms = self.retry_max_delay_ms;
 
-        let schedule = cron::Schedule::from_str(&schedule_str)
-            .unwrap_or_else(|_| cron::Schedule::from_str("0 2 * * *").unwrap());
+        let schedule = cron::Schedule::from_str(&schedule_str).unwrap_or_else(|_| {
+            cron::Schedule::from_str("0 2 * * *").expect("hardcoded valid cron expression")
+        });
 
         tokio::spawn(async move {
             loop {

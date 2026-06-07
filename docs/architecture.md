@@ -8,7 +8,7 @@ EvergreenShims implements a PID 1 shim pattern: a single Rust binary wraps a chi
 
 ```
 evergreen-shims/
-  Cargo.toml                    Workspace root (32 members)
+  Cargo.toml                    Workspace root (34 members)
   crates/
     shim-core/                  Shared types, Capability trait, bus, events, metrics
     health-shim/                Health probes, Prometheus metrics, process mgmt

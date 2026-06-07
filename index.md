@@ -318,11 +318,11 @@ title: EvergreenShims
   <!-- Metrics strip -->
   <div class="metrics" role="list" aria-label="Project metrics">
     <div class="metric" role="listitem">
-      <div class="value">32</div>
+      <div class="value">34</div>
       <div class="label">Crates</div>
     </div>
     <div class="metric" role="listitem">
-      <div class="value">792</div>
+      <div class="value">970</div>
       <div class="label">Tests</div>
     </div>
     <div class="metric" role="listitem">
@@ -467,5 +467,5 @@ cargo build --release \
 </div>
 
 <footer>
-  EvergreenShims v0.3.0 -- Apache-2.0 -- Rust 2021
+  EvergreenShims v1.0.0 -- Apache-2.0 -- Rust 2021
 </footer>

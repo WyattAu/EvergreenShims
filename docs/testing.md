@@ -16,7 +16,7 @@ Three tiers, executed in order of cost and scope:
 
 ## Unit Tests
 
-Per-crate `#[cfg(test)]` modules. 792 tests across 32 crates.
+Per-crate `#[cfg(test)]` modules. 970 tests across 34 crates.
 
 ```bash
 cargo test --workspace

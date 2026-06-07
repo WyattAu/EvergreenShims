@@ -3007,6 +3007,8 @@ mod tests {
         assert_eq!(metrics.len(), 3);
         assert!(metrics.iter().any(|m| m.name == "failover_state"));
         assert!(metrics.iter().any(|m| m.name == "failover_events_total"));
-        assert!(metrics.iter().any(|m| m.name == "failover_consecutive_failures"));
+        assert!(metrics
+            .iter()
+            .any(|m| m.name == "failover_consecutive_failures"));
     }
 }

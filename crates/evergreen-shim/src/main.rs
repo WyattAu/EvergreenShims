@@ -786,7 +786,8 @@ mod tests {
     #[test]
     fn cli_args_parse_healthcheck_tcp() {
         use clap::Parser;
-        let args = Args::try_parse_from(["shim", "healthcheck", "--tcp", "127.0.0.1:5432"]).unwrap();
+        let args =
+            Args::try_parse_from(["shim", "healthcheck", "--tcp", "127.0.0.1:5432"]).unwrap();
         match args.command {
             Some(Subcommand::Healthcheck { tcp, http, timeout }) => {
                 assert_eq!(tcp, Some("127.0.0.1:5432".to_string()));
@@ -801,7 +802,12 @@ mod tests {
     fn cli_args_parse_healthcheck_http_with_timeout() {
         use clap::Parser;
         let args = Args::try_parse_from([
-            "shim", "healthcheck", "--http", "http://127.0.0.1:9101/livez", "-t", "10",
+            "shim",
+            "healthcheck",
+            "--http",
+            "http://127.0.0.1:9101/livez",
+            "-t",
+            "10",
         ])
         .unwrap();
         match args.command {

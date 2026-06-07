@@ -1,3 +1,9 @@
+//! CLI management tool for EvergreenShims.
+//!
+//! `shimctl` provides a command-line interface for interacting with a running
+//! shim instance via its management API. Supports backup, migration, configuration,
+//! health, and failover operations.
+
 pub mod client;
 pub mod commands;
 
@@ -23,8 +29,8 @@ pub struct Cli {
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::{BackupAction, Command, ConfigAction, MigrationAction};
     use crate::client;
+    use crate::commands::{BackupAction, Command, ConfigAction, MigrationAction};
     use crate::Cli;
     use clap::Parser;
 
@@ -193,7 +199,8 @@ mod tests {
 
     #[test]
     fn test_backup_entry_deserialize() {
-        let json = r#"{"id":"bak-001","created_at":"2024-01-01","size_bytes":1024,"status":"completed"}"#;
+        let json =
+            r#"{"id":"bak-001","created_at":"2024-01-01","size_bytes":1024,"status":"completed"}"#;
         let resp: client::BackupEntry = serde_json::from_str(json).unwrap();
         assert_eq!(resp.id, "bak-001");
         assert_eq!(resp.size_bytes, 1024);
@@ -202,7 +209,8 @@ mod tests {
 
     #[test]
     fn test_backup_list_response_deserialize() {
-        let json = r#"{"backups":[{"id":"b1","created_at":"2024-01-01","size_bytes":512,"status":"ok"}]}"#;
+        let json =
+            r#"{"backups":[{"id":"b1","created_at":"2024-01-01","size_bytes":512,"status":"ok"}]}"#;
         let resp: client::BackupListResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.backups.len(), 1);
     }
@@ -225,7 +233,8 @@ mod tests {
 
     #[test]
     fn test_migration_apply_response_deserialize() {
-        let json = r#"{"success":true,"applied":["004_add_email"],"message":"1 migration applied"}"#;
+        let json =
+            r#"{"success":true,"applied":["004_add_email"],"message":"1 migration applied"}"#;
         let resp: client::MigrationApplyResponse = serde_json::from_str(json).unwrap();
         assert!(resp.success);
         assert_eq!(resp.applied.len(), 1);

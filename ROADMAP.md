@@ -1,6 +1,6 @@
 # Roadmap
 
-Current state: v1.0.0 -- 34 crates, 885 tests, all CI/CD pipelines active, GitHub Pages deployed.
+Current state: v1.0.0 -- 34 crates, 970 tests, all CI/CD pipelines active, GitHub Pages deployed.
 
 ## Completed Milestones
 
@@ -136,7 +136,7 @@ Current state: v1.0.0 -- 34 crates, 885 tests, all CI/CD pipelines active, GitHu
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Unit tests | 885 | >900 |
+| Unit tests | 970 | >900 |
 | Code coverage (excl. integration) | 73% | >80% |
 | Clippy warnings | 0 | 0 |
 | Unsafe code | 0 | 0 |

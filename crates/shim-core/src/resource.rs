@@ -37,21 +37,27 @@ impl ResourceMetrics {
             "resource_memory_bytes",
             "Current memory usage in bytes (RSS)",
         ))
-        .unwrap();
+        .expect("metric opts for resource_memory_bytes are valid");
         let cpu_percent = Gauge::with_opts(prometheus::Opts::new(
             "resource_cpu_percent",
             "Current CPU usage percentage (estimated)",
         ))
-        .unwrap();
+        .expect("metric opts for resource_cpu_percent are valid");
         let open_files = Gauge::with_opts(prometheus::Opts::new(
             "resource_open_files",
             "Current number of open file descriptors",
         ))
-        .unwrap();
+        .expect("metric opts for resource_open_files are valid");
 
-        registry.register(Box::new(memory_bytes.clone())).unwrap();
-        registry.register(Box::new(cpu_percent.clone())).unwrap();
-        registry.register(Box::new(open_files.clone())).unwrap();
+        registry
+            .register(Box::new(memory_bytes.clone()))
+            .expect("register memory_bytes must not conflict");
+        registry
+            .register(Box::new(cpu_percent.clone()))
+            .expect("register cpu_percent must not conflict");
+        registry
+            .register(Box::new(open_files.clone()))
+            .expect("register open_files must not conflict");
 
         Self {
             memory_bytes,

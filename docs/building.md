@@ -58,7 +58,7 @@ gzip target/x86_64-unknown-linux-musl/release/shim
 | `ha-shim` | health + failover + replication | ~800KB |
 | `cache-shim-combo` | health + cache + replication | ~700KB |
 | `infra` | health + vault + backup + migration + audit + config + scheduler + queue + alerting | ~2MB |
-| `full` | all 22 shims | ~3MB |
+| `full` | all 27 shims | ~3MB |
 
 ## Docker Build
 

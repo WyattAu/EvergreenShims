@@ -1076,6 +1076,7 @@ dependencies = [
  "serde_json",
  "shim-core",
  "sqlx",
+ "temp-env",
  "tokio",
  "tracing",
 ]
@@ -2062,6 +2063,7 @@ dependencies = [
  "scheduler-shim",
  "sharding-shim",
  "shim-core",
+ "temp-env",
  "tls-shim",
  "tokio",
  "tracing",
@@ -6089,6 +6091,7 @@ dependencies = [
  "serde_json",
  "shim-core",
  "temp-env",
+ "tempfile",
  "tokio",
  "tracing",
 ]

@@ -511,7 +511,13 @@ impl TenantIsolator {
         };
 
         if needs_token_consume {
-            let usage = self.usage.get_mut(tenant_id).unwrap();
+            let usage = match self.usage.get_mut(tenant_id) {
+                Some(u) => u,
+                None => {
+                    self.record_audit_entry(tenant_id, "quota_check", false);
+                    return TenantQuotaResult::RateLimited;
+                }
+            };
             if let Some(ref mut bucket) = usage.token_bucket {
                 if !bucket.try_consume() {
                     usage.rejected_count += 1;

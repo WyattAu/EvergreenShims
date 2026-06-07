@@ -140,10 +140,9 @@ impl ChaosShim {
             ended_at: None,
             faults_injected: 0,
         };
-        self.experiments.insert(experiment.id.clone(), experiment);
-        self.experiments
-            .get(&format!("exp-{:03}", self.experiment_counter))
-            .unwrap()
+        let id = format!("exp-{:03}", self.experiment_counter);
+        self.experiments.insert(id.clone(), experiment);
+        self.experiments.get(&id).expect("experiment just inserted")
     }
 
     pub fn stop_experiment(&mut self, id: &str) -> bool {
@@ -644,7 +643,8 @@ impl ChaosOrchestrator {
     pub fn can_run_scheduled(&self, experiment_id: &str) -> bool {
         match self.schedules.get(experiment_id) {
             Some(schedule) => {
-                schedule.max_runs.is_none() || schedule.run_count < schedule.max_runs.unwrap()
+                schedule.max_runs.is_none()
+                    || schedule.run_count < schedule.max_runs.expect("guarded by is_none")
             }
             None => false,
         }

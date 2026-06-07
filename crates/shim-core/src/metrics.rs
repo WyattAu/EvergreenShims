@@ -57,34 +57,35 @@ impl ShimMetrics {
             "shim_events_published_total",
             "Total events published on the bus",
         ))
-        .unwrap();
+        .expect("metric opts for shim_events_published_total are valid");
         let events_dropped = IntCounter::with_opts(Opts::new(
             "shim_events_dropped_total",
             "Total events dropped due to lagged receivers",
         ))
-        .unwrap();
+        .expect("metric opts for shim_events_dropped_total are valid");
         let bus_subscribers = Gauge::with_opts(Opts::new(
             "shim_bus_subscribers",
             "Number of active bus subscribers",
         ))
-        .unwrap();
+        .expect("metric opts for shim_bus_subscribers are valid");
         let health_status = Gauge::with_opts(Opts::new(
             "shim_health_status",
             "Health status: 1=healthy, 0=unhealthy",
         ))
-        .unwrap();
+        .expect("metric opts for shim_health_status are valid");
         let health_checks_total = IntCounter::with_opts(Opts::new(
             "shim_health_checks_total",
             "Total health check evaluations",
         ))
-        .unwrap();
+        .expect("metric opts for shim_health_checks_total are valid");
         let uptime_seconds =
-            Gauge::with_opts(Opts::new("shim_uptime_seconds", "Uptime in seconds")).unwrap();
+            Gauge::with_opts(Opts::new("shim_uptime_seconds", "Uptime in seconds"))
+                .expect("metric opts for shim_uptime_seconds are valid");
         let errors_total = IntCounterVec::new(
             Opts::new("shim_errors_total", "Total errors by type"),
             &["error_type"],
         )
-        .unwrap();
+        .expect("metric opts for shim_errors_total are valid");
         let operation_duration_seconds = Histogram::with_opts(
             HistogramOpts::new(
                 "shim_operation_duration_seconds",
@@ -94,39 +95,49 @@ impl ShimMetrics {
                 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
             ]),
         )
-        .unwrap();
+        .expect("metric opts for shim_operation_duration_seconds are valid");
         let events_by_source = IntCounterVec::new(
             Opts::new("shim_events_by_source_total", "Events by source shim"),
             &["source"],
         )
-        .unwrap();
+        .expect("metric opts for shim_events_by_source_total are valid");
         let events_handled = IntCounterVec::new(
             Opts::new("shim_events_handled_total", "Events handled by handler"),
             &["handler"],
         )
-        .unwrap();
+        .expect("metric opts for shim_events_handled_total are valid");
 
         // Register all metrics
         registry
             .register(Box::new(events_published.clone()))
-            .unwrap();
-        registry.register(Box::new(events_dropped.clone())).unwrap();
+            .expect("register events_published must not conflict");
+        registry
+            .register(Box::new(events_dropped.clone()))
+            .expect("register events_dropped must not conflict");
         registry
             .register(Box::new(bus_subscribers.clone()))
-            .unwrap();
-        registry.register(Box::new(health_status.clone())).unwrap();
+            .expect("register bus_subscribers must not conflict");
+        registry
+            .register(Box::new(health_status.clone()))
+            .expect("register health_status must not conflict");
         registry
             .register(Box::new(health_checks_total.clone()))
-            .unwrap();
-        registry.register(Box::new(uptime_seconds.clone())).unwrap();
-        registry.register(Box::new(errors_total.clone())).unwrap();
+            .expect("register health_checks_total must not conflict");
+        registry
+            .register(Box::new(uptime_seconds.clone()))
+            .expect("register uptime_seconds must not conflict");
+        registry
+            .register(Box::new(errors_total.clone()))
+            .expect("register errors_total must not conflict");
         registry
             .register(Box::new(operation_duration_seconds.clone()))
-            .unwrap();
+            .expect("register operation_duration_seconds must not conflict");
         registry
             .register(Box::new(events_by_source.clone()))
-            .unwrap();
-        registry.register(Box::new(events_handled.clone())).unwrap();
+            .expect("register events_by_source must not conflict");
+        registry
+            .register(Box::new(events_handled.clone()))
+            .expect("register events_handled must not conflict");
 
         Self {
             registry,
@@ -158,8 +169,10 @@ impl ShimMetrics {
         let encoder = TextEncoder::new();
         let metric_families = self.registry.gather();
         let mut buffer = Vec::new();
-        encoder.encode(&metric_families, &mut buffer).unwrap();
-        String::from_utf8(buffer).unwrap()
+        encoder
+            .encode(&metric_families, &mut buffer)
+            .expect("text encoder write to Vec must succeed");
+        String::from_utf8(buffer).expect("prometheus text output is valid UTF-8")
     }
 
     /// Register a custom external collector.
@@ -199,11 +212,17 @@ pub async fn start_metrics_server(addr: SocketAddr, metrics: Arc<ShimMetrics>) -
 
 async fn metrics_handler(State(metrics): State<Arc<ShimMetrics>>) -> axum::response::Response {
     let body = metrics.export();
-    axum::response::Response::builder()
+    match axum::response::Response::builder()
         .status(200)
         .header("Content-Type", "text/plain; version=0.0.4")
         .body(axum::body::Body::from(body))
-        .unwrap()
+    {
+        Ok(resp) => resp,
+        Err(_) => axum::response::Response::builder()
+            .status(500)
+            .body(axum::body::Body::from("internal server error"))
+            .expect("500 response builder must succeed"),
+    }
 }
 
 async fn healthz_handler(State(metrics): State<Arc<ShimMetrics>>) -> axum::response::Response {
@@ -212,12 +231,26 @@ async fn healthz_handler(State(metrics): State<Arc<ShimMetrics>>) -> axum::respo
         "status": if healthy { "healthy" } else { "unhealthy" },
         "uptime_seconds": metrics.uptime_seconds.get(),
     });
-    let body = serde_json::to_string(&status).unwrap();
-    axum::response::Response::builder()
+    let body = match serde_json::to_string(&status) {
+        Ok(b) => b,
+        Err(_) => {
+            return axum::response::Response::builder()
+                .status(500)
+                .body(axum::body::Body::from("internal server error"))
+                .expect("500 response builder must succeed")
+        }
+    };
+    match axum::response::Response::builder()
         .status(200)
         .header("Content-Type", "application/json")
         .body(axum::body::Body::from(body))
-        .unwrap()
+    {
+        Ok(resp) => resp,
+        Err(_) => axum::response::Response::builder()
+            .status(500)
+            .body(axum::body::Body::from("internal server error"))
+            .expect("500 response builder must succeed"),
+    }
 }
 
 /// A single metric value (backward-compat type for shim consumers).
@@ -341,7 +374,11 @@ mod tests {
             if !line.is_empty() && !line.starts_with('#') {
                 // Should be a metric line: name{labels} value [timestamp]
                 assert!(
-                    line.chars().next().unwrap().is_alphabetic() || line.starts_with('_'),
+                    line.chars()
+                        .next()
+                        .expect("non-empty prometheus line")
+                        .is_alphabetic()
+                        || line.starts_with('_'),
                     "Invalid prometheus line: {}",
                     line
                 );

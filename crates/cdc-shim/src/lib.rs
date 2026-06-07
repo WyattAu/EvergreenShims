@@ -1062,9 +1062,18 @@ mod tests {
 
     #[test]
     fn test_cdc_operation_parse_case_insensitive() {
-        assert_eq!("INSERT".parse::<CdcOperation>().unwrap(), CdcOperation::Insert);
-        assert_eq!("Update".parse::<CdcOperation>().unwrap(), CdcOperation::Update);
-        assert_eq!("DELETE".parse::<CdcOperation>().unwrap(), CdcOperation::Delete);
+        assert_eq!(
+            "INSERT".parse::<CdcOperation>().unwrap(),
+            CdcOperation::Insert
+        );
+        assert_eq!(
+            "Update".parse::<CdcOperation>().unwrap(),
+            CdcOperation::Update
+        );
+        assert_eq!(
+            "DELETE".parse::<CdcOperation>().unwrap(),
+            CdcOperation::Delete
+        );
     }
 
     #[test]

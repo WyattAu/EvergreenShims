@@ -1,4 +1,4 @@
-# EvergreenShims
+# shim-core
 
 Rust-native shims for building self-managing container images.
 
@@ -12,6 +12,7 @@ pub struct MyShim {
     config: Option<MyConfig>,
 }
 
+#[async_trait::async_trait]
 impl Capability for MyShim {
     fn name(&self) -> &str {
         "my-shim"
@@ -41,10 +42,10 @@ impl Capability for MyShim {
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Testing](docs/testing.md)
-- [Roadmap](docs/roadmap.md)
+- [Architecture](../../docs/architecture.md)
+- [Testing](../../docs/testing.md)
+- [Roadmap](../../ROADMAP.md)
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.
+Licensed under the Apache License, Version 2.0. See [LICENSE](../../LICENSE) for details.

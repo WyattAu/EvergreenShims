@@ -37,26 +37,28 @@ impl ReloadMetrics {
             "config_reload_total",
             "Total successful config reloads",
         ))
-        .unwrap();
+        .expect("metric opts for config_reload_total are valid");
         let reload_failed_total = IntCounter::with_opts(Opts::new(
             "config_reload_failed_total",
             "Total failed config reload attempts",
         ))
-        .unwrap();
+        .expect("metric opts for config_reload_failed_total are valid");
         // Gauge holding epoch seconds — set directly on each reload
         let reload_last_timestamp = Gauge::with_opts(Opts::new(
             "config_reload_last_timestamp",
             "Unix timestamp of the last successful config reload",
         ))
-        .unwrap();
+        .expect("metric opts for config_reload_last_timestamp are valid");
 
-        registry.register(Box::new(reload_total.clone())).unwrap();
+        registry
+            .register(Box::new(reload_total.clone()))
+            .expect("register reload_total must not conflict");
         registry
             .register(Box::new(reload_failed_total.clone()))
-            .unwrap();
+            .expect("register reload_failed_total must not conflict");
         registry
             .register(Box::new(reload_last_timestamp.clone()))
-            .unwrap();
+            .expect("register reload_last_timestamp must not conflict");
 
         Self {
             reload_total,
