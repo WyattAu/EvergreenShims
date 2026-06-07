@@ -180,6 +180,17 @@ Current state: v1.0.0 -- 34 crates, 885 tests, all CI/CD pipelines active, GitHu
 | Compliance-shim coverage improvement (36% -> ~45%) | Completed | Medium | Quality |
 | Grafana dashboard metrics validated against codebase | Completed | Medium | Ops |
 
+### v1.3.0 -- Pragmatic Coverage (Completed)
+
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| shimctl: 11 response deserialization tests | Completed | High | 21% -> 25% |
+| vault-shim: credentials serialization, write, config override | Completed | High | 50% -> 55% |
+| cdc-shim: event/WAL/stats serialization, env config, case insensitivity | Completed | High | 51% -> 60% |
+| evergreen-shim: CLI arg parsing, config merge | Completed | High | 52% -> 60% |
+| failover-shim: TCP checks, serialization, env config | Completed | High | 51% -> 55% |
+| compliance-shim: CIS rule generation, severity, violations | Completed | Medium | 36% -> 45% |
+
 ### v2.0.0 -- Advanced Platform Features
 
 | Task | Priority | Impact |

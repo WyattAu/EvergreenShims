@@ -758,4 +758,107 @@ mod tests {
             errors
         );
     }
+
+    // ── 5. CLI Argument Parsing ─────────────────────────────────────
+
+    #[test]
+    fn cli_args_parse_default() {
+        use clap::Parser;
+        let args = Args::try_parse_from(["shim"]).unwrap();
+        assert!(args.command.is_none());
+        assert!(!args.debug);
+        assert!(!args.json);
+        assert!(args.otel_endpoint.is_none());
+    }
+
+    #[test]
+    fn cli_args_parse_run_subcommand() {
+        use clap::Parser;
+        let args = Args::try_parse_from(["shim", "run", "-c", "redis-server"]).unwrap();
+        match args.command {
+            Some(Subcommand::Run { command, .. }) => {
+                assert_eq!(command, Some("redis-server".to_string()));
+            }
+            _ => panic!("Expected Run subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_args_parse_healthcheck_tcp() {
+        use clap::Parser;
+        let args = Args::try_parse_from(["shim", "healthcheck", "--tcp", "127.0.0.1:5432"]).unwrap();
+        match args.command {
+            Some(Subcommand::Healthcheck { tcp, http, timeout }) => {
+                assert_eq!(tcp, Some("127.0.0.1:5432".to_string()));
+                assert!(http.is_none());
+                assert_eq!(timeout, 3);
+            }
+            _ => panic!("Expected Healthcheck subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_args_parse_healthcheck_http_with_timeout() {
+        use clap::Parser;
+        let args = Args::try_parse_from([
+            "shim", "healthcheck", "--http", "http://127.0.0.1:9101/livez", "-t", "10",
+        ])
+        .unwrap();
+        match args.command {
+            Some(Subcommand::Healthcheck { tcp, http, timeout }) => {
+                assert!(tcp.is_none());
+                assert_eq!(http, Some("http://127.0.0.1:9101/livez".to_string()));
+                assert_eq!(timeout, 10);
+            }
+            _ => panic!("Expected Healthcheck subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_args_debug_json_flags() {
+        use clap::Parser;
+        let args = Args::try_parse_from(["shim", "--debug", "--json"]).unwrap();
+        assert!(args.debug);
+        assert!(args.json);
+    }
+
+    #[test]
+    fn cli_args_otel_endpoint() {
+        use clap::Parser;
+        let args =
+            Args::try_parse_from(["shim", "--otel-endpoint", "http://localhost:4317"]).unwrap();
+        assert_eq!(
+            args.otel_endpoint,
+            Some("http://localhost:4317".to_string())
+        );
+    }
+
+    // ── 6. Config Merge with Env Vars ───────────────────────────────
+
+    #[test]
+    fn config_merge_env_overrides() {
+        temp_env::with_vars(
+            [
+                ("SHIM_MAX_MEMORY_BYTES", Some("8192")),
+                ("SHIM_MAX_CPU_PERCENT", Some("75.0")),
+            ],
+            || {
+                let mut base = Config::default();
+                let env_config = Config::from_env();
+                base.merge(env_config);
+                assert_eq!(base.resource_quota.max_memory_bytes, Some(8192));
+                assert_eq!(base.resource_quota.max_cpu_percent, Some(75.0));
+            },
+        );
+    }
+
+    #[test]
+    fn config_merge_preserves_existing() {
+        let mut base = Config::default();
+        base.health.listen = "127.0.0.1:9999".to_string();
+        let env_config = Config::from_env();
+        base.merge(env_config);
+        // Health listen is not set via env, so it should be preserved
+        assert_eq!(base.health.listen, "127.0.0.1:9999");
+    }
 }

@@ -468,4 +468,109 @@ mod tests {
         let shim = VaultShim::default();
         assert_eq!(shim.name(), "vault");
     }
+
+    // --- Credentials Serialization Tests ---
+
+    #[test]
+    fn test_credentials_serialization_roundtrip() {
+        let creds = Credentials {
+            username: "admin".to_string(),
+            password: "s3cret!".to_string(),
+            fetched_at: "2024-01-01T00:00:00Z".to_string(),
+            expires_at: Some("2024-01-01T01:00:00Z".to_string()),
+        };
+        let json = serde_json::to_string(&creds).unwrap();
+        let deserialized: Credentials = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.username, "admin");
+        assert_eq!(deserialized.password, "s3cret!");
+        assert!(deserialized.expires_at.is_some());
+    }
+
+    #[test]
+    fn test_credentials_no_expiry() {
+        let creds = Credentials {
+            username: "user".to_string(),
+            password: "pass".to_string(),
+            fetched_at: "2024-01-01T00:00:00Z".to_string(),
+            expires_at: None,
+        };
+        let json = serde_json::to_string(&creds).unwrap();
+        let deserialized: Credentials = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.expires_at.is_none());
+    }
+
+    #[test]
+    fn test_credentials_json_structure() {
+        let creds = Credentials {
+            username: "test_user".to_string(),
+            password: "test_pass".to_string(),
+            fetched_at: "2024-06-01T12:00:00Z".to_string(),
+            expires_at: None,
+        };
+        let json = serde_json::to_string(&creds).unwrap();
+        assert!(json.contains("test_user"));
+        assert!(json.contains("test_pass"));
+        assert!(json.contains("2024-06-01"));
+    }
+
+    // --- Write Credentials Tests ---
+
+    #[tokio::test]
+    async fn test_write_credentials_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("creds.txt");
+        let shim = VaultShim {
+            output_file: Some(path.clone()),
+            ..VaultShim::new()
+        };
+        let creds = Credentials {
+            username: "admin".to_string(),
+            password: "secret".to_string(),
+            fetched_at: "2024-01-01T00:00:00Z".to_string(),
+            expires_at: None,
+        };
+        shim.write_credentials(&creds).await.unwrap();
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(content, "admin:secret\n");
+    }
+
+    #[tokio::test]
+    async fn test_write_credentials_no_output_file() {
+        let shim = VaultShim {
+            output_file: None,
+            ..VaultShim::new()
+        };
+        let creds = Credentials {
+            username: "user".to_string(),
+            password: "pass".to_string(),
+            fetched_at: "2024-01-01T00:00:00Z".to_string(),
+            expires_at: None,
+        };
+        // Should succeed silently
+        shim.write_credentials(&creds).await.unwrap();
+    }
+
+    // --- VaultShim Config Override Tests ---
+
+    #[test]
+    fn test_vault_shim_config_override() {
+        use shim_core::Config;
+        let mut shim = VaultShim::new();
+        let config = Config {
+            vault: Some(shim_core::VaultConfig {
+                addr: "https://vault.prod:8200".to_string(),
+                role: "dynamic-role".to_string(),
+                secret: "secret/data/db".to_string(),
+                rotation_secs: 1800,
+            }),
+            ..Config::default()
+        };
+        // init reads from config
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(shim.init(&config)).unwrap();
+        assert_eq!(shim.vault_addr, "https://vault.prod:8200");
+        assert_eq!(shim.vault_role, "dynamic-role");
+        assert_eq!(shim.vault_secret, "secret/data/db");
+        assert_eq!(shim.rotation_secs, 1800);
+    }
 }

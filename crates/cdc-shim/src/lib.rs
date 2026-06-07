@@ -1043,4 +1043,141 @@ mod tests {
         assert_eq!(shim.recent_published()[0].event_id, "cdc-2");
         assert_eq!(shim.recent_published()[2].event_id, "cdc-4");
     }
+
+    // --- Additional Coverage Tests ---
+
+    #[test]
+    fn test_cdc_operation_display() {
+        assert_eq!(format!("{}", CdcOperation::Insert), "insert");
+        assert_eq!(format!("{}", CdcOperation::Update), "update");
+        assert_eq!(format!("{}", CdcOperation::Delete), "delete");
+    }
+
+    #[test]
+    fn test_cdc_operation_parse_short_forms() {
+        assert_eq!("i".parse::<CdcOperation>().unwrap(), CdcOperation::Insert);
+        assert_eq!("u".parse::<CdcOperation>().unwrap(), CdcOperation::Update);
+        assert_eq!("d".parse::<CdcOperation>().unwrap(), CdcOperation::Delete);
+    }
+
+    #[test]
+    fn test_cdc_operation_parse_case_insensitive() {
+        assert_eq!("INSERT".parse::<CdcOperation>().unwrap(), CdcOperation::Insert);
+        assert_eq!("Update".parse::<CdcOperation>().unwrap(), CdcOperation::Update);
+        assert_eq!("DELETE".parse::<CdcOperation>().unwrap(), CdcOperation::Delete);
+    }
+
+    #[test]
+    fn test_cdc_event_serialization_roundtrip() {
+        let event = CdcEvent {
+            event_id: "cdc-0000000001".to_string(),
+            lsn: "0/16B3740".to_string(),
+            timestamp: "2024-06-01T12:00:00Z".to_string(),
+            table: "users".to_string(),
+            operation: CdcOperation::Update,
+            before: Some(serde_json::json!({"name": "old"})),
+            after: Some(serde_json::json!({"name": "new"})),
+            published: true,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: CdcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.event_id, "cdc-0000000001");
+        assert_eq!(deserialized.operation, CdcOperation::Update);
+        assert!(deserialized.before.is_some());
+        assert!(deserialized.after.is_some());
+    }
+
+    #[test]
+    fn test_wal_position_serialization_roundtrip() {
+        let wal = WalPosition {
+            lsn: "0/16B3740".to_string(),
+            segment: 0,
+            offset: 23769344,
+            last_flush: "2024-06-01T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&wal).unwrap();
+        let deserialized: WalPosition = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.lsn, "0/16B3740");
+        assert_eq!(deserialized.segment, 0);
+        assert_eq!(deserialized.offset, 23769344);
+    }
+
+    #[test]
+    fn test_cdc_stats_serialization_roundtrip() {
+        let mut by_table = HashMap::new();
+        by_table.insert("users".to_string(), 10);
+        by_table.insert("orders".to_string(), 5);
+        let mut by_op = HashMap::new();
+        by_op.insert("insert".to_string(), 8);
+        by_op.insert("update".to_string(), 7);
+        let stats = CdcStats {
+            events_captured: 15,
+            events_published: 12,
+            events_failed: 1,
+            events_by_table: by_table,
+            events_by_operation: by_op,
+            lag_seconds: 1.5,
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        let deserialized: CdcStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.events_captured, 15);
+        assert_eq!(deserialized.events_by_table.get("users"), Some(&10));
+    }
+
+    #[test]
+    fn test_should_capture_case_insensitive() {
+        let shim = CdcShim {
+            tables: vec!["Users".to_string()],
+            table_filter_enabled: true,
+            ..CdcShim::new()
+        };
+        assert!(shim.should_capture("users"));
+        assert!(shim.should_capture("USERS"));
+        assert!(shim.should_capture("Users"));
+    }
+
+    #[test]
+    fn test_create_event_auto_increments_counter() {
+        let mut shim = make_shim();
+        let e1 = shim.create_event("t", CdcOperation::Insert, None, None);
+        let e2 = shim.create_event("t", CdcOperation::Insert, None, None);
+        assert_ne!(e1.event_id, e2.event_id);
+        assert!(e2.event_id > e1.event_id);
+    }
+
+    #[test]
+    fn test_pending_count() {
+        let mut shim = make_shim();
+        assert_eq!(shim.pending_count(), 0);
+        let e1 = shim.create_event("t", CdcOperation::Insert, None, None);
+        shim.capture(e1);
+        assert_eq!(shim.pending_count(), 1);
+        let e2 = shim.create_event("t", CdcOperation::Insert, None, None);
+        shim.capture(e2);
+        assert_eq!(shim.pending_count(), 2);
+    }
+
+    #[test]
+    fn test_new_from_env() {
+        temp_env::with_vars(
+            [
+                ("CDC_OUTPUT", Some("webhook")),
+                ("CDC_TABLES", Some("users,orders")),
+                ("CDC_FORMAT", Some("avro")),
+                ("CDC_DB_TYPE", Some("mariadb")),
+                ("CDC_BATCH_SIZE", Some("50")),
+                ("CDC_PUBLISH_INTERVAL", Some("5")),
+            ],
+            || {
+                let shim = CdcShim::new();
+                assert_eq!(shim.output, "webhook");
+                assert_eq!(shim.tables, vec!["users", "orders"]);
+                assert_eq!(shim.format, "avro");
+                assert_eq!(shim.db_type, "mariadb");
+                assert_eq!(shim.batch_size, 50);
+                assert_eq!(shim.publish_interval_secs, 5);
+                assert!(shim.table_filter_enabled);
+            },
+        );
+    }
 }
