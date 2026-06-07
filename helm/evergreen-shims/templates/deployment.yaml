@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "evergreen-shims.fullname" . }}
+  labels:
+    {{- include "evergreen-shims.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "evergreen-shims.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "evergreen-shims.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "evergreen-shims.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: shim
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - run
+            - -f
+            - /etc/shim/config.toml
+          env:
+            {{- if .Values.health.webhookUrl }}
+            - name: HEALTH_WEBHOOK_URL
+              value: {{ .Values.health.webhookUrl | quote }}
+            {{- end }}
+            {{- if .Values.health.webhookIntervalSecs }}
+            - name: HEALTH_WEBHOOK_INTERVAL_SECS
+              value: {{ .Values.health.webhookIntervalSecs | quote }}
+            {{- end }}
+            {{- if .Values.proxy.enabled }}
+            - name: PROXY_TARGET
+              value: {{ .Values.proxy.target | quote }}
+            - name: PROXY_LISTEN
+              value: {{ .Values.proxy.listen | quote }}
+            - name: PROXY_MAX_CONNECTIONS
+              value: {{ .Values.proxy.maxConnections | quote }}
+            - name: PROXY_CIRCUIT_THRESHOLD
+              value: {{ .Values.proxy.circuitThreshold | quote }}
+            {{- end }}
+            {{- if .Values.failover.enabled }}
+            - name: FAILOVER_PRIMARY
+              value: {{ .Values.failover.primary | quote }}
+            - name: FAILOVER_REPLICA
+              value: {{ .Values.failover.replica | quote }}
+            - name: FAILOVER_CHECK_INTERVAL
+              value: {{ .Values.failover.checkInterval | quote }}
+            - name: FAILOVER_FAILURE_THRESHOLD
+              value: {{ .Values.failover.failureThreshold | quote }}
+            - name: FAILOVER_DB_TYPE
+              value: {{ .Values.failover.dbType | quote }}
+            - name: FAILOVER_CONNECTOR
+              value: {{ .Values.failover.connector | quote }}
+            {{- if .Values.failover.clusters }}
+            - name: FAILOVER_CLUSTERS
+              value: {{ .Values.failover.clusters | quote }}
+            - name: FAILOVER_STRATEGY
+              value: {{ .Values.failover.strategy | quote }}
+            - name: FAILOVER_PRIMARY_CLUSTER
+              value: {{ .Values.failover.primaryCluster | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.alerting.enabled }}
+            - name: ALERTING_WEBHOOKS
+              value: {{ .Values.alerting.webhooks | quote }}
+            - name: ALERTING_DEDUP_WINDOW
+              value: {{ .Values.alerting.dedupWindow | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: health
+              containerPort: 9101
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          {{- if .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/shim/config.toml
+              subPath: config.toml
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "evergreen-shims.fullname" . }}
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

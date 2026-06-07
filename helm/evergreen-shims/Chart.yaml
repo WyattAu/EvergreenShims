@@ -1,0 +1,21 @@
+apiVersion: v2
+name: evergreen-shims
+description: Helm chart for EvergreenShims - self-managing container shims for health, failover, config, proxy, and multi-tenant isolation
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - shims
+  - health-check
+  - failover
+  - proxy
+  - config-reload
+  - self-managing
+  - container
+maintainers:
+  - name: WyattAu
+    url: https://github.com/WyattAu
+home: https://wyattau.github.io/EvergreenShims/
+sources:
+  - https://github.com/WyattAu/EvergreenShims
+license: Apache-2.0

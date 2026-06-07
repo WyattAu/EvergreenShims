@@ -1,0 +1,179 @@
+# Default values for evergreen-shims.
+# Override via --set or custom values file.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/wyattau/evergreen-shims
+  pullPolicy: IfNotPresent
+  # Tag defaults to Chart.appVersion
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod security
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Health probe configuration
+health:
+  listen: "0.0.0.0:9101"
+  # Webhook URL for health status push
+  webhookUrl: ""
+  webhookIntervalSecs: 30
+
+# Proxy shim configuration
+proxy:
+  enabled: false
+  listen: "0.0.0.0:5432"
+  target: ""
+  maxConnections: 20
+  minIdle: 5
+  maxLifetimeSecs: 1800
+  idleTimeoutSecs: 600
+  connectTimeout: 5
+  retryAttempts: 3
+  retryBaseMs: 100
+  circuitThreshold: 5
+  circuitResetSecs: 30
+  gracefulDegradation: false
+
+# Failover shim configuration
+failover:
+  enabled: false
+  primary: ""
+  replica: ""
+  checkInterval: 5
+  timeout: 3
+  failureThreshold: 3
+  webhook: ""
+  dbType: "postgres"
+  connector: "tcp"
+  # Multi-cluster failover
+  clusters: ""
+  strategy: "sequential"
+  primaryCluster: ""
+
+# Config shim configuration
+config:
+  enabled: false
+  path: "/etc/app/config.toml"
+  watch: true
+  reloadSignal: "SIGHUP"
+  reloadDebounce: 5
+  validateCmd: ""
+  keepBackup: true
+
+# Alerting shim configuration
+alerting:
+  enabled: false
+  webhooks: "[]"
+  dedupWindow: 300
+  backoffBase: 30
+  backoffMax: 3600
+
+# Encryption shim
+encryption:
+  enabled: false
+
+# Auth shim
+auth:
+  enabled: false
+
+# Service
+service:
+  type: ClusterIP
+  port: 9101
+  annotations: {}
+
+# Metrics scraping
+metrics:
+  enabled: true
+  port: 9101
+  path: /metrics
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    additionalLabels: {}
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: health
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: health
+  initialDelaySeconds: 3
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Startup probe (for slow-starting shims)
+startupProbe:
+  httpGet:
+    path: /livez
+    port: health
+  initialDelaySeconds: 2
+  periodSeconds: 2
+  failureThreshold: 15
+
+# Resource limits
+resources:
+  limits:
+    cpu: 200m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Node scheduling
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Extra environment variables
+extraEnv: []
+
+# Extra volumes and volume mounts
+extraVolumes: []
+extraVolumeMounts: []
