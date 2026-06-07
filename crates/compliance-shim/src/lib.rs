@@ -882,4 +882,153 @@ mod tests {
         assert_eq!(metrics[1].value, 1.0);
         assert_eq!(metrics[3].value, 1.0);
     }
+
+    // --- CIS Rule Generation Tests ---
+
+    #[test]
+    fn test_generate_cis_checks_postgres() {
+        let shim = ComplianceShim {
+            db_type: "postgres".to_string(),
+            ..ComplianceShim::new()
+        };
+        let checks = shim.generate_cis_checks();
+        assert_eq!(checks.len(), 12);
+        assert!(checks.iter().any(|c| c.id == "CIS-POSTGRES-001"));
+        assert!(checks.iter().any(|c| c.id == "CIS-POSTGRES-012"));
+    }
+
+    #[test]
+    fn test_generate_cis_checks_mariadb() {
+        let shim = ComplianceShim {
+            db_type: "mariadb".to_string(),
+            ..ComplianceShim::new()
+        };
+        let checks = shim.generate_cis_checks();
+        assert!(!checks.is_empty());
+        assert!(checks.iter().any(|c| c.id.starts_with("CIS-MYSQL")));
+    }
+
+    #[test]
+    fn test_generate_cis_checks_mysql() {
+        let shim = ComplianceShim {
+            db_type: "mysql".to_string(),
+            ..ComplianceShim::new()
+        };
+        let checks = shim.generate_cis_checks();
+        assert!(!checks.is_empty());
+    }
+
+    #[test]
+    fn test_generate_cis_checks_redis() {
+        let shim = ComplianceShim {
+            db_type: "redis".to_string(),
+            ..ComplianceShim::new()
+        };
+        let checks = shim.generate_cis_checks();
+        assert!(!checks.is_empty());
+        assert!(checks.iter().any(|c| c.id.starts_with("STIG-REDIS")));
+    }
+
+    #[test]
+    fn test_generate_cis_checks_unknown_db() {
+        let shim = ComplianceShim {
+            db_type: "mongodb".to_string(),
+            ..ComplianceShim::new()
+        };
+        let checks = shim.generate_cis_checks();
+        assert!(checks.is_empty());
+    }
+
+    // --- Severity Display/FromStr Tests ---
+
+    #[test]
+    fn test_severity_display() {
+        assert_eq!(format!("{}", Severity::Info), "info");
+        assert_eq!(format!("{}", Severity::Low), "low");
+        assert_eq!(format!("{}", Severity::Medium), "medium");
+        assert_eq!(format!("{}", Severity::High), "high");
+        assert_eq!(format!("{}", Severity::Critical), "critical");
+    }
+
+    #[test]
+    fn test_severity_from_str_all_variants() {
+        assert_eq!("info".parse::<Severity>().unwrap(), Severity::Info);
+        assert_eq!("low".parse::<Severity>().unwrap(), Severity::Low);
+        assert_eq!("medium".parse::<Severity>().unwrap(), Severity::Medium);
+        assert_eq!("high".parse::<Severity>().unwrap(), Severity::High);
+        assert_eq!("critical".parse::<Severity>().unwrap(), Severity::Critical);
+        assert_eq!("INFO".parse::<Severity>().unwrap(), Severity::Info);
+        assert_eq!("CRITICAL".parse::<Severity>().unwrap(), Severity::Critical);
+    }
+
+    // --- Violation Resolution Tests ---
+
+    #[test]
+    fn test_resolve_violation_filters_from_report() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::High));
+        shim.add_check(make_check("C002", false, Severity::Medium));
+        shim.run_checks();
+
+        assert_eq!(shim.generate_report().violations.len(), 2);
+        shim.resolve_violation("C001");
+        let report = shim.generate_report();
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].check_id, "C002");
+    }
+
+    #[test]
+    fn test_violations_by_severity_excludes_resolved() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::Critical));
+        shim.add_check(make_check("C002", false, Severity::Critical));
+        shim.run_checks();
+        shim.resolve_violation("C001");
+
+        let critical = shim.violations_by_severity(&Severity::Critical);
+        assert_eq!(critical.len(), 1);
+        assert_eq!(critical[0].check_id, "C002");
+    }
+
+    // --- Report Score Tests ---
+
+    #[test]
+    fn test_report_score_matches_calculated() {
+        let mut shim = ComplianceShim::new();
+        for i in 0..10 {
+            shim.add_check(make_check(&format!("C{:03}", i), i < 7, Severity::Medium));
+        }
+        shim.run_checks();
+        let report = shim.generate_report();
+        assert!((report.score - 70.0).abs() < 0.01);
+        assert_eq!(report.passed, 7);
+        assert_eq!(report.failed, 3);
+    }
+
+    #[test]
+    fn test_report_benchmark_and_db_type() {
+        let shim = ComplianceShim {
+            benchmark: "stig".to_string(),
+            db_type: "redis".to_string(),
+            ..ComplianceShim::new()
+        };
+        let report = shim.generate_report();
+        assert_eq!(report.benchmark, "stig");
+        assert_eq!(report.db_type, "redis");
+    }
+
+    // --- Metrics Test ---
+
+    #[test]
+    fn test_metrics_initial_state() {
+        let shim = ComplianceShim::new();
+        let metrics = shim.metrics();
+        assert_eq!(metrics.len(), 4);
+        assert_eq!(metrics[0].name, "compliance_checks_passed");
+        assert_eq!(metrics[0].value, 0.0);
+        assert_eq!(metrics[1].name, "compliance_checks_failed");
+        assert_eq!(metrics[1].value, 0.0);
+        assert_eq!(metrics[2].name, "compliance_score");
+        assert_eq!(metrics[2].value, 0.0);
+    }
 }

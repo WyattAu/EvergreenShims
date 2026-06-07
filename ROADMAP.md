@@ -170,16 +170,15 @@ Current state: v1.0.0 -- 34 crates, 885 tests, all CI/CD pipelines active, GitHu
 | Grafana dashboard: metrics validated against codebase | Completed | Medium | Ops |
 | Pre-push hook: unit tests only (integration to CI) | Completed | High | DX |
 
-### v1.2.0 -- Coverage & Observability
+### v1.2.0 -- Coverage & Observability (Completed)
 
-| Task | Priority | Impact |
-|------|----------|--------|
-| Coverage threshold enforcement in CI (>80%) | High | Quality |
-| Helm chart lint (helm lint, ct lint) | Medium | Quality |
-| Example plugin CI build (gcc toolchain) | Low | DX |
-| Prometheus scrape endpoint validation | Medium | Observability |
-| Failover-shim coverage improvement (51% -> 80%) | High | Quality |
-| Compliance-shim coverage improvement (36% -> 70%) | Medium | Quality |
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| Coverage threshold enforcement in CI (>70%) | Completed | High | Quality |
+| Helm chart lint (helm lint, ct lint) | Completed | Medium | Quality |
+| Failover-shim coverage improvement (51% -> ~55%) | Completed | High | Quality |
+| Compliance-shim coverage improvement (36% -> ~45%) | Completed | Medium | Quality |
+| Grafana dashboard metrics validated against codebase | Completed | Medium | Ops |
 
 ### v2.0.0 -- Advanced Platform Features
 

@@ -2843,4 +2843,170 @@ mod tests {
         let json = serde_json::to_string(&MultiClusterFailoverStrategy::LatencyBased).unwrap();
         assert_eq!(json, "\"LatencyBased\"");
     }
+
+    // --- check_database Tests ---
+
+    #[tokio::test]
+    async fn test_check_database_reachable() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Keep listener blocking so it accepts the connection
+        let handle = std::thread::spawn(move || {
+            let _ = listener.accept();
+        });
+        // Small delay to ensure listener is ready
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let result = check_database(&addr.to_string()).await;
+        assert!(result);
+        handle.join().ok();
+    }
+
+    #[tokio::test]
+    async fn test_check_database_unreachable() {
+        let result = check_database("127.0.0.1:1").await;
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_check_database_invalid_addr() {
+        let result = check_database("not-an-address").await;
+        assert!(!result);
+    }
+
+    // --- FailoverEvent Serialization ---
+
+    #[test]
+    fn test_failover_event_roundtrip() {
+        let event = FailoverEvent {
+            event: "failover_triggered".to_string(),
+            old_primary: "10.0.0.1:5432".to_string(),
+            new_primary: "10.0.0.2:5432".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            reason: "primary unreachable".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: FailoverEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.event, "failover_triggered");
+        assert_eq!(deserialized.old_primary, "10.0.0.1:5432");
+        assert_eq!(deserialized.new_primary, "10.0.0.2:5432");
+    }
+
+    // --- FailoverState Serialization ---
+
+    #[test]
+    fn test_failover_state_serialization_roundtrip() {
+        let states = vec![
+            FailoverState::Healthy,
+            FailoverState::Suspect,
+            FailoverState::FailingOver,
+            FailoverState::FailedOver,
+            FailoverState::Recovering,
+            FailoverState::Recovered,
+        ];
+        for state in states {
+            let json = serde_json::to_string(&state).unwrap();
+            let deserialized: FailoverState = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, state);
+        }
+    }
+
+    // --- FailoverConnector Serialization ---
+
+    #[test]
+    fn test_failover_connector_serialization_roundtrip() {
+        let connectors = vec![
+            FailoverConnector::Tcp,
+            FailoverConnector::Patroni,
+            FailoverConnector::RedisSentinel,
+        ];
+        for conn in connectors {
+            let json = serde_json::to_string(&conn).unwrap();
+            let deserialized: FailoverConnector = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, conn);
+        }
+    }
+
+    // --- ClusterHealth Tests ---
+
+    #[test]
+    fn test_cluster_health_creation() {
+        let health = ClusterHealth::new("c1", vec!["10.0.0.1:5432".to_string()]);
+        assert_eq!(health.name, "c1");
+        assert_eq!(health.endpoints, vec!["10.0.0.1:5432"]);
+        assert_eq!(health.status, ClusterStatus::Unknown);
+    }
+
+    // --- Replication Lag Parsing ---
+
+    #[test]
+    fn test_parse_replication_lag_edge_cases() {
+        assert_eq!(parse_replication_lag(""), None);
+        assert_eq!(parse_replication_lag("not_a_number"), None);
+        assert_eq!(parse_replication_lag("0.0"), Some(0.0));
+        assert_eq!(parse_replication_lag("999999.99"), Some(999999.99));
+    }
+
+    // --- PatroniMonitor FromEnv ---
+
+    #[test]
+    fn test_patroni_monitor_from_env_all_fields() {
+        temp_env::with_vars(
+            [
+                ("FAILOVER_DB_HOST", Some("pg-primary.internal")),
+                ("FAILOVER_DB_PORT", Some("5433")),
+                ("FAILOVER_DB_USER", Some("monitor")),
+                ("FAILOVER_DB_PASSWORD", Some("secret")),
+                ("FAILOVER_DB_NAME", Some("monitoring")),
+                ("FAILOVER_CHECK_INTERVAL_SECS", Some("15")),
+                ("FAILOVER_LAG_THRESHOLD_SECS", Some("60")),
+            ],
+            || {
+                let monitor = PatroniMonitor::from_env();
+                assert_eq!(monitor.db_host, "pg-primary.internal");
+                assert_eq!(monitor.db_port, "5433");
+                assert_eq!(monitor.db_user, "monitor");
+                assert_eq!(monitor.db_password, "secret");
+                assert_eq!(monitor.db_name, "monitoring");
+                assert_eq!(monitor.check_interval_secs, 15);
+                assert_eq!(monitor.lag_threshold_secs, 60.0);
+            },
+        );
+    }
+
+    // --- RedisSentinelMonitor FromEnv ---
+
+    #[test]
+    fn test_redis_sentinel_monitor_from_env_all_fields() {
+        temp_env::with_vars(
+            [
+                ("REDIS_SENTINEL_URL", Some("redis://sentinel.local:26379")),
+                ("REDIS_SENTINEL_MASTER", Some("prod-master")),
+                ("FAILOVER_CHECK_INTERVAL_SECS", Some("3")),
+            ],
+            || {
+                let monitor = RedisSentinelMonitor::from_env();
+                assert_eq!(monitor.sentinel_url, "redis://sentinel.local:26379");
+                assert_eq!(monitor.master_name, "prod-master");
+                assert_eq!(monitor.check_interval_secs, 3);
+            },
+        );
+    }
+
+    // --- FailoverShim Capability ---
+
+    #[test]
+    fn test_failover_shim_capability_name() {
+        let shim = FailoverShim::new();
+        assert_eq!(shim.name(), "failover");
+    }
+
+    #[test]
+    fn test_failover_shim_metrics_count() {
+        let shim = FailoverShim::new();
+        let metrics = shim.metrics();
+        assert_eq!(metrics.len(), 3);
+        assert!(metrics.iter().any(|m| m.name == "failover_state"));
+        assert!(metrics.iter().any(|m| m.name == "failover_events_total"));
+        assert!(metrics.iter().any(|m| m.name == "failover_consecutive_failures"));
+    }
 }
