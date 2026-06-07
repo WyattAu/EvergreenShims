@@ -40,9 +40,8 @@ jobs:
           - variant: cache-shim
             features: cache-shim-combo
             target: shim-cache
-          - variant: evergreen-shim
-            features: full
-            target: shim-full
+          # NOTE: evergreen-shim (full) excluded — OOM kills on GitHub Actions runners
+          # Build full variant via release workflow instead
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -85,7 +84,6 @@ jobs:
           - variant: health-shim
           - variant: db-shim
           - variant: cache-shim
-          - variant: evergreen-shim
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -119,7 +117,6 @@ jobs:
           - variant: health-shim
           - variant: db-shim
           - variant: cache-shim
-          - variant: evergreen-shim
     steps:
       - name: Install cosign
         uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
