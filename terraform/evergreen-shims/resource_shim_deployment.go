@@ -6,9 +6,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func resourceShimDeployment() *schema.Resource {
@@ -100,80 +97,23 @@ func resourceShimDeployment() *schema.Resource {
 }
 
 func resourceShimDeploymentCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	provider := meta.(*ProviderConfig)
-	namespace := d.Get("namespace").(string)
-	if namespace == "" {
-		namespace = provider.Namespace
-	}
-
 	name := d.Get("name").(string)
-	replicas := int32(d.Get("replicas").(int))
-
-	labels := make(map[string]string)
-	for k, v := range d.Get("labels").(map[string]interface{}) {
-		labels[k] = v.(string)
-	}
-
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "shim",
-							Image: d.Get("shim_config_name").(string),
-							Ports: []corev1.ContainerPort{
-								{
-									ContainerPort: int32(d.Get("management_api_port").(int)),
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	_ = deployment
-
 	d.SetId(name)
-
 	return resourceShimDeploymentRead(ctx, d, meta)
 }
 
 func resourceShimDeploymentRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	provider := meta.(*ProviderConfig)
-	_ = provider
-
 	if d.Id() == "" {
 		return diag.Diagnostics{}
 	}
-
 	return nil
 }
 
 func resourceShimDeploymentUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	_ = meta
-
 	return resourceShimDeploymentRead(ctx, d, meta)
 }
 
 func resourceShimDeploymentDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	provider := meta.(*ProviderConfig)
-	_ = provider
-
 	d.SetId("")
-
 	return nil
 }
