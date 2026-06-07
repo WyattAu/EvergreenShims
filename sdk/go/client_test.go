@@ -217,3 +217,20 @@ func TestHealthLiveness(t *testing.T) {
 		t.Errorf("expected status alive, got %v", resp["status"])
 	}
 }
+
+func TestHealthReadiness(t *testing.T) {
+	server, client := setupTestServer(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "ready",
+		})
+	})
+	defer server.Close()
+
+	resp, err := client.HealthReadiness()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp["status"] != "ready" {
+		t.Errorf("expected status ready, got %v", resp["status"])
+	}
+}

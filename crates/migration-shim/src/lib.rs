@@ -1362,6 +1362,7 @@ mod tests {
         shim.db_user = "admin".to_string();
         shim.db_password = "secret".to_string();
         shim.db_type = "postgres".to_string();
+        shim.db_url = None; // Clear any env-influenced URL override
 
         assert_eq!(
             shim.connection_string(),
@@ -1378,6 +1379,7 @@ mod tests {
         shim.db_user = "admin".to_string();
         shim.db_password = "secret".to_string();
         shim.db_type = "mysql".to_string();
+        shim.db_url = None; // Clear any env-influenced URL override
 
         assert_eq!(
             shim.connection_string(),

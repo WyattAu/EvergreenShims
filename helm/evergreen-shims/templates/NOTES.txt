@@ -1,0 +1,30 @@
+EvergreenShims has been deployed successfully.
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Status: deployed
+
+{{- if .Values.proxy.enabled }}
+Proxy shim enabled: listening on {{ .Values.proxy.listen }}
+{{- end }}
+
+{{- if .Values.failover.enabled }}
+Failover shim enabled: primary={{ .Values.failover.primary }}, replica={{ .Values.failover.replica }}
+{{- end }}
+
+{{- if .Values.config.enabled }}
+Config shim enabled: watching {{ .Values.config.path }}
+{{- end }}
+
+{{- if .Values.alerting.enabled }}
+Alerting shim enabled
+{{- end }}
+
+To verify the deployment:
+  kubectl get pods -l "app.kubernetes.io/name={{ include "evergreen-shims.name" . }}" -n {{ .Release.Namespace }}
+
+To check health:
+  kubectl exec -it deployment/{{ include "evergreen-shims.fullname" . }} -n {{ .Release.Namespace }} -- wget -qO- http://localhost:9101/healthz
+
+To access the service:
+  kubectl port-forward svc/{{ include "evergreen-shims.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }} -n {{ .Release.Namespace }}
