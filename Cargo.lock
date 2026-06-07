@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "alerting-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "archival-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -289,7 +289,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audit-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "auth-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -893,7 +893,7 @@ dependencies = [
 
 [[package]]
 name = "backup-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "cache-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "cassandra-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "cdc-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1130,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "chaos-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "cockroachdb-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "compliance-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "config-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1379,7 +1379,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cost-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1858,7 +1858,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dynamodb-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1899,7 +1899,7 @@ dependencies = [
 
 [[package]]
 name = "elasticsearch-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "encryption-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "evergreen-benchmarks"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "backup-shim",
  "cache-shim",
@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "evergreen-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "alerting-shim",
  "anyhow",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "evergreen-shims-integration"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "alerting-shim",
  "archival-shim",
@@ -2099,6 +2099,7 @@ dependencies = [
  "scheduler-shim",
  "serde",
  "serde_json",
+ "serial_test",
  "sharding-shim",
  "shim-core",
  "sqlx",
@@ -2111,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "failover-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2579,7 +2580,7 @@ dependencies = [
 
 [[package]]
 name = "health-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3269,7 +3270,7 @@ dependencies = [
 
 [[package]]
 name = "management-api"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3337,7 +3338,7 @@ dependencies = [
 
 [[package]]
 name = "migration-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3390,7 +3391,7 @@ dependencies = [
 
 [[package]]
 name = "mongodb-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4177,7 +4178,7 @@ checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
 
 [[package]]
 name = "proxy-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4216,7 +4217,7 @@ dependencies = [
 
 [[package]]
 name = "queue-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4224,9 +4225,9 @@ dependencies = [
  "prometheus",
  "serde",
  "serde_json",
+ "serial_test",
  "shim-core",
  "temp-env",
- "tempfile",
  "tokio",
  "tracing",
  "uuid",
@@ -4450,7 +4451,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "replication-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4706,7 +4707,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4874,6 +4875,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "serial_test"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699f4197115b8a7e7ff19c9a315a4bd6fffec26cc4626ef45ecaea389e081c6d"
+dependencies = [
+ "futures-executor",
+ "futures-util",
+ "log",
+ "once_cell",
+ "parking_lot",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e153fc76e1c6a068703d6d29c508a0b15c061c4b7e43da59cc097bc342673c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4934,7 +4960,7 @@ dependencies = [
 
 [[package]]
 name = "sharding-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4949,7 +4975,7 @@ dependencies = [
 
 [[package]]
 name = "shim-core"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4968,6 +4994,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serial_test",
  "temp-env",
  "tempfile",
  "thiserror 2.0.18",
@@ -4983,7 +5010,7 @@ dependencies = [
 
 [[package]]
 name = "shim-plugin"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4998,7 +5025,7 @@ dependencies = [
 
 [[package]]
 name = "shimctl"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5544,7 +5571,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tls-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "acme-micro",
  "anyhow",
@@ -6050,7 +6077,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault-shim"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
