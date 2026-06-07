@@ -1,6 +1,6 @@
 # Roadmap
 
-Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHub Pages deployed.
+Current state: v1.0.0 -- 34 crates, 885 tests, all CI/CD pipelines active, GitHub Pages deployed.
 
 ## Completed Milestones
 
@@ -64,15 +64,15 @@ Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHu
 
 | Task | Status | Priority | Impact |
 |------|--------|----------|--------|
-| Structured error types per shim | Pending | Medium | API ergonomics |
-| Per-crate README files | Pending | Medium | Discoverability |
-| API reference docs (cargo doc) | Pending | High | Developer experience |
-| Integration test coverage expansion | Pending | High | Reliability |
-| Chaos test automation in CI | Pending | High | Resilience validation |
-| Performance regression baseline v2 | Pending | Medium | Benchmark accuracy |
-| Docker image vulnerability remediation | Pending | High | Security |
-| aarch64 full/infra builds | Pending | Low | Platform coverage |
-| SBOM generation in CI | Pending | Medium | Supply chain transparency |
+| Structured error types per shim | Completed | Medium | API ergonomics |
+| Per-crate README files | Completed | Medium | Discoverability |
+| API reference docs (cargo doc) | Completed | High | Developer experience |
+| Integration test coverage expansion | Completed | High | Reliability |
+| Chaos test automation in CI | Completed | High | Resilience validation |
+| Performance regression baseline v2 | Completed | Medium | Benchmark accuracy |
+| Docker image hardening (pinned base, OCI labels) | Completed | High | Security |
+| aarch64/riscv64 full/infra builds | Completed | Low | Platform coverage |
+| SBOM generation in CI | Completed | Medium | Supply chain transparency |
 
 ## v2.0.0 Scaling
 
@@ -91,15 +91,25 @@ Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHu
 
 | Task | Status | Priority | Impact |
 |------|--------|----------|--------|
-| Multi-language shim SDK (Go, Python, Node) | Completed | High | Ecosystem |
+| Multi-language shim SDK (Go, Python, Node) | Completed (skeleton) | High | Ecosystem |
 | Edge deployment targets (ARM, RISC-V) | Completed | Medium | Deployment |
 | Plugin system for custom shims | Completed | High | Extensibility |
 | WebAssembly shim runtime | Completed | Medium | Portability |
-| CLI management tool | Completed | Medium | Operations |
-| Terraform/Pulumi provider | Completed | Medium | IaC integration |
-| WebAssembly shim runtime | Pending | Medium | Portability |
-| CLI management tool | Pending | Medium | Operations |
-| Terraform/Pulumi provider | Pending | Medium | IaC integration |
+| CLI management tool (shimctl) | Completed | Medium | Operations |
+| Terraform provider (scaffolding) | Completed | Medium | IaC integration |
+
+### v3.x Known Gaps (Post-Release Work)
+
+| Gap | Severity | Description |
+|-----|----------|-------------|
+| SDK HTTP client implementation | High | Go/Python/Node SDKs are importable shells with no real HTTP logic |
+| Terraform provider compilation | High | Go code is syntactically valid but never compiled or tested |
+| Helm chart (was lost) | Fixed | Recreated in Phase A (helm/evergreen-shims/) |
+| Grafana dashboard (was lost) | Fixed | Recreated in Phase A (grafana/evergreen-shims-dashboard.json) |
+| k8s sample configmap | Fixed | Created in Phase A (k8s/sample-configmap.yaml) |
+| Example plugin build in CI | Medium | Requires C compiler for cdylib crate-type |
+| Coverage measurement | Medium | No cargo-tarpaulin or cargo-llvm-cov in CI |
+| Auth test flakiness | Medium | temp_env parallel pollution |
 
 ## Architecture Decisions
 
@@ -117,23 +127,59 @@ Current state: v0.6.0 -- 32 crates, 792 tests, all CI/CD pipelines active, GitHu
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| aarch64 aws-lc-rs cross-compile | Known | Limited to health-shim for aarch64-musl |
+| aarch64/riscv64 cross-compile failures | Known | Limited to health-shim for non-x86 |
 | Docker Hub availability | Known | Retry logic in CI, GHCR as primary |
 | Cargo-deny false positives | Low | Allowlist tuning in deny.toml |
 | Pre-push hook latency (~84s) | Low | Acceptable for safety guarantee |
+| SDK/Provider not tested in target language | Known | Requires Go/Node/Python toolchains in CI |
 
 ## Quality Metrics
 
 | Metric | Current | Target (v1.0.0) |
 |--------|---------|-----------------|
-| Unit tests | 792 | >900 |
+| Unit tests | 885 | >900 |
 | Clippy warnings | 0 | 0 |
 | Unsafe code | 0 | 0 |
 | Pre-commit checks | 8 | 8 |
-| CI pipeline jobs | 10 | 10 |
+| CI pipeline jobs | 14 | 14 |
 | Binary size (health) | ~2.5MB | <3MB |
-| Crates | 32 | 32 |
+| Crates | 34 | 34 |
 | Documentation coverage | 90% | >95% |
 | GitHub Pages | Active | Active |
 | Supply chain (SHA pins) | Active | Active |
 | Dependency audit (cargo-deny) | Active | Active |
+| Helm chart | Active | Active |
+| Grafana dashboard | Active | Active |
+
+## Post-1.0 Iteration Plan
+
+### v1.1.0 -- SDK & Provider Hardening
+
+| Task | Priority | Impact |
+|------|----------|--------|
+| Go SDK HTTP client with retry, auth, TLS | High | Ecosystem |
+| Python SDK HTTP client with retry, auth, TLS | High | Ecosystem |
+| Node SDK HTTP client with retry, auth, TLS | High | Ecosystem |
+| Terraform provider: compile, test, lint | High | IaC |
+| SDK CI: go test, pytest, npm test | High | Quality |
+| SDK documentation with usage examples | Medium | DX |
+
+### v1.2.0 -- Coverage & Observability
+
+| Task | Priority | Impact |
+|------|----------|--------|
+| Coverage threshold enforcement in CI (>80%) | High | Quality |
+| Grafana dashboard tested against live metrics | Medium | Ops |
+| Helm chart lint (helm lint, ct lint) | Medium | Quality |
+| Example plugin CI build (gcc toolchain) | Low | DX |
+| Prometheus scrape endpoint validation | Medium | Observability |
+
+### v2.0.0 -- Advanced Platform Features
+
+| Task | Priority | Impact |
+|------|----------|--------|
+| WASM shim runtime hardening (fuzzing, OOM) | High | Portability |
+| Plugin SDK v2 (capability negotiation) | High | Extensibility |
+| Multi-cluster failover live testing | High | HA |
+| Load testing proxy-shim circuit breaker | High | Performance |
+| Chaos testing with real databases | High | Resilience |
