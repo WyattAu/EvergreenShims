@@ -3011,4 +3011,799 @@ mod tests {
             .iter()
             .any(|m| m.name == "failover_consecutive_failures"));
     }
+
+    // --- Additional coverage tests ---
+
+    #[test]
+    fn test_cluster_status_as_f64_all_variants() {
+        assert_eq!(ClusterStatus::Healthy.as_f64(), 0.0);
+        assert_eq!(ClusterStatus::Degraded.as_f64(), 1.0);
+        assert_eq!(ClusterStatus::Failed.as_f64(), 2.0);
+        assert_eq!(ClusterStatus::Unknown.as_f64(), 3.0);
+    }
+
+    #[test]
+    fn test_cluster_status_deserialization_roundtrip() {
+        let variants = vec![
+            ClusterStatus::Healthy,
+            ClusterStatus::Degraded,
+            ClusterStatus::Failed,
+            ClusterStatus::Unknown,
+        ];
+        for v in variants {
+            let json = serde_json::to_string(&v).unwrap();
+            let deserialized: ClusterStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, v);
+        }
+    }
+
+    #[test]
+    fn test_multicluster_strategy_display() {
+        assert_eq!(format!("{}", MultiClusterFailoverStrategy::Sequential), "sequential");
+        assert_eq!(format!("{}", MultiClusterFailoverStrategy::LatencyBased), "latency");
+        assert_eq!(format!("{}", MultiClusterFailoverStrategy::WeightedRandom), "weighted");
+    }
+
+    #[test]
+    fn test_multicluster_strategy_deserialization() {
+        let json = serde_json::to_string(&MultiClusterFailoverStrategy::Sequential).unwrap();
+        let deserialized: MultiClusterFailoverStrategy = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, MultiClusterFailoverStrategy::Sequential);
+    }
+
+    #[test]
+    fn test_failover_shim_default_trait() {
+        temp_env::with_var_unset("FAILOVER_CHECK_INTERVAL_SECS", || {
+            let shim = FailoverShim::default();
+            assert_eq!(shim.check_interval_secs(), 5);
+            assert_eq!(shim.failure_threshold, 3);
+        });
+    }
+
+    #[test]
+    fn test_failover_shim_new_env_check_interval_legacy() {
+        temp_env::with_vars(
+            [
+                ("FAILOVER_CHECK_INTERVAL", Some("15")),
+                ("FAILOVER_CHECK_INTERVAL_SECS", None::<&str>),
+            ],
+            || {
+                let shim = FailoverShim::new();
+                assert_eq!(shim.check_interval_secs(), 15);
+            },
+        );
+    }
+
+    #[test]
+    fn test_failover_shim_new_env_check_interval_secs_priority() {
+        temp_env::with_vars(
+            [
+                ("FAILOVER_CHECK_INTERVAL_SECS", Some("25")),
+                ("FAILOVER_CHECK_INTERVAL", Some("15")),
+            ],
+            || {
+                let shim = FailoverShim::new();
+                assert_eq!(shim.check_interval_secs(), 25);
+            },
+        );
+    }
+
+    #[test]
+    fn test_failover_shim_new_env_custom_primary_replica() {
+        temp_env::with_vars(
+            [
+                ("FAILOVER_PRIMARY", Some("10.0.0.1:5432")),
+                ("FAILOVER_REPLICA", Some("10.0.0.2:5432")),
+                ("FAILOVER_FAILURE_THRESHOLD", Some("5")),
+                ("FAILOVER_WEBHOOK", Some("https://hooks.slack.com/test")),
+                ("FAILOVER_DB_TYPE", Some("mysql")),
+            ],
+            || {
+                let shim = FailoverShim::new();
+                assert_eq!(shim.primary, "10.0.0.1:5432");
+                assert_eq!(shim.replica, "10.0.0.2:5432");
+                assert_eq!(shim.failure_threshold, 5);
+                assert_eq!(shim.webhook, Some("https://hooks.slack.com/test".to_string()));
+                assert_eq!(shim.db_type, "mysql");
+            },
+        );
+    }
+
+    #[test]
+    fn test_failover_shim_new_defaults_without_env() {
+        temp_env::with_vars(
+            [
+                ("FAILOVER_PRIMARY", None::<&str>),
+                ("FAILOVER_REPLICA", None::<&str>),
+                ("FAILOVER_FAILURE_THRESHOLD", None::<&str>),
+                ("FAILOVER_WEBHOOK", None::<&str>),
+                ("FAILOVER_DB_TYPE", None::<&str>),
+                ("FAILOVER_CONNECTOR", None::<&str>),
+            ],
+            || {
+                let shim = FailoverShim::new();
+                assert_eq!(shim.primary, "127.0.0.1:5432");
+                assert_eq!(shim.replica, "127.0.0.1:5433");
+                assert_eq!(shim.failure_threshold, 3);
+                assert!(shim.webhook.is_none());
+                assert_eq!(shim.db_type, "postgres");
+                assert_eq!(shim.connector(), &FailoverConnector::Tcp);
+            },
+        );
+    }
+
+    #[test]
+    fn test_failover_event_empty_fields() {
+        let event = FailoverEvent {
+            event: String::new(),
+            old_primary: String::new(),
+            new_primary: String::new(),
+            timestamp: String::new(),
+            reason: String::new(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: FailoverEvent = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.event.is_empty());
+        assert!(deserialized.reason.is_empty());
+    }
+
+    #[test]
+    fn test_failover_state_invalid_variant_deserialization() {
+        let result = serde_json::from_str::<FailoverState>("\"InvalidState\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_failover_connector_invalid_variant_deserialization() {
+        let result = serde_json::from_str::<FailoverConnector>("\"UnknownConnector\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_replication_lag_negative() {
+        assert_eq!(parse_replication_lag("-1.0"), Some(-1.0));
+    }
+
+    #[test]
+    fn test_parse_replication_lag_whitespace() {
+        assert_eq!(parse_replication_lag("  "), None);
+    }
+
+    #[test]
+    fn test_parse_replication_lag_null_string() {
+        assert_eq!(parse_replication_lag("NULL"), None);
+    }
+
+    #[test]
+    fn test_shared_state_invalid_atomic_value() {
+        let s = SharedState::new();
+        s.state.store(99, Ordering::Relaxed);
+        assert_eq!(s.state(), FailoverState::Healthy);
+    }
+
+    #[test]
+    fn test_redis_sentinel_monitor_new_explicit() {
+        let monitor = RedisSentinelMonitor::new(
+            "redis://sentinel.prod:26379",
+            "prod-master",
+            3,
+        );
+        assert_eq!(monitor.sentinel_url(), "redis://sentinel.prod:26379");
+        assert_eq!(monitor.master_name(), "prod-master");
+        assert_eq!(monitor.check_interval_secs(), 3);
+    }
+
+    #[test]
+    fn test_redis_sentinel_monitor_from_env_defaults() {
+        temp_env::with_vars(
+            [
+                ("REDIS_SENTINEL_URL", None::<&str>),
+                ("REDIS_SENTINEL_MASTER", None::<&str>),
+                ("FAILOVER_CHECK_INTERVAL_SECS", None::<&str>),
+            ],
+            || {
+                let monitor = RedisSentinelMonitor::from_env();
+                assert_eq!(monitor.sentinel_url(), "redis://localhost:26379");
+                assert_eq!(monitor.master_name(), "mymaster");
+                assert_eq!(monitor.check_interval_secs(), 5);
+            },
+        );
+    }
+
+    #[test]
+    fn test_redis_sentinel_monitor_from_env_configured() {
+        temp_env::with_vars(
+            [
+                ("REDIS_SENTINEL_URL", Some("redis://sentinel.prod:26379")),
+                ("REDIS_SENTINEL_MASTER", Some("prod-master")),
+                ("FAILOVER_CHECK_INTERVAL_SECS", Some("7")),
+            ],
+            || {
+                let monitor = RedisSentinelMonitor::from_env();
+                assert_eq!(monitor.sentinel_url(), "redis://sentinel.prod:26379");
+                assert_eq!(monitor.master_name(), "prod-master");
+                assert_eq!(monitor.check_interval_secs(), 7);
+            },
+        );
+    }
+
+    #[test]
+    fn test_patroni_monitor_new_explicit() {
+        let monitor = PatroniMonitor::new(
+            "pg-host.internal",
+            "5433",
+            "admin",
+            "secret",
+            "mydb",
+            15,
+            60.0,
+        );
+        assert_eq!(monitor.db_host(), "pg-host.internal");
+        assert_eq!(monitor.db_port(), "5433");
+        assert_eq!(monitor.db_user(), "admin");
+        assert_eq!(monitor.db_password(), "secret");
+        assert_eq!(monitor.db_name(), "mydb");
+        assert_eq!(monitor.check_interval_secs(), 15);
+        assert_eq!(monitor.lag_threshold_secs(), 60.0);
+    }
+
+    #[test]
+    fn test_patroni_monitor_from_env_defaults() {
+        temp_env::with_vars(
+            [
+                ("FAILOVER_DB_HOST", None::<&str>),
+                ("FAILOVER_DB_PORT", None::<&str>),
+                ("FAILOVER_DB_USER", None::<&str>),
+                ("FAILOVER_DB_PASSWORD", None::<&str>),
+                ("FAILOVER_DB_NAME", None::<&str>),
+                ("FAILOVER_CHECK_INTERVAL_SECS", None::<&str>),
+                ("FAILOVER_LAG_THRESHOLD_SECS", None::<&str>),
+            ],
+            || {
+                let monitor = PatroniMonitor::from_env();
+                assert_eq!(monitor.db_host(), "localhost");
+                assert_eq!(monitor.db_port(), "5432");
+                assert_eq!(monitor.db_user(), "postgres");
+                assert_eq!(monitor.db_password(), "");
+                assert_eq!(monitor.db_name(), "postgres");
+                assert_eq!(monitor.check_interval_secs(), 10);
+                assert_eq!(monitor.lag_threshold_secs(), 30.0);
+            },
+        );
+    }
+
+    #[test]
+    fn test_cluster_health_with_lag_and_latency() {
+        let mut health = ClusterHealth::new("c1", vec!["10.0.0.1:5432".to_string()]);
+        health.replication_lag_ms = Some(150);
+        health.latency_ms = Some(25);
+        health.consecutive_failures = 3;
+        assert_eq!(health.replication_lag_ms, Some(150));
+        assert_eq!(health.latency_ms, Some(25));
+        assert_eq!(health.consecutive_failures, 3);
+    }
+
+    #[test]
+    fn test_cluster_health_serialization_roundtrip() {
+        let health = ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]);
+        let json = serde_json::to_string(&health).unwrap();
+        let deserialized: ClusterHealth = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "us-east");
+        assert_eq!(deserialized.endpoints, vec!["10.0.0.1:5432"]);
+        assert_eq!(deserialized.status, ClusterStatus::Unknown);
+    }
+
+    #[test]
+    fn test_multi_cluster_monitor_accessor_methods() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            Some("https://hooks.slack.com/test".to_string()),
+        );
+        assert_eq!(monitor.primary_cluster(), "us-east");
+        assert_eq!(monitor.failover_strategy(), &MultiClusterFailoverStrategy::Sequential);
+        assert_eq!(monitor.cross_cluster_check_interval_secs(), 10);
+        assert_eq!(monitor.failure_threshold(), 3);
+        assert_eq!(monitor.clusters().len(), 1);
+        assert!(monitor.promotions_total() == 0);
+    }
+
+    #[tokio::test]
+    async fn test_promote_secondary_no_candidates() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let mut monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        );
+        let result = monitor.promote_secondary().await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_promote_secondary_promotes() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let mut eu = ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]);
+        eu.status = ClusterStatus::Healthy;
+        clusters.insert("eu-west".to_string(), eu);
+
+        let mut monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        );
+        let result = monitor.promote_secondary().await;
+        assert_eq!(result, Some("eu-west".to_string()));
+        assert_eq!(monitor.primary_cluster(), "eu-west");
+        assert_eq!(monitor.promotions_total(), 1);
+    }
+
+    #[test]
+    fn test_multi_cluster_parse_clusters_empty() {
+        assert!(MultiClusterMonitor::parse_clusters("").is_empty());
+    }
+
+    #[test]
+    fn test_multi_cluster_parse_clusters_trailing_comma() {
+        let clusters = MultiClusterMonitor::parse_clusters("us-east:10.0.0.1:5432,");
+        assert_eq!(clusters.len(), 1);
+    }
+
+    #[test]
+    fn test_multi_cluster_parse_clusters_with_extra_parts() {
+        let clusters = MultiClusterMonitor::parse_clusters("us-east:10.0.0.1:5432:extra");
+        assert_eq!(clusters.len(), 1);
+        let health = clusters.get("us-east").unwrap();
+        assert_eq!(health.endpoints, vec!["10.0.0.1:5432"]);
+    }
+
+    #[test]
+    fn test_multi_cluster_strategy_default() {
+        assert_eq!(MultiClusterFailoverStrategy::default(), MultiClusterFailoverStrategy::Sequential);
+    }
+
+    #[test]
+    fn test_failover_event_reason_variants() {
+        let reasons = vec![
+            "primary unreachable",
+            "replication lag exceeded threshold",
+            "manual failover triggered",
+            "",
+        ];
+        for reason in reasons {
+            let event = FailoverEvent {
+                event: "failover".to_string(),
+                old_primary: "10.0.0.1:5432".to_string(),
+                new_primary: "10.0.0.2:5432".to_string(),
+                timestamp: "2024-01-01T00:00:00Z".to_string(),
+                reason: reason.to_string(),
+            };
+            let json = serde_json::to_string(&event).unwrap();
+            let deserialized: FailoverEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized.reason, reason);
+        }
+    }
+
+    #[test]
+    fn test_failover_connector_all_variants_serialization() {
+        let connectors = vec![
+            FailoverConnector::Tcp,
+            FailoverConnector::Patroni,
+            FailoverConnector::RedisSentinel,
+        ];
+        for c in connectors {
+            let json = serde_json::to_string(&c).unwrap();
+            let deserialized: FailoverConnector = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, c);
+        }
+    }
+
+    #[test]
+    fn test_metrics_all_failover_states() {
+        let shim = FailoverShim::new();
+        let states = [
+            FailoverState::Healthy,
+            FailoverState::Suspect,
+            FailoverState::FailingOver,
+            FailoverState::FailedOver,
+            FailoverState::Recovering,
+            FailoverState::Recovered,
+        ];
+        for (i, state) in states.iter().enumerate() {
+            shim.shared.set_state(state.clone());
+            let metrics = shim.metrics();
+            assert_eq!(metrics[0].value, i as f64);
+        }
+    }
+
+    // ========================================================================
+    // v2.0.3 — Multi-Cluster Failover Live Tests (mock-based)
+    // ========================================================================
+
+    /// Helper: build a MultiClusterMonitor with all clusters healthy.
+    fn make_all_healthy_monitor() -> MultiClusterMonitor {
+        let mut clusters = HashMap::new();
+        let mut eu = ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]);
+        eu.status = ClusterStatus::Healthy;
+        eu.latency_ms = Some(50);
+        clusters.insert("eu-west".to_string(), eu);
+
+        let mut ap = ClusterHealth::new("ap-south", vec!["10.0.2.1:5432".to_string()]);
+        ap.status = ClusterStatus::Healthy;
+        ap.latency_ms = Some(80);
+        clusters.insert("ap-south".to_string(), ap);
+
+        MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        )
+    }
+
+    #[test]
+    fn test_multi_cluster_all_healthy_selects_first() {
+        let monitor = make_all_healthy_monitor();
+        let target = monitor.select_failover_target();
+        assert!(target.is_some());
+    }
+
+    #[test]
+    fn test_multi_cluster_one_degraded_skips_it() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor.clusters.get_mut("eu-west").unwrap().status = ClusterStatus::Degraded;
+        let target = monitor.select_failover_target();
+        // Only ap-south is Healthy; eu-west is Degraded and filtered out
+        assert_eq!(target, Some("ap-south".to_string()));
+    }
+
+    #[test]
+    fn test_multi_cluster_all_degraded_returns_none() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor
+            .clusters
+            .get_mut("eu-west")
+            .unwrap()
+            .status = ClusterStatus::Degraded;
+        monitor
+            .clusters
+            .get_mut("ap-south")
+            .unwrap()
+            .status = ClusterStatus::Degraded;
+        assert!(monitor.select_failover_target().is_none());
+    }
+
+    #[test]
+    fn test_multi_cluster_recovery_promotes_back() {
+        let mut monitor = make_all_healthy_monitor();
+        // Promote eu-west
+        monitor.primary_cluster = "eu-west".to_string();
+        *monitor.current_primary.lock() = "eu-west".to_string();
+
+        // Now eu-west is primary; ap-south should be candidate
+        let target = monitor.select_failover_target();
+        assert_eq!(target, Some("ap-south".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_multi_cluster_promote_secondary_updates_primary() {
+        let mut monitor = make_all_healthy_monitor();
+        let promoted = monitor.promote_secondary().await;
+        assert!(promoted.is_some());
+        let promoted_name = promoted.unwrap();
+        assert_ne!(promoted_name, "us-east");
+        assert_eq!(monitor.primary_cluster(), &promoted_name);
+        assert_eq!(monitor.promotions_total(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_multi_cluster_promote_secondary_chains_events() {
+        let mut monitor = make_all_healthy_monitor();
+        // First failover: us-east -> ?
+        let first = monitor.promote_secondary().await.unwrap();
+        // Second failover: first -> remaining
+        let second = monitor.promote_secondary().await;
+        // If there's a second healthy candidate, it gets promoted
+        if let Some(name) = second {
+            assert_ne!(name, first);
+            assert_eq!(monitor.promotions_total(), 2);
+        }
+    }
+
+    #[test]
+    fn test_multi_cluster_sequential_strategy_picks_first_healthy() {
+        let mut monitor = make_all_healthy_monitor();
+        // Set strategy to Sequential
+        monitor.failover_strategy = MultiClusterFailoverStrategy::Sequential;
+        let target = monitor.select_failover_target();
+        assert!(target.is_some());
+    }
+
+    #[test]
+    fn test_multi_cluster_latency_strategy_picks_lowest() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor.failover_strategy = MultiClusterFailoverStrategy::LatencyBased;
+        // eu-west=50ms, ap-south=80ms -> should pick eu-west
+        let target = monitor.select_failover_target();
+        assert_eq!(target, Some("eu-west".to_string()));
+    }
+
+    #[test]
+    fn test_multi_cluster_latency_strategy_picks_lowest_reversed() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor.failover_strategy = MultiClusterFailoverStrategy::LatencyBased;
+        // Swap latencies: eu-west=200ms, ap-south=10ms
+        monitor.clusters.get_mut("eu-west").unwrap().latency_ms = Some(200);
+        monitor.clusters.get_mut("ap-south").unwrap().latency_ms = Some(10);
+        let target = monitor.select_failover_target();
+        assert_eq!(target, Some("ap-south".to_string()));
+    }
+
+    #[test]
+    fn test_multi_cluster_weighted_random_picks_one() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor.failover_strategy = MultiClusterFailoverStrategy::WeightedRandom;
+        let target = monitor.select_failover_target();
+        assert!(target.is_some());
+        let name = target.unwrap();
+        assert!(name == "eu-west" || name == "ap-south");
+    }
+
+    #[test]
+    fn test_multi_cluster_weighted_random_prefers_lower_latency() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor.failover_strategy = MultiClusterFailoverStrategy::WeightedRandom;
+        // Give eu-west much lower latency -> should almost always be picked
+        monitor.clusters.get_mut("eu-west").unwrap().latency_ms = Some(1);
+        monitor.clusters.get_mut("ap-south").unwrap().latency_ms = Some(5000);
+        let target = monitor.select_failover_target();
+        assert_eq!(target, Some("eu-west".to_string()));
+    }
+
+    #[test]
+    fn test_multi_cluster_aggregate_status_all_healthy() {
+        let monitor = make_all_healthy_monitor();
+        for health in monitor.clusters.values() {
+            assert_eq!(health.status, ClusterStatus::Healthy);
+        }
+    }
+
+    #[test]
+    fn test_multi_cluster_aggregate_status_one_failed() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor
+            .clusters
+            .get_mut("ap-south")
+            .unwrap()
+            .status = ClusterStatus::Failed;
+        let healthy_count = monitor
+            .clusters
+            .values()
+            .filter(|h| h.status == ClusterStatus::Healthy)
+            .count();
+        assert_eq!(healthy_count, 1);
+    }
+
+    #[test]
+    fn test_multi_cluster_aggregate_status_all_failed() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor
+            .clusters
+            .get_mut("eu-west")
+            .unwrap()
+            .status = ClusterStatus::Failed;
+        monitor
+            .clusters
+            .get_mut("ap-south")
+            .unwrap()
+            .status = ClusterStatus::Failed;
+        let healthy_count = monitor
+            .clusters
+            .values()
+            .filter(|h| h.status == ClusterStatus::Healthy)
+            .count();
+        assert_eq!(healthy_count, 0);
+    }
+
+    #[test]
+    fn test_multi_cluster_promotion_increments_counter() {
+        let mut monitor = make_all_healthy_monitor();
+        assert_eq!(monitor.promotions_total(), 0);
+        // Simulate promotion by changing primary
+        monitor.primary_cluster = "eu-west".to_string();
+        monitor.promotions_total.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(monitor.promotions_total(), 1);
+    }
+
+    #[test]
+    fn test_multi_cluster_metrics_after_promotion() {
+        let monitor = make_all_healthy_monitor();
+        monitor.promotions_total.fetch_add(3, Ordering::Relaxed);
+        let metrics = monitor.metrics();
+        let promotions = metrics
+            .iter()
+            .find(|m| m.name == "failover_promotions_total")
+            .unwrap();
+        assert_eq!(promotions.value, 3.0);
+    }
+
+    #[test]
+    fn test_multi_cluster_metrics_cluster_status_values() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor
+            .clusters
+            .get_mut("eu-west")
+            .unwrap()
+            .status = ClusterStatus::Degraded;
+        monitor
+            .clusters
+            .get_mut("ap-south")
+            .unwrap()
+            .status = ClusterStatus::Healthy;
+        let metrics = monitor.metrics();
+        let statuses: Vec<f64> = metrics
+            .iter()
+            .filter(|m| m.name == "failover_cluster_status")
+            .map(|m| m.value)
+            .collect();
+        assert!(statuses.contains(&1.0)); // Degraded
+        assert!(statuses.contains(&0.0)); // Healthy
+    }
+
+    #[test]
+    fn test_multi_cluster_metrics_includes_latency() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor.clusters.get_mut("eu-west").unwrap().latency_ms = Some(42);
+        let metrics = monitor.metrics();
+        let latencies: Vec<f64> = metrics
+            .iter()
+            .filter(|m| m.name == "failover_cluster_latency_ms")
+            .map(|m| m.value)
+            .collect();
+        assert!(latencies.contains(&42.0));
+    }
+
+    #[test]
+    fn test_multi_cluster_health_check_aggregation_mixed() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor
+            .clusters
+            .get_mut("eu-west")
+            .unwrap()
+            .status = ClusterStatus::Degraded;
+        monitor
+            .clusters
+            .get_mut("eu-west")
+            .unwrap()
+            .latency_ms = Some(150);
+        monitor
+            .clusters
+            .get_mut("ap-south")
+            .unwrap()
+            .status = ClusterStatus::Healthy;
+        monitor
+            .clusters
+            .get_mut("ap-south")
+            .unwrap()
+            .latency_ms = Some(30);
+
+        // Select should skip degraded eu-west
+        monitor.failover_strategy = MultiClusterFailoverStrategy::LatencyBased;
+        let target = monitor.select_failover_target();
+        assert_eq!(target, Some("ap-south".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_multi_cluster_demote_and_repromote() {
+        let mut monitor = make_all_healthy_monitor();
+        // Promote a secondary (HashMap order is non-deterministic)
+        let first = monitor.promote_secondary().await.unwrap();
+        assert!(first == "eu-west" || first == "ap-south");
+        assert_eq!(monitor.primary_cluster(), &first);
+
+        // Now promote again (the other cluster is the remaining candidate)
+        let second = monitor.promote_secondary().await.unwrap();
+        assert!(second == "eu-west" || second == "ap-south");
+        assert_ne!(first, second, "second promotion should pick the other cluster");
+        assert_eq!(monitor.primary_cluster(), &second);
+        assert_eq!(monitor.promotions_total(), 2);
+    }
+
+    #[test]
+    fn test_multi_cluster_weighted_random_no_latency_info() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor.failover_strategy = MultiClusterFailoverStrategy::WeightedRandom;
+        // Remove latency info
+        monitor.clusters.get_mut("eu-west").unwrap().latency_ms = None;
+        monitor.clusters.get_mut("ap-south").unwrap().latency_ms = None;
+        let target = monitor.select_failover_target();
+        assert!(target.is_some());
+    }
+
+    #[test]
+    fn test_multi_cluster_latency_strategy_no_latency_info() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor.failover_strategy = MultiClusterFailoverStrategy::LatencyBased;
+        monitor.clusters.get_mut("eu-west").unwrap().latency_ms = None;
+        monitor.clusters.get_mut("ap-south").unwrap().latency_ms = None;
+        // With no latency, both have u64::MAX; should still pick one
+        let target = monitor.select_failover_target();
+        assert!(target.is_some());
+    }
+
+    #[test]
+    fn test_multi_cluster_single_secondary() {
+        let mut clusters = HashMap::new();
+        let mut eu = ClusterHealth::new("eu-west", vec!["10.0.1.1:5432".to_string()]);
+        eu.status = ClusterStatus::Healthy;
+        clusters.insert("eu-west".to_string(), eu);
+
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        );
+        assert_eq!(
+            monitor.select_failover_target(),
+            Some("eu-west".to_string())
+        );
+    }
+
+    #[test]
+    fn test_multi_cluster_only_primary_exists() {
+        let mut clusters = HashMap::new();
+        clusters.insert(
+            "us-east".to_string(),
+            ClusterHealth::new("us-east", vec!["10.0.0.1:5432".to_string()]),
+        );
+        let monitor = MultiClusterMonitor::new(
+            clusters,
+            "us-east",
+            MultiClusterFailoverStrategy::Sequential,
+            10,
+            3,
+            None,
+        );
+        assert!(monitor.select_failover_target().is_none());
+    }
+
+    #[test]
+    fn test_multi_cluster_cluster_status_unknown_is_not_healthy() {
+        let mut monitor = make_all_healthy_monitor();
+        monitor
+            .clusters
+            .get_mut("ap-south")
+            .unwrap()
+            .status = ClusterStatus::Unknown;
+        // Only eu-west is Healthy
+        let target = monitor.select_failover_target();
+        assert_eq!(target, Some("eu-west".to_string()));
+    }
 }

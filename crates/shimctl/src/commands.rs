@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
+use clap_complete::Shell;
 
 use crate::client::ManagementClient;
 
@@ -30,6 +31,13 @@ pub enum Command {
     Migration {
         #[command(subcommand)]
         action: MigrationAction,
+    },
+
+    /// Generate shell completion scripts
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }
 
@@ -69,6 +77,11 @@ pub enum MigrationAction {
 
 pub async fn execute(command: Command, client: &ManagementClient) -> Result<()> {
     match command {
+        Command::Completion { shell } => {
+            let mut cmd = <crate::Cli as clap::CommandFactory>::command();
+            clap_complete::generate(shell, &mut cmd, "shimctl", &mut std::io::stdout());
+            return Ok(());
+        }
         Command::Status => {
             let status = client.get_status().await?;
             println!("Shim Status:");

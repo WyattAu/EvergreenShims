@@ -30,6 +30,7 @@ dirs.workspace = true
 nix.workspace = true
 parking_lot.workspace = true
 axum.workspace = true
+cron.workspace = true
 notify = "7"
 reqwest = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }

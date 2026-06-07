@@ -767,6 +767,112 @@ impl Config {
         errors
     }
 
+    /// Validate the configuration schema with strict type and range checks.
+    ///
+    /// This method validates beyond what [`validate`](Self::validate) checks:
+    /// - Port numbers are within 1..=65535
+    /// - Cron expressions are parseable (not just 5 fields)
+    /// - File paths are non-empty
+    /// - URL schemes are strictly http or https
+    /// - Numeric ranges are within valid bounds
+    pub fn validate_schema(&self) -> Vec<ConfigValidationError> {
+        let mut errors = self.validate();
+
+        // --- health.listen: extract and validate port range ---
+        if let Ok(addr) = self.health.listen.parse::<std::net::SocketAddr>() {
+            let port = addr.port();
+            if port == 0 {
+                errors.push(ConfigValidationError {
+                    field: "health.listen".into(),
+                    message: format!("port {} is out of range 1-65535", port),
+                });
+            }
+        }
+
+        // --- migration.db_port: strict range check ---
+        if let Some(ref migration) = self.migration {
+            if migration.db_port == 0 {
+                errors.push(ConfigValidationError {
+                    field: "migration.db_port".into(),
+                    message: format!("port {} is out of valid range 1-65535", migration.db_port),
+                });
+            }
+        }
+
+        // --- backup.schedule: validate cron is actually parseable ---
+        if let Some(ref backup) = self.backup {
+            if !backup.schedule.is_empty() {
+                if let Err(e) = backup.schedule.parse::<cron::Schedule>() {
+                    errors.push(ConfigValidationError {
+                        field: "backup.schedule".into(),
+                        message: format!("cron parse error: {}", e),
+                    });
+                }
+            }
+        }
+
+        // --- backup.storage: must not be empty ---
+        if let Some(ref backup) = self.backup {
+            if backup.storage.is_empty() {
+                errors.push(ConfigValidationError {
+                    field: "backup.storage".into(),
+                    message: "storage backend must not be empty".into(),
+                });
+            }
+        }
+
+        // --- vault.addr: strict URL scheme validation ---
+        if let Some(ref vault) = self.vault {
+            if !vault.addr.starts_with("http://") && !vault.addr.starts_with("https://") {
+                errors.push(ConfigValidationError {
+                    field: "vault.addr".into(),
+                    message: format!(
+                        "URL scheme must be http:// or https://, got '{}'",
+                        &vault.addr[..vault.addr.find("://").unwrap_or(vault.addr.len())]
+                    ),
+                });
+            }
+        }
+
+        // --- failover: webhook URL scheme validation ---
+        if let Some(ref failover) = self.failover {
+            if let Some(ref webhook) = failover.webhook {
+                if !webhook.is_empty()
+                    && !webhook.starts_with("http://")
+                    && !webhook.starts_with("https://")
+                {
+                    errors.push(ConfigValidationError {
+                        field: "failover.webhook".into(),
+                        message: format!(
+                            "webhook URL scheme must be http:// or https://, got '{}'",
+                            webhook
+                        ),
+                    });
+                }
+            }
+        }
+
+        // --- migration.dir: must be non-empty path ---
+        if let Some(ref migration) = self.migration {
+            if migration.dir.as_os_str().is_empty() {
+                errors.push(ConfigValidationError {
+                    field: "migration.dir".into(),
+                    message: "migration directory path must not be empty".into(),
+                });
+            }
+        }
+
+        // --- process.command: must not be empty ---
+        if self.process.command.is_empty() && self.process.working_dir.is_some() {
+            errors.push(ConfigValidationError {
+                field: "process.command".into(),
+                message: "command must not be empty when working_dir is set".into(),
+            });
+        }
+
+        errors
+    }
+
     /// Merge another config into this one (env overrides file).
     ///
     /// Uses `std::env::var().is_ok()` to check whether an env var is present,
@@ -853,7 +959,8 @@ fn is_valid_url(s: &str) -> bool {
 }
 
 fn is_valid_cron(expr: &str) -> bool {
-    expr.split_whitespace().count() == 5
+    let count = expr.split_whitespace().count();
+    count == 5 || count == 6 || count == 7
 }
 
 #[cfg(test)]
@@ -1585,5 +1692,173 @@ listen = "127.0.0.1:8080"
         assert_eq!(deser.process.command, "my-app");
         assert_eq!(deser.process.args, vec!["--verbose", "--port=8080"]);
         assert_eq!(deser.process.shutdown_timeout_secs, 60);
+    }
+
+    // --- validate_schema tests ---
+
+    #[test]
+    fn test_validate_schema_default_config_passes() {
+        let config = Config::default();
+        assert!(config.validate_schema().is_empty());
+    }
+
+    #[test]
+    fn test_validate_schema_port_out_of_range() {
+        let mut config = Config::default();
+        config.health.listen = "0.0.0.0:70000".into();
+        let errors = config.validate_schema();
+        assert!(errors.iter().any(|e| e.field == "health.listen"));
+    }
+
+    #[test]
+    fn test_validate_schema_migration_port_zero() {
+        let mut config = Config::default();
+        config.migration = Some(MigrationConfig {
+            dir: std::path::PathBuf::from("/tmp"),
+            database: "mydb".into(),
+            auto_migrate: false,
+            db_host: "127.0.0.1".into(),
+            db_port: 0,
+            db_user: "postgres".into(),
+            db_password: "".into(),
+            db_type: "postgres".into(),
+        });
+        let errors = config.validate_schema();
+        assert!(errors.iter().any(|e| e.field == "migration.db_port"));
+    }
+
+    #[test]
+    fn test_validate_schema_invalid_cron_expression() {
+        let mut config = Config::default();
+        config.backup = Some(BackupConfig {
+            schedule: "not-a-valid-cron".into(),
+            storage: "s3".into(),
+            retention_days: 7,
+            database: "mydb".into(),
+            prefix: "".into(),
+        });
+        let errors = config.validate_schema();
+        assert!(errors.iter().any(|e| e.field == "backup.schedule"));
+    }
+
+    #[test]
+    fn test_validate_schema_valid_cron_expression() {
+        let mut config = Config::default();
+        config.backup = Some(BackupConfig {
+            schedule: "0 0 2 * * *".into(),
+            storage: "s3".into(),
+            retention_days: 7,
+            database: "mydb".into(),
+            prefix: "".into(),
+        });
+        let errors = config.validate_schema();
+        assert!(errors.is_empty(), "Expected no errors, got: {:?}", errors);
+    }
+
+    #[test]
+    fn test_validate_schema_empty_backup_storage() {
+        let mut config = Config::default();
+        config.backup = Some(BackupConfig {
+            schedule: "0 2 * * *".into(),
+            storage: "".into(),
+            retention_days: 7,
+            database: "mydb".into(),
+            prefix: "".into(),
+        });
+        let errors = config.validate_schema();
+        assert!(errors.iter().any(|e| e.field == "backup.storage"));
+    }
+
+    #[test]
+    fn test_validate_schema_vault_invalid_url_scheme() {
+        let mut config = Config::default();
+        config.vault = Some(VaultConfig {
+            addr: "ftp://vault.local".into(),
+            role: "test".into(),
+            secret: "secret/data".into(),
+            rotation_secs: 3600,
+        });
+        let errors = config.validate_schema();
+        assert!(errors.iter().any(|e| e.field == "vault.addr"));
+    }
+
+    #[test]
+    fn test_validate_schema_failover_webhook_invalid_scheme() {
+        let mut config = Config::default();
+        config.failover = Some(FailoverConfig {
+            primary: "10.0.0.1:5432".into(),
+            replica: "10.0.0.2:5432".into(),
+            check_interval_secs: 5,
+            timeout_secs: 10,
+            failure_threshold: 3,
+            webhook: Some("ftp://hooks.example.com".into()),
+            db_type: "postgres".into(),
+        });
+        let errors = config.validate_schema();
+        assert!(errors.iter().any(|e| e.field == "failover.webhook"));
+    }
+
+    #[test]
+    fn test_validate_schema_failover_webhook_valid() {
+        let mut config = Config::default();
+        config.failover = Some(FailoverConfig {
+            primary: "10.0.0.1:5432".into(),
+            replica: "10.0.0.2:5432".into(),
+            check_interval_secs: 5,
+            timeout_secs: 10,
+            failure_threshold: 3,
+            webhook: Some("https://hooks.example.com".into()),
+            db_type: "postgres".into(),
+        });
+        let errors = config.validate_schema();
+        assert!(!errors.iter().any(|e| e.field == "failover.webhook"));
+    }
+
+    #[test]
+    fn test_validate_schema_empty_migration_dir() {
+        let mut config = Config::default();
+        config.migration = Some(MigrationConfig {
+            dir: std::path::PathBuf::new(),
+            database: "mydb".into(),
+            auto_migrate: false,
+            db_host: "127.0.0.1".into(),
+            db_port: 5432,
+            db_user: "postgres".into(),
+            db_password: "".into(),
+            db_type: "postgres".into(),
+        });
+        let errors = config.validate_schema();
+        assert!(errors.iter().any(|e| e.field == "migration.dir"));
+    }
+
+    #[test]
+    fn test_validate_schema_multiple_errors_collected() {
+        let mut config = Config::default();
+        config.health.listen = "0.0.0.0:70000".into();
+        config.backup = Some(BackupConfig {
+            schedule: "bad".into(),
+            storage: "".into(),
+            retention_days: 0,
+            database: "mydb".into(),
+            prefix: "".into(),
+        });
+        let errors = config.validate_schema();
+        assert!(errors.len() >= 3);
+    }
+
+    #[test]
+    fn test_validate_schema_health_valid_custom_port() {
+        let mut config = Config::default();
+        config.health.listen = "127.0.0.1:8080".into();
+        let errors = config.validate_schema();
+        assert!(!errors.iter().any(|e| e.field == "health.listen"));
+    }
+
+    #[test]
+    fn test_validate_schema_health_port_zero() {
+        let mut config = Config::default();
+        config.health.listen = "0.0.0.0:0".into();
+        let errors = config.validate_schema();
+        assert!(errors.iter().any(|e| e.field == "health.listen"));
     }
 }

@@ -1,0 +1,145 @@
+# EvergreenShims Interactive Playground
+#
+# Usage:
+#   docker compose -f docker-compose.playground.yml up -d
+#   docker compose -f docker-compose.playground.yml logs -f
+#
+# Services:
+#   - postgres: PostgreSQL 16 with health checks
+#   - redis: Redis 7 with health checks
+#   - minio: S3-compatible object storage (console at http://localhost:9001)
+#   - health-shim: Health-check sidecar connected to PostgreSQL
+#   - db-shim: Database shim with vault + backup + migration features
+#
+# Volumes persist migration files and backups across restarts.
+# Networks isolate service tiers (data-tier vs app-tier).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shim_user
+      POSTGRES_PASSWORD: shim_pass
+      POSTGRES_DB: playground
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shim_user -d playground"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - data-tier
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - data-tier
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-tier
+
+  health-shim:
+    build:
+      context: .
+      dockerfile: Dockerfile.shim-image
+    environment:
+      HEALTH_LISTEN: "0.0.0.0:9101"
+      HEALTH_CMD: "pg_isready -h postgres -p 5432 -U shim_user -d playground"
+      HEALTH_INTERVAL_SECS: "5"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: shim_user
+      DB_PASSWORD: shim_pass
+      DB_NAME: playground
+      PROCESS_COMMAND: "sleep"
+      PROCESS_ARGS: "infinity"
+    ports:
+      - "9101:9101"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-tier
+      - data-tier
+
+  db-shim:
+    build:
+      context: .
+      dockerfile: Dockerfile.shim-image
+    environment:
+      HEALTH_LISTEN: "0.0.0.0:9102"
+      HEALTH_CMD: "pg_isready -h postgres -p 5432 -U shim_user -d playground"
+      HEALTH_INTERVAL_SECS: "10"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: shim_user
+      DB_PASSWORD: shim_pass
+      DB_NAME: playground
+      PROCESS_COMMAND: "sleep"
+      PROCESS_ARGS: "infinity"
+      VAULT_ADDR: "https://vault.example.com"
+      VAULT_ROLE: "db-shim"
+      VAULT_SECRET: "secret/data/db"
+      BACKUP_SCHEDULE: "0 2 * * *"
+      BACKUP_STORAGE: "s3"
+      BACKUP_S3_ENDPOINT: "http://minio:9000"
+      MIGRATION_DIR: /migrations
+      MIGRATION_AUTO_MIGRATE: "true"
+    ports:
+      - "9102:9102"
+    volumes:
+      - ./migrations:/migrations:ro
+      - backupdata:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - app-tier
+      - data-tier
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  backupdata:
+
+networks:
+  data-tier:
+    driver: bridge
+  app-tier:
+    driver: bridge

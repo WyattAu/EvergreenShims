@@ -1031,4 +1031,400 @@ mod tests {
         assert_eq!(metrics[2].name, "compliance_score");
         assert_eq!(metrics[2].value, 0.0);
     }
+
+    // --- Additional coverage tests ---
+
+    #[test]
+    fn test_run_checks_all_fail() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::High));
+        shim.add_check(make_check("C002", false, Severity::Medium));
+
+        shim.run_checks();
+        assert_eq!(shim.checks_passed, 0);
+        assert_eq!(shim.checks_failed, 2);
+        assert_eq!(shim.compliance_score, 0.0);
+        assert_eq!(shim.violations.len(), 2);
+    }
+
+    #[test]
+    fn test_run_checks_single_check_pass() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", true, Severity::Critical));
+        shim.run_checks();
+        assert_eq!(shim.compliance_score, 100.0);
+        assert_eq!(shim.violations.len(), 0);
+    }
+
+    #[test]
+    fn test_run_checks_single_check_fail() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::Critical));
+        shim.run_checks();
+        assert_eq!(shim.compliance_score, 0.0);
+        assert_eq!(shim.violations.len(), 1);
+    }
+
+    #[test]
+    fn test_meets_threshold_zero() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::High));
+        shim.run_checks();
+        assert!(shim.meets_threshold(0.0));
+    }
+
+    #[test]
+    fn test_meets_threshold_below_zero() {
+        let shim = ComplianceShim::new();
+        assert!(shim.meets_threshold(-1.0));
+    }
+
+    #[test]
+    fn test_meets_threshold_boundary_50_percent() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", true, Severity::High));
+        shim.add_check(make_check("C002", false, Severity::High));
+        shim.run_checks();
+        assert!(shim.meets_threshold(50.0));
+        assert!(!shim.meets_threshold(50.1));
+    }
+
+    #[test]
+    fn test_severity_from_str_invalid() {
+        assert!("invalid".parse::<Severity>().is_err());
+        assert!("".parse::<Severity>().is_err());
+        assert!("WARNING".parse::<Severity>().is_err());
+    }
+
+    #[test]
+    fn test_severity_display_all_variants() {
+        assert_eq!(format!("{}", Severity::Info), "info");
+        assert_eq!(format!("{}", Severity::Low), "low");
+        assert_eq!(format!("{}", Severity::Medium), "medium");
+        assert_eq!(format!("{}", Severity::High), "high");
+        assert_eq!(format!("{}", Severity::Critical), "critical");
+    }
+
+    #[test]
+    fn test_severity_from_str_case_insensitive() {
+        assert_eq!("INFO".parse::<Severity>().unwrap(), Severity::Info);
+        assert_eq!("LOW".parse::<Severity>().unwrap(), Severity::Low);
+        assert_eq!("MEDIUM".parse::<Severity>().unwrap(), Severity::Medium);
+        assert_eq!("HIGH".parse::<Severity>().unwrap(), Severity::High);
+        assert_eq!("CRITICAL".parse::<Severity>().unwrap(), Severity::Critical);
+        assert_eq!("Info".parse::<Severity>().unwrap(), Severity::Info);
+    }
+
+    #[test]
+    fn test_generate_report_empty() {
+        let shim = ComplianceShim::new();
+        let report = shim.generate_report();
+        assert_eq!(report.total_checks, 0);
+        assert_eq!(report.passed, 0);
+        assert_eq!(report.failed, 0);
+        assert!(report.violations.is_empty());
+        assert_eq!(report.benchmark, "cis");
+        assert_eq!(report.db_type, "postgres");
+    }
+
+    #[test]
+    fn test_generate_report_all_pass() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", true, Severity::High));
+        shim.add_check(make_check("C002", true, Severity::Medium));
+        shim.run_checks();
+
+        let report = shim.generate_report();
+        assert_eq!(report.total_checks, 2);
+        assert_eq!(report.passed, 2);
+        assert_eq!(report.failed, 0);
+        assert!(report.violations.is_empty());
+        assert_eq!(report.score, 100.0);
+    }
+
+    #[test]
+    fn test_generate_report_all_fail() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::High));
+        shim.add_check(make_check("C002", false, Severity::Low));
+        shim.run_checks();
+
+        let report = shim.generate_report();
+        assert_eq!(report.total_checks, 2);
+        assert_eq!(report.passed, 0);
+        assert_eq!(report.failed, 2);
+        assert_eq!(report.score, 0.0);
+    }
+
+    #[test]
+    fn test_violations_by_severity_all_levels() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::Info));
+        shim.add_check(make_check("C002", false, Severity::Low));
+        shim.add_check(make_check("C003", false, Severity::Medium));
+        shim.add_check(make_check("C004", false, Severity::High));
+        shim.add_check(make_check("C005", false, Severity::Critical));
+        shim.run_checks();
+
+        assert_eq!(shim.violations_by_severity(&Severity::Info).len(), 5);
+        assert_eq!(shim.violations_by_severity(&Severity::Low).len(), 4);
+        assert_eq!(shim.violations_by_severity(&Severity::Medium).len(), 3);
+        assert_eq!(shim.violations_by_severity(&Severity::High).len(), 2);
+        assert_eq!(shim.violations_by_severity(&Severity::Critical).len(), 1);
+    }
+
+    #[test]
+    fn test_violation_counts_empty() {
+        let shim = ComplianceShim::new();
+        let counts = shim.violation_counts();
+        assert!(counts.is_empty());
+    }
+
+    #[test]
+    fn test_violation_counts_after_resolution() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::High));
+        shim.add_check(make_check("C002", false, Severity::High));
+        shim.add_check(make_check("C003", false, Severity::Low));
+        shim.run_checks();
+        shim.resolve_violation("C001");
+
+        let counts = shim.violation_counts();
+        assert_eq!(*counts.get(&Severity::High).unwrap(), 1);
+        assert_eq!(*counts.get(&Severity::Low).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_resolve_violation_multiple() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::High));
+        shim.add_check(make_check("C002", false, Severity::Medium));
+        shim.run_checks();
+
+        assert_eq!(shim.unresolved_count(), 2);
+        assert!(shim.resolve_violation("C001"));
+        assert_eq!(shim.unresolved_count(), 1);
+        assert!(shim.resolve_violation("C002"));
+        assert_eq!(shim.unresolved_count(), 0);
+    }
+
+    #[test]
+    fn test_compliance_shim_new_env_benchmark() {
+        temp_env::with_var("COMPLIANCE_BENCHMARK", Some("stig"), || {
+            let shim = ComplianceShim::new();
+            assert_eq!(shim.benchmark, "stig");
+        });
+    }
+
+    #[test]
+    fn test_compliance_shim_new_env_db_type() {
+        temp_env::with_var("COMPLIANCE_DB_TYPE", Some("mariadb"), || {
+            let shim = ComplianceShim::new();
+            assert_eq!(shim.db_type, "mariadb");
+        });
+    }
+
+    #[test]
+    fn test_compliance_shim_new_env_severity() {
+        temp_env::with_var("COMPLIANCE_SEVERITY", Some("high"), || {
+            let shim = ComplianceShim::new();
+            assert_eq!(shim.min_severity, Severity::High);
+        });
+    }
+
+    #[test]
+    fn test_compliance_shim_new_env_report_format() {
+        temp_env::with_var("COMPLIANCE_REPORT", Some("text"), || {
+            let shim = ComplianceShim::new();
+            assert_eq!(shim.report_format, "text");
+        });
+    }
+
+    #[test]
+    fn test_compliance_shim_new_env_output() {
+        temp_env::with_var("COMPLIANCE_OUTPUT", Some("file"), || {
+            let shim = ComplianceShim::new();
+            assert_eq!(shim.output, "file");
+        });
+    }
+
+    #[test]
+    fn test_compliance_shim_new_defaults() {
+        temp_env::with_vars(
+            [
+                ("COMPLIANCE_BENCHMARK", None::<&str>),
+                ("COMPLIANCE_DB_TYPE", None::<&str>),
+                ("COMPLIANCE_SEVERITY", None::<&str>),
+                ("COMPLIANCE_REPORT", None::<&str>),
+                ("COMPLIANCE_OUTPUT", None::<&str>),
+            ],
+            || {
+                let shim = ComplianceShim::new();
+                assert_eq!(shim.benchmark, "cis");
+                assert_eq!(shim.db_type, "postgres");
+                assert_eq!(shim.min_severity, Severity::Info);
+                assert_eq!(shim.report_format, "json");
+                assert_eq!(shim.output, "stdout");
+            },
+        );
+    }
+
+    #[test]
+    fn test_compliance_check_serialization_roundtrip() {
+        let check = ComplianceCheck {
+            id: "CIS-POSTGRES-001".to_string(),
+            description: "Test check".to_string(),
+            benchmark: "cis".to_string(),
+            severity: Severity::High,
+            passed: true,
+            evidence: "test evidence".to_string(),
+            remediation: "Fix it".to_string(),
+        };
+        let json = serde_json::to_string(&check).unwrap();
+        let deserialized: ComplianceCheck = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, "CIS-POSTGRES-001");
+        assert_eq!(deserialized.severity, Severity::High);
+        assert!(deserialized.passed);
+    }
+
+    #[test]
+    fn test_violation_serialization_roundtrip() {
+        let violation = Violation {
+            check_id: "C001".to_string(),
+            description: "Test violation".to_string(),
+            severity: Severity::Critical,
+            detected_at: "2024-01-01T00:00:00Z".to_string(),
+            evidence: "evidence".to_string(),
+            remediation: "remediation".to_string(),
+            resolved: false,
+        };
+        let json = serde_json::to_string(&violation).unwrap();
+        let deserialized: Violation = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.check_id, "C001");
+        assert_eq!(deserialized.severity, Severity::Critical);
+        assert!(!deserialized.resolved);
+    }
+
+    #[test]
+    fn test_compliance_report_serialization_roundtrip() {
+        let report = ComplianceReport {
+            benchmark: "cis".to_string(),
+            db_type: "postgres".to_string(),
+            generated_at: "2024-01-01T00:00:00Z".to_string(),
+            total_checks: 10,
+            passed: 7,
+            failed: 3,
+            score: 70.0,
+            violations: vec![],
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        let deserialized: ComplianceReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.total_checks, 10);
+        assert_eq!(deserialized.score, 70.0);
+    }
+
+    #[test]
+    fn test_cis_checks_have_severity_levels() {
+        let shim = ComplianceShim {
+            db_type: "postgres".to_string(),
+            ..ComplianceShim::new()
+        };
+        let checks = shim.generate_cis_checks();
+        for check in &checks {
+            assert!(!check.id.is_empty());
+            assert!(!check.description.is_empty());
+            assert!(!check.remediation.is_empty());
+            assert_eq!(check.benchmark, "cis");
+        }
+    }
+
+    #[test]
+    fn test_mariadb_cis_checks_have_severity_levels() {
+        let shim = ComplianceShim {
+            db_type: "mariadb".to_string(),
+            ..ComplianceShim::new()
+        };
+        let checks = shim.generate_cis_checks();
+        for check in &checks {
+            assert!(check.id.starts_with("CIS-MYSQL"));
+            assert!(!check.description.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_redis_stig_checks_have_severity_levels() {
+        let shim = ComplianceShim {
+            db_type: "redis".to_string(),
+            ..ComplianceShim::new()
+        };
+        let checks = shim.generate_cis_checks();
+        for check in &checks {
+            assert!(check.id.starts_with("STIG-REDIS"));
+            assert!(!check.description.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_run_checks_resets_previous_violations() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::High));
+        shim.run_checks();
+        assert_eq!(shim.violations.len(), 1);
+
+        // Now make it pass
+        shim.checks.clear();
+        shim.add_check(make_check("C001", true, Severity::High));
+        shim.run_checks();
+        assert_eq!(shim.violations.len(), 0);
+        assert_eq!(shim.checks_passed, 1);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_after_all_fail() {
+        let mut shim = ComplianceShim::new();
+        shim.add_check(make_check("C001", false, Severity::High));
+        shim.add_check(make_check("C002", false, Severity::High));
+        shim.run_checks();
+
+        let metrics = shim.metrics();
+        assert_eq!(metrics[0].value, 0.0); // passed
+        assert_eq!(metrics[1].value, 2.0); // failed
+        assert_eq!(metrics[2].value, 0.0); // score
+        assert_eq!(metrics[3].value, 2.0); // violations_total
+    }
+
+    #[test]
+    fn test_min_severity_filter_all_blocked() {
+        let mut shim = ComplianceShim {
+            min_severity: Severity::Critical,
+            ..ComplianceShim::new()
+        };
+        shim.add_check(make_check("C001", false, Severity::Info));
+        shim.add_check(make_check("C002", false, Severity::Low));
+        shim.add_check(make_check("C003", false, Severity::Medium));
+        shim.add_check(make_check("C004", false, Severity::High));
+        shim.run_checks();
+        // Only Critical would pass filter, but we have none
+        assert_eq!(shim.violations.len(), 0);
+        assert_eq!(shim.checks_failed, 0);
+    }
+
+    #[test]
+    fn test_min_severity_filter_critical_only() {
+        let mut shim = ComplianceShim {
+            min_severity: Severity::Critical,
+            ..ComplianceShim::new()
+        };
+        shim.add_check(make_check("C001", false, Severity::Critical));
+        shim.add_check(make_check("C002", false, Severity::High));
+        shim.run_checks();
+        assert_eq!(shim.violations.len(), 1);
+        assert_eq!(shim.violations[0].check_id, "C001");
+    }
+
+    #[test]
+    fn test_compliance_shim_name() {
+        let shim = ComplianceShim::new();
+        assert_eq!(shim.name(), "compliance");
+    }
 }

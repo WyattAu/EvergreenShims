@@ -1228,6 +1228,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_complete"
+version = "4.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0a7a9bfdb35811f9e59832f0f05975114d2251b415fb534108e6f34060fd772"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_derive"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1318,6 +1327,7 @@ dependencies = [
  "serde_json",
  "shim-core",
  "sqlx",
+ "temp-env",
  "tokio",
  "toml",
  "tracing",
@@ -4983,6 +4993,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "cron",
  "dirs",
  "nix",
  "notify",
@@ -5031,6 +5042,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "clap_complete",
  "reqwest",
  "serde",
  "serde_json",
@@ -6673,7 +6685,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

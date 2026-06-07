@@ -1210,4 +1210,624 @@ mod tests {
             .unwrap();
         assert_ne!(id1, id2);
     }
+
+    // ======================================================================
+    // Comprehensive chaos-shim tests
+    // ======================================================================
+
+    #[test]
+    fn test_full_experiment_lifecycle() {
+        let mut shim = ChaosShim {
+            enabled: true,
+            latency_ms: 100,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+
+        // Create experiment
+        let exp = shim.start_experiment("lifecycle-test", FaultType::Latency, "all", 1.0, 30);
+        let id = exp.id.clone();
+        assert!(exp.enabled);
+        assert!(exp.started_at.is_some());
+        assert!(exp.ended_at.is_none());
+        assert_eq!(exp.faults_injected, 0);
+
+        // Evaluate (inject faults)
+        let result = shim.evaluate("service-a");
+        assert!(result.injected);
+        assert_eq!(result.fault_type, FaultType::Latency);
+        assert_eq!(result.delay_ms, 100);
+
+        let result = shim.evaluate("service-b");
+        assert!(result.injected);
+
+        // Verify faults counted on shim level
+        assert_eq!(shim.faults_injected, 2);
+
+        // Stop experiment
+        assert!(shim.stop_experiment(&id));
+        let exp = shim.get_experiment(&id).unwrap();
+        assert!(!exp.enabled);
+        assert!(exp.ended_at.is_some());
+
+        // Verify metrics reflect the lifecycle
+        let metrics = shim.metrics();
+        let injected_metric = metrics.iter().find(|m| m.name == "chaos_faults_injected").unwrap();
+        assert!(injected_metric.value > 0.0);
+    }
+
+    #[test]
+    fn test_all_fault_types_evaluation() {
+        // Latency
+        let mut shim = ChaosShim {
+            enabled: true,
+            latency_ms: 200,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+        let result = shim.evaluate("svc");
+        assert!(result.injected);
+        assert_eq!(result.fault_type, FaultType::Latency);
+        assert_eq!(result.delay_ms, 200);
+
+        // Partition
+        let mut shim = ChaosShim {
+            enabled: true,
+            partition: true,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+        let result = shim.evaluate("svc");
+        assert!(result.injected);
+        assert_eq!(result.fault_type, FaultType::Partition);
+
+        // Kill
+        let mut shim = ChaosShim {
+            enabled: true,
+            kill_probability: 1.0,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+        let result = shim.evaluate("svc");
+        assert!(result.injected);
+        assert_eq!(result.fault_type, FaultType::Kill);
+
+        // Error with rate=1.0
+        let mut shim = ChaosShim {
+            enabled: true,
+            error_rate: 1.0,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+        let result = shim.evaluate("svc");
+        assert!(result.injected);
+        assert_eq!(result.fault_type, FaultType::Error);
+    }
+
+    #[test]
+    fn test_fault_type_display_all_variants() {
+        assert_eq!(FaultType::Latency.to_string(), "latency");
+        assert_eq!(FaultType::Error.to_string(), "error");
+        assert_eq!(FaultType::Partition.to_string(), "partition");
+        assert_eq!(FaultType::Kill.to_string(), "kill");
+        assert_eq!(FaultType::PacketLoss.to_string(), "packet_loss");
+    }
+
+    #[test]
+    fn test_fault_type_serialization_roundtrip() {
+        let types = vec![
+            FaultType::Latency,
+            FaultType::Error,
+            FaultType::Partition,
+            FaultType::Kill,
+            FaultType::PacketLoss,
+        ];
+        for ft in &types {
+            let json = serde_json::to_string(ft).unwrap();
+            let deserialized: FaultType = serde_json::from_str(&json).unwrap();
+            assert_eq!(*ft, deserialized);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_latency_injection_timing_accuracy() {
+        let target_ms = 50;
+        let result = InjectionResult {
+            injected: true,
+            fault_type: FaultType::Latency,
+            reason: None,
+            delay_ms: target_ms,
+        };
+
+        let start = tokio::time::Instant::now();
+        ChaosShim::apply_latency(&result).await;
+        let elapsed = start.elapsed();
+
+        // Should be within 30ms tolerance of the target
+        let lower = tokio::time::Duration::from_millis(target_ms);
+        let upper = tokio::time::Duration::from_millis(target_ms + 30);
+        assert!(
+            elapsed >= lower && elapsed <= upper,
+            "Latency injection took {:?}, expected between {:?} and {:?}",
+            elapsed,
+            lower,
+            upper
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_latency_when_not_injected() {
+        let result = InjectionResult {
+            injected: false,
+            fault_type: FaultType::Latency,
+            reason: None,
+            delay_ms: 100,
+        };
+
+        let start = tokio::time::Instant::now();
+        ChaosShim::apply_latency(&result).await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < tokio::time::Duration::from_millis(20),
+            "Should not sleep when not injected, took {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_experiment_scheduling_lifecycle() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+
+        // Start experiment
+        let id = orch
+            .start_experiment("sched-test", FaultType::Latency, "all", 1.0, 60)
+            .unwrap();
+
+        // Register schedule with max_runs
+        orch.register_schedule(&id, "0 */2 * * *", Some(5));
+
+        // Can run initially
+        assert!(orch.can_run_scheduled(&id));
+
+        // Run 5 times
+        for i in 0..5 {
+            assert!(orch.can_run_scheduled(&id), "Should be able to run at iteration {}", i);
+            orch.record_scheduled_run(&id);
+        }
+
+        // 6th run should be blocked
+        assert!(!orch.can_run_scheduled(&id));
+
+        // Reschedule with higher max_runs
+        orch.register_schedule(&id, "0 */1 * * *", Some(10));
+        assert!(orch.can_run_scheduled(&id));
+    }
+
+    #[test]
+    fn test_scheduled_experiment_unlimited_runs() {
+        let mut orch = ChaosOrchestrator::new();
+        orch.register_schedule("exp-unlimited", "* * * * *", None);
+
+        // Should always be able to run when max_runs is None
+        for _ in 0..100 {
+            assert!(orch.can_run_scheduled("exp-unlimited"));
+            orch.record_scheduled_run("exp-unlimited");
+        }
+    }
+
+    #[test]
+    fn test_concurrent_experiment_execution() {
+        let mut shim = ChaosShim {
+            enabled: true,
+            latency_ms: 50,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+
+        // Start multiple experiments simultaneously
+        let id1 = shim.start_experiment("concurrent-1", FaultType::Latency, "all", 1.0, 60).id.clone();
+        let id2 = shim.start_experiment("concurrent-2", FaultType::Error, "all", 0.5, 30).id.clone();
+        let id3 = shim.start_experiment("concurrent-3", FaultType::Partition, "all", 1.0, 120).id.clone();
+
+        // All three should be active
+        assert_eq!(shim.active_experiments().len(), 3);
+        assert!(shim.is_active());
+
+        // Stop one
+        assert!(shim.stop_experiment(&id2));
+        assert_eq!(shim.active_experiments().len(), 2);
+
+        // Stop remaining
+        assert!(shim.stop_experiment(&id1));
+        assert!(shim.stop_experiment(&id3));
+        assert_eq!(shim.active_experiments().len(), 0);
+        assert!(!shim.is_active());
+    }
+
+    #[test]
+    fn test_concurrent_orchestrator_experiments() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+
+        let id1 = orch
+            .start_experiment("orch-1", FaultType::Latency, "web", 1.0, 60)
+            .unwrap();
+        let id2 = orch
+            .start_experiment("orch-2", FaultType::Error, "db", 0.5, 120)
+            .unwrap();
+        let id3 = orch
+            .start_experiment("orch-3", FaultType::Partition, "cache", 1.0, 30)
+            .unwrap();
+
+        assert_eq!(orch.active_count(), 3);
+
+        // Complete middle one
+        assert!(orch.complete_experiment(&id2, true));
+        assert_eq!(orch.active_count(), 2);
+        assert_eq!(orch.completed_count(), 1);
+
+        // Stop and complete remaining
+        orch.stop_all();
+        assert!(orch.complete_experiment(&id1, true));
+        assert!(orch.complete_experiment(&id3, false));
+
+        assert_eq!(orch.active_count(), 0);
+        assert_eq!(orch.completed_count(), 3);
+        assert!(!orch.history()[2].success); // id3 was stopped=false
+    }
+
+    #[test]
+    fn test_experiment_max_runs_enforcement() {
+        let mut orch = ChaosOrchestrator::new();
+        orch.register_schedule("limited", "* * * * *", Some(2));
+
+        assert!(orch.can_run_scheduled("limited"));
+        orch.record_scheduled_run("limited");
+
+        assert!(orch.can_run_scheduled("limited"));
+        orch.record_scheduled_run("limited");
+
+        assert!(!orch.can_run_scheduled("limited"));
+    }
+
+    #[test]
+    fn test_fault_metrics_collection_and_reporting() {
+        let mut shim = ChaosShim {
+            enabled: true,
+            latency_ms: 100,
+            error_rate: 0.5,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            faults_injected: 42,
+            faults_suppressed: 8,
+            ..ChaosShim::new()
+        };
+        shim.start_experiment("metrics-test", FaultType::Latency, "all", 1.0, 60);
+
+        let metrics = shim.metrics();
+
+        assert_eq!(metrics.len(), 6);
+
+        // chaos_enabled = 1.0
+        assert_eq!(metrics[0].name, "chaos_enabled");
+        assert_eq!(metrics[0].value, 1.0);
+
+        // chaos_faults_injected = 42
+        assert_eq!(metrics[1].name, "chaos_faults_injected");
+        assert_eq!(metrics[1].value, 42.0);
+
+        // chaos_faults_suppressed = 8
+        assert_eq!(metrics[2].name, "chaos_faults_suppressed");
+        assert_eq!(metrics[2].value, 8.0);
+
+        // chaos_active_experiments = 1
+        assert_eq!(metrics[3].name, "chaos_active_experiments");
+        assert_eq!(metrics[3].value, 1.0);
+
+        // chaos_injection_rate = 42/(42+8) = 0.84
+        assert_eq!(metrics[4].name, "chaos_injection_rate");
+        assert!((metrics[4].value - 0.84).abs() < 0.01);
+
+        // chaos_error_rate = 0.5
+        assert_eq!(metrics[5].name, "chaos_error_rate");
+        assert_eq!(metrics[5].value, 0.5);
+    }
+
+    #[test]
+    fn test_disabled_shim_metrics() {
+        let shim = ChaosShim::new();
+        let metrics = shim.metrics();
+        assert_eq!(metrics[0].value, 0.0); // chaos_enabled = false
+        assert_eq!(metrics[1].value, 0.0); // faults_injected = 0
+    }
+
+    #[test]
+    fn test_experiment_state_serialization_roundtrip() {
+        let experiment = ChaosExperiment {
+            id: "exp-001".to_string(),
+            name: "test-serde".to_string(),
+            fault_type: FaultType::Latency,
+            enabled: true,
+            target: "service-a".to_string(),
+            blast_radius: 0.75,
+            duration_secs: 120,
+            started_at: Some("2026-01-01T00:00:00Z".to_string()),
+            ended_at: None,
+            faults_injected: 15,
+        };
+
+        let json = serde_json::to_string(&experiment).unwrap();
+        let deserialized: ChaosExperiment = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.id, "exp-001");
+        assert_eq!(deserialized.name, "test-serde");
+        assert_eq!(deserialized.fault_type, FaultType::Latency);
+        assert!(deserialized.enabled);
+        assert_eq!(deserialized.target, "service-a");
+        assert!((deserialized.blast_radius - 0.75).abs() < 0.01);
+        assert_eq!(deserialized.duration_secs, 120);
+        assert!(deserialized.ended_at.is_none());
+        assert_eq!(deserialized.faults_injected, 15);
+    }
+
+    #[test]
+    fn test_injection_result_serialization_roundtrip() {
+        let result = InjectionResult {
+            injected: true,
+            fault_type: FaultType::Error,
+            reason: Some("threshold exceeded".to_string()),
+            delay_ms: 250,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: InjectionResult = serde_json::from_str(&json).unwrap();
+
+        assert!(deserialized.injected);
+        assert_eq!(deserialized.fault_type, FaultType::Error);
+        assert_eq!(deserialized.reason.as_deref(), Some("threshold exceeded"));
+        assert_eq!(deserialized.delay_ms, 250);
+    }
+
+    #[test]
+    fn test_experiment_schedule_serialization_roundtrip() {
+        let schedule = ExperimentSchedule {
+            cron: "0 */6 * * *".to_string(),
+            max_runs: Some(10),
+            run_count: 3,
+        };
+
+        let json = serde_json::to_string(&schedule).unwrap();
+        let deserialized: ExperimentSchedule = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.cron, "0 */6 * * *");
+        assert_eq!(deserialized.max_runs, Some(10));
+        assert_eq!(deserialized.run_count, 3);
+    }
+
+    #[test]
+    fn test_experiment_result_serialization_roundtrip() {
+        let result = ExperimentResult {
+            experiment_id: "exp-042".to_string(),
+            name: "latency-blast".to_string(),
+            fault_type: FaultType::Partition,
+            target: "db-primary".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: "2026-01-01T01:00:00Z".to_string(),
+            faults_injected: 200,
+            success: true,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: ExperimentResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.experiment_id, "exp-042");
+        assert_eq!(deserialized.fault_type, FaultType::Partition);
+        assert_eq!(deserialized.faults_injected, 200);
+        assert!(deserialized.success);
+    }
+
+    #[test]
+    fn test_orchestrator_blast_radius_global_limit() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+        orch.set_blast_radius_limit(0.2);
+
+        let id1 = orch
+            .start_experiment("a", FaultType::Latency, "all", 0.5, 60)
+            .unwrap();
+        let id2 = orch
+            .start_experiment("b", FaultType::Error, "all", 1.0, 60)
+            .unwrap();
+        let id3 = orch
+            .start_experiment("c", FaultType::Partition, "all", 0.1, 60)
+            .unwrap();
+
+        assert!((orch.get_experiment(&id1).unwrap().blast_radius - 0.2).abs() < 0.01);
+        assert!((orch.get_experiment(&id2).unwrap().blast_radius - 0.2).abs() < 0.01);
+        assert!((orch.get_experiment(&id3).unwrap().blast_radius - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_error_rate_threshold_filtering() {
+        // With error_rate=1.0 and no other faults, active_fault_type() returns Error,
+        // and all evaluations should inject (roll > 1.0 is never true for f64 in 0..1)
+        let mut shim = ChaosShim {
+            enabled: true,
+            error_rate: 1.0,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+        let mut injected_count = 0;
+        for _ in 0..100 {
+            let result = shim.evaluate("svc");
+            if result.injected {
+                injected_count += 1;
+            }
+        }
+        assert_eq!(injected_count, 100);
+    }
+
+    #[test]
+    fn test_target_matching_specific() {
+        let mut shim = ChaosShim {
+            enabled: true,
+            latency_ms: 100,
+            target: "web-1".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+
+        let result = shim.evaluate("web-1");
+        assert!(result.injected);
+
+        let result = shim.evaluate("web-2");
+        assert!(!result.injected);
+        assert_eq!(result.reason.as_deref(), Some("Target mismatch"));
+    }
+
+    #[test]
+    fn test_target_matching_all() {
+        let mut shim = ChaosShim {
+            enabled: true,
+            latency_ms: 100,
+            target: "all".to_string(),
+            blast_radius: 1.0,
+            ..ChaosShim::new()
+        };
+
+        assert!(shim.evaluate("web-1").injected);
+        assert!(shim.evaluate("db-1").injected);
+        assert!(shim.evaluate("anything").injected);
+    }
+
+    #[test]
+    fn test_inject_error_on_partition_returns_ok() {
+        let result = InjectionResult {
+            injected: true,
+            fault_type: FaultType::Partition,
+            reason: None,
+            delay_ms: 0,
+        };
+        assert!(ChaosShim::inject_error(&result).is_ok());
+    }
+
+    #[test]
+    fn test_inject_error_on_latency_returns_ok() {
+        let result = InjectionResult {
+            injected: true,
+            fault_type: FaultType::Latency,
+            reason: None,
+            delay_ms: 100,
+        };
+        assert!(ChaosShim::inject_error(&result).is_ok());
+    }
+
+    #[test]
+    fn test_orchestrator_history_after_multiple_completions() {
+        let mut orch = ChaosOrchestrator {
+            enabled: true,
+            ..ChaosOrchestrator::new()
+        };
+
+        let id1 = orch
+            .start_experiment("exp-a", FaultType::Latency, "all", 1.0, 60)
+            .unwrap();
+        let id2 = orch
+            .start_experiment("exp-b", FaultType::Error, "all", 0.5, 30)
+            .unwrap();
+
+        orch.complete_experiment(&id1, true);
+        orch.complete_experiment(&id2, false);
+
+        let history = orch.history();
+        assert_eq!(history.len(), 2);
+        assert!(history[0].success);
+        assert!(!history[1].success);
+        assert_eq!(history[0].fault_type, FaultType::Latency);
+        assert_eq!(history[1].fault_type, FaultType::Error);
+    }
+
+    #[tokio::test]
+    async fn test_chaos_shim_init_and_start_stop() {
+        use shim_core::{Capability, Config};
+
+        let mut shim = ChaosShim::new();
+        let config = Config::default();
+
+        shim.init(&config).await.unwrap();
+        shim.start().await.unwrap();
+        assert!(shim.shutdown_tx.is_some());
+
+        shim.stop().await.unwrap();
+        assert!(shim.shutdown_tx.is_none());
+
+        // All experiments should be stopped
+        for exp in shim.experiments.values() {
+            assert!(!exp.enabled);
+            assert!(exp.ended_at.is_some());
+        }
+    }
+
+    #[test]
+    fn test_experiment_blast_radius_clamping() {
+        let mut shim = ChaosShim::new();
+        let exp = shim.start_experiment("clamp", FaultType::Latency, "all", 2.5, 60);
+        assert!((exp.blast_radius - 1.0).abs() < 0.01);
+
+        let exp = shim.start_experiment("clamp2", FaultType::Latency, "all", -0.5, 60);
+        assert!((exp.blast_radius - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_active_fault_type_priority() {
+        // Partition takes priority over latency
+        let shim = ChaosShim {
+            partition: true,
+            latency_ms: 100,
+            ..ChaosShim::new()
+        };
+        assert_eq!(shim.active_fault_type(), FaultType::Partition);
+
+        // Latency over error
+        let shim = ChaosShim {
+            latency_ms: 100,
+            error_rate: 0.5,
+            ..ChaosShim::new()
+        };
+        assert_eq!(shim.active_fault_type(), FaultType::Latency);
+
+        // Error over kill
+        let shim = ChaosShim {
+            error_rate: 0.5,
+            kill_probability: 1.0,
+            ..ChaosShim::new()
+        };
+        assert_eq!(shim.active_fault_type(), FaultType::Error);
+
+        // Kill alone
+        let shim = ChaosShim {
+            kill_probability: 0.5,
+            ..ChaosShim::new()
+        };
+        assert_eq!(shim.active_fault_type(), FaultType::Kill);
+
+        // Default is Latency
+        let shim = ChaosShim::new();
+        assert_eq!(shim.active_fault_type(), FaultType::Latency);
+    }
 }

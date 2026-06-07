@@ -1,0 +1,80 @@
+version: 2
+updates:
+  # Cargo ecosystem — Rust dependencies
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      rust-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+        labels:
+          - "dependencies"
+          - "automerge"
+      rust-major:
+        update-types:
+          - "major"
+        labels:
+          - "dependencies"
+          - "breaking"
+
+  # GitHub Actions ecosystem
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "ci"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+        labels:
+          - "ci"
+          - "automerge"
+      actions-major:
+        update-types:
+          - "major"
+        labels:
+          - "ci"
+          - "breaking"
+
+  # Go modules — Terraform provider
+  - package-ecosystem: "gomod"
+    directory: "/terraform/evergreen-shims"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "terraform"
+    commit-message:
+      prefix: "terraform"
+    groups:
+      go-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+        labels:
+          - "dependencies"
+          - "automerge"
+      go-major:
+        update-types:
+          - "major"
+        labels:
+          - "dependencies"
+          - "breaking"

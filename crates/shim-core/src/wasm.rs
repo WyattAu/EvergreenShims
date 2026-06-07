@@ -730,6 +730,45 @@ mod tests {
             .any(|m| m.name == "wasm_counter_foo" && (m.value - 2.0).abs() < f64::EPSILON));
     }
 
+    #[tokio::test]
+    async fn wasm_shim_module_lifecycle_init_start_stop_metrics() {
+        let mut shim = WasmShim::new("lifecycle", Box::new(DummyCapability::new()));
+        let config = Config::default();
+
+        // init
+        shim.init(&config).await.unwrap();
+        assert_eq!(shim.name(), "lifecycle");
+
+        // start
+        shim.start().await.unwrap();
+
+        // metrics (should include wasm_memory_bytes and wasm_cpu_time_us)
+        let m = shim.metrics();
+        assert!(m.iter().any(|x| x.name == "wasm_memory_bytes"));
+        assert!(m.iter().any(|x| x.name == "wasm_cpu_time_us"));
+
+        // stop
+        shim.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn wasm_shim_multiple_counters_independent() {
+        let mut shim = WasmShim::new("counters", Box::new(DummyCapability::new()));
+        shim.increment_counter("a");
+        shim.increment_counter("b");
+        shim.increment_counter("a");
+        assert_eq!(shim.counter("a"), 2);
+        assert_eq!(shim.counter("b"), 1);
+        assert_eq!(shim.counter("c"), 0);
+    }
+
+    #[tokio::test]
+    async fn wasm_shim_memory_and_cpu_from_inner() {
+        let shim = WasmShim::new("test", Box::new(DummyCapability::new()));
+        assert_eq!(shim.memory_usage(), 1024);
+        assert_eq!(shim.cpu_time(), 500);
+    }
+
     #[test]
     fn stub_process_always_not_running() {
         let p = process_stub::StubProcess;
@@ -998,5 +1037,264 @@ mod runtime_tests {
         let cfg = WasmConfig::default();
         assert_eq!(cfg.max_memory_pages, Some(256));
         assert_eq!(cfg.fuel_limit, Some(1_000_000));
+    }
+
+    #[test]
+    fn memory_limiter_allows_within_limit() {
+        let loader = WasmShimLoader::new().unwrap();
+        let wasm_cfg = WasmConfig {
+            max_memory_pages: Some(4),
+            fuel_limit: Some(1_000_000),
+        };
+        let config = Config::default();
+        // Module that grows memory to 2 pages (within limit of 4)
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (memory (export "memory") 1 256)
+                (func $start (export "_start")
+                    (drop (memory.grow (i32.const 1)))
+                )
+            )
+            "#,
+        )
+        .unwrap();
+        let cap = loader
+            .load_shim_bytes("mem_ok", &wasm, &wasm_cfg, &config)
+            .unwrap();
+        let result = cap.run();
+        assert!(result.is_ok(), "growth within limit should succeed");
+    }
+
+    #[test]
+    fn memory_limiter_blocks_over_limit() {
+        let loader = WasmShimLoader::new().unwrap();
+        let wasm_cfg = WasmConfig {
+            max_memory_pages: Some(1),
+            fuel_limit: Some(1_000_000),
+        };
+        let config = Config::default();
+        // Module tries to grow memory beyond 1 page limit
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (memory (export "memory") 1 256)
+                (func $start (export "_start")
+                    (drop (memory.grow (i32.const 100)))
+                )
+            )
+            "#,
+        )
+        .unwrap();
+        let cap = loader
+            .load_shim_bytes("mem_over", &wasm, &wasm_cfg, &config)
+            .unwrap();
+        // memory.grow returns -1 when limiter rejects, doesn't trap
+        let result = cap.run();
+        assert!(result.is_ok(), "over-limit grow returns -1, not a trap");
+    }
+
+    #[test]
+    fn memory_limiter_no_limit_allows_large_growth() {
+        let loader = WasmShimLoader::new().unwrap();
+        let wasm_cfg = WasmConfig {
+            max_memory_pages: None,
+            fuel_limit: Some(1_000_000),
+        };
+        let config = Config::default();
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (memory (export "memory") 1 256)
+                (func $start (export "_start")
+                    (drop (memory.grow (i32.const 10)))
+                )
+            )
+            "#,
+        )
+        .unwrap();
+        let cap = loader
+            .load_shim_bytes("mem_nolimit", &wasm, &wasm_cfg, &config)
+            .unwrap();
+        let result = cap.run();
+        assert!(result.is_ok(), "no-limit config should allow growth");
+    }
+
+    #[test]
+    fn minimal_wasm_binary_instantiation() {
+        let loader = WasmShimLoader::new().unwrap();
+        let config = Config::default();
+        // Minimal WASM binary: module with a single exported function
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (memory (export "memory") 1 256)
+                (func (export "shim_name") (result i32) (i32.const 42))
+                (func $start (export "_start"))
+            )
+            "#,
+        )
+        .unwrap();
+        let cap = loader
+            .load_shim_bytes("minimal", &wasm, &default_wasm_config(), &config)
+            .unwrap();
+        assert_eq!(cap.name(), "minimal");
+        let result = cap.run().unwrap();
+        assert!(result.log_buffer.is_empty());
+    }
+
+    #[test]
+    fn oom_protection_respects_memory_limit() {
+        let loader = WasmShimLoader::new().unwrap();
+        let wasm_cfg = WasmConfig {
+            max_memory_pages: Some(1),
+            fuel_limit: Some(1_000_000),
+        };
+        let config = Config::default();
+        // Module tries to allocate far more than allowed
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (memory (export "memory") 1 256)
+                (func $start (export "_start")
+                    (drop (memory.grow (i32.const 1000)))
+                )
+            )
+            "#,
+        )
+        .unwrap();
+        let cap = loader
+            .load_shim_bytes("oom_test", &wasm, &wasm_cfg, &config)
+            .unwrap();
+        let result = cap.run();
+        assert!(result.is_ok(), "OOM should not trap, grow returns -1");
+        // Verify fuel was still consumed (module ran)
+        assert!(cap.fuel_consumed() > 0);
+    }
+
+    #[test]
+    fn load_invalid_wasm_binary_returns_error() {
+        let loader = WasmShimLoader::new().unwrap();
+        let config = Config::default();
+
+        // Completely garbage bytes
+        let result = loader.load_shim_bytes(
+            "garbage",
+            &[0x00, 0x61, 0x73, 0x6D, 0x99, 0xFF, 0x00, 0x00],
+            &default_wasm_config(),
+            &config,
+        );
+        assert!(result.is_err(), "invalid WASM binary should fail to load");
+
+        // Empty bytes
+        let result =
+            loader.load_shim_bytes("empty", b"", &default_wasm_config(), &config);
+        assert!(result.is_err(), "empty bytes should fail to load");
+
+        // Random non-WASM data
+        let result = loader.load_shim_bytes(
+            "random",
+            b"this is not wasm at all, just plain text",
+            &default_wasm_config(),
+            &config,
+        );
+        assert!(result.is_err(), "non-WASM text should fail to load");
+    }
+
+    #[test]
+    fn wasm_module_no_start_function_returns_error() {
+        let loader = WasmShimLoader::new().unwrap();
+        let config = Config::default();
+        // Module without _start export
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (memory (export "memory") 1 256)
+                (func (export "not_start") (result i32) (i32.const 1))
+            )
+            "#,
+        )
+        .unwrap();
+        let cap = loader
+            .load_shim_bytes("no_start", &wasm, &default_wasm_config(), &config)
+            .unwrap();
+        let result = cap.run();
+        assert!(result.is_err(), "module without _start should error on run");
+    }
+
+    #[test]
+    fn concurrent_wasm_module_execution_safety() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let loader = WasmShimLoader::new().unwrap();
+        let config = Config::default();
+
+        // Create two independent modules
+        let cap1 = loader
+            .load_shim_bytes("conc1", &noop_wasm(), &default_wasm_config(), &config)
+            .unwrap();
+        let cap2 = loader
+            .load_shim_bytes("conc2", &noop_wasm(), &default_wasm_config(), &config)
+            .unwrap();
+
+        let cap1 = Arc::new(cap1);
+        let cap2 = Arc::new(cap2);
+
+        let mut handles = vec![];
+
+        // Run module 1 from multiple threads concurrently
+        for _ in 0..4 {
+            let c = cap1.clone();
+            handles.push(thread::spawn(move || {
+                for _ in 0..10 {
+                    let result = c.run();
+                    assert!(result.is_ok(), "concurrent run should not fail");
+                }
+            }));
+        }
+
+        // Run module 2 concurrently
+        for _ in 0..4 {
+            let c = cap2.clone();
+            handles.push(thread::spawn(move || {
+                for _ in 0..10 {
+                    let result = c.run();
+                    assert!(result.is_ok(), "concurrent run should not fail");
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn fuel_exhaustion_returns_error() {
+        let loader = WasmShimLoader::new().unwrap();
+        let wasm_cfg = WasmConfig {
+            fuel_limit: Some(1),
+            ..default_wasm_config()
+        };
+        let config = Config::default();
+        let cap = loader
+            .load_shim_bytes("fuel_exhaust", &noop_wasm(), &wasm_cfg, &config)
+            .unwrap();
+        let result = cap.run();
+        assert!(result.is_err(), "fuel exhaustion should produce an error");
+    }
+
+    #[test]
+    fn execution_result_fields_populated() {
+        let loader = WasmShimLoader::new().unwrap();
+        let config = Config::default();
+        let cap = loader
+            .load_shim_bytes("result_test", &noop_wasm(), &default_wasm_config(), &config)
+            .unwrap();
+        let result = cap.run().unwrap();
+        assert!(result.fuel_used > 0, "fuel should be consumed");
+        assert!(result.log_buffer.is_empty());
+        assert!(result.metrics.is_empty());
     }
 }

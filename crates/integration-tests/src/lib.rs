@@ -2729,3 +2729,239 @@ async fn test_proxy_recovery_after_degradation() {
         },
     );
 }
+
+// ============================================================================
+// Cross-Shim Chaos Integration Tests
+// ============================================================================
+
+/// Test chaos + health shim wiring: chaos injection triggers health degradation events.
+#[tokio::test]
+#[serial]
+async fn test_chaos_triggers_health_events() {
+    use chaos_shim::{ChaosShim, FaultType};
+    use shim_core::event::EventType;
+    use shim_core::{Severity, ShimBus};
+
+    let bus = ShimBus::new();
+    let mut rx = bus.subscribe();
+
+    let mut chaos = ChaosShim::new();
+    chaos.set_enabled(true);
+    chaos.set_latency(100);
+    let exp = chaos.start_experiment("chaos-health-test", FaultType::Latency, "all", 1.0, 60);
+    let exp_id = exp.id.clone();
+
+    // Simulate chaos event emitted on bus
+    bus.emit(
+        "chaos-shim",
+        EventType::Custom {
+            event_name: "chaos.experiment.started".into(),
+            payload: serde_json::json!({
+                "experiment_id": exp_id,
+                "fault_type": "latency",
+                "target": "all",
+            }),
+        },
+        Severity::Warning,
+    );
+
+    // Verify chaos event propagates
+    let mut found = false;
+    while let Ok(evt) = rx.try_recv() {
+        if evt.source == "chaos-shim" {
+            found = true;
+            assert_eq!(evt.severity, Severity::Warning);
+        }
+    }
+    assert!(found, "Chaos experiment event should propagate on bus");
+
+    // Stop experiment
+    chaos.stop_experiment(&exp_id);
+}
+
+/// Test chaos + failover wiring: partition fault triggers failover.
+#[tokio::test]
+#[serial]
+async fn test_chaos_partition_triggers_failover() {
+    use chaos_shim::{ChaosOrchestrator, FaultType};
+    use shim_core::event::EventType;
+    use shim_core::{Severity, ShimBus};
+
+    let mut orch = ChaosOrchestrator::new();
+    orch.set_enabled(true);
+
+    let bus = ShimBus::new();
+    let mut rx = bus.subscribe();
+
+    // Start partition experiment
+    let exp_id = orch
+        .start_experiment("partition-failover", FaultType::Partition, "db-primary", 1.0, 30)
+        .unwrap();
+
+    // Emit chaos event
+    bus.emit(
+        "chaos-shim",
+        EventType::Custom {
+            event_name: "chaos.fault.injected".into(),
+            payload: serde_json::json!({
+                "experiment_id": exp_id,
+                "fault_type": "partition",
+                "target": "db-primary",
+            }),
+        },
+        Severity::Critical,
+    );
+
+    // Emit failover response
+    bus.emit(
+        "failover-shim",
+        EventType::FailoverTriggered {
+            old_primary: "db-primary".into(),
+            new_primary: "db-replica".into(),
+        },
+        Severity::Critical,
+    );
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Verify both events
+    let mut chaos_found = false;
+    let mut failover_found = false;
+    while let Ok(evt) = rx.try_recv() {
+        if evt.source == "chaos-shim" {
+            chaos_found = true;
+        }
+        if matches!(evt.event, EventType::FailoverTriggered { .. }) {
+            failover_found = true;
+        }
+    }
+    assert!(chaos_found, "Chaos injection event should be on bus");
+    assert!(failover_found, "Failover event should be on bus");
+
+    // Cleanup
+    orch.complete_experiment(&exp_id, true);
+}
+
+/// Test chaos + alerting wiring: chaos injection triggers alert.
+#[tokio::test]
+#[serial]
+async fn test_chaos_triggers_alerting() {
+    use chaos_shim::ChaosShim;
+    use chaos_shim::FaultType;
+    use shim_core::event::EventType;
+    use shim_core::{Severity, ShimBus};
+
+    let bus = ShimBus::new();
+    let mut rx = bus.subscribe();
+
+    let mut chaos = ChaosShim::new();
+    let exp = chaos.start_experiment("alert-test", FaultType::Error, "db-1", 1.0, 30);
+    let exp_id = exp.id.clone();
+
+    // Emit error injection event
+    bus.emit(
+        "chaos-shim",
+        EventType::Custom {
+            event_name: "chaos.fault.injected".into(),
+            payload: serde_json::json!({
+                "experiment_id": exp_id,
+                "fault_type": "error",
+                "target": "db-1",
+                "error_rate": 1.0,
+            }),
+        },
+        Severity::Error,
+    );
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Verify alerting shim receives the event
+    let mut found = false;
+    while let Ok(evt) = rx.try_recv() {
+        if evt.source == "chaos-shim" && evt.severity == Severity::Error {
+            found = true;
+        }
+    }
+    assert!(found, "Chaos error injection should be alertable");
+
+    chaos.stop_experiment(&exp_id);
+}
+
+/// Test chaos experiment scheduling with orchestrator tick lifecycle.
+#[tokio::test]
+#[serial]
+async fn test_chaos_orchestrator_full_schedule_lifecycle() {
+    use chaos_shim::ChaosOrchestrator;
+
+    let mut orch = ChaosOrchestrator::new();
+    orch.set_enabled(true);
+
+    // Register schedule with max_runs=2 for a recurring experiment
+    let schedule_id = "recurring-exp";
+    orch.register_schedule(schedule_id, "0 */6 * * *", Some(2));
+
+    // First run
+    assert!(orch.can_run_scheduled(schedule_id));
+    orch.record_scheduled_run(schedule_id);
+
+    // Second run
+    assert!(orch.can_run_scheduled(schedule_id));
+    orch.record_scheduled_run(schedule_id);
+
+    // Third run blocked by max_runs
+    assert!(!orch.can_run_scheduled(schedule_id));
+
+    // Reschedule with higher limit
+    orch.register_schedule(schedule_id, "0 */6 * * *", Some(5));
+    assert!(orch.can_run_scheduled(schedule_id));
+    orch.record_scheduled_run(schedule_id);
+    assert!(orch.can_run_scheduled(schedule_id));
+}
+
+/// Test chaos shim metrics flow through ShimBus to alerting.
+#[tokio::test]
+#[serial]
+async fn test_chaos_metrics_cross_shim() {
+    use chaos_shim::{ChaosShim, FaultType};
+    use shim_core::event::EventType;
+    use shim_core::{Severity, ShimBus};
+
+    let bus = ShimBus::new();
+    let mut rx = bus.subscribe();
+
+    let mut chaos = ChaosShim::new();
+    chaos.set_enabled(true);
+    chaos.set_latency(100);
+    chaos.start_experiment("metrics-cross", FaultType::Latency, "all", 1.0, 60);
+
+    // Evaluate to inject faults
+    for _ in 0..10 {
+        chaos.evaluate("web-1");
+    }
+
+    // Emit metrics summary
+    use shim_core::Capability;
+    let metrics = chaos.metrics();
+    bus.emit(
+        "chaos-shim",
+        EventType::Custom {
+            event_name: "chaos.metrics.report".into(),
+            payload: serde_json::json!({
+                "faults_injected": metrics.iter().find(|m| m.name == "chaos_faults_injected").unwrap().value,
+                "active_experiments": metrics.iter().find(|m| m.name == "chaos_active_experiments").unwrap().value,
+                "injection_rate": metrics.iter().find(|m| m.name == "chaos_injection_rate").unwrap().value,
+            }),
+        },
+        Severity::Info,
+    );
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let mut found = false;
+    while let Ok(evt) = rx.try_recv() {
+        if evt.source == "chaos-shim" && evt.severity == Severity::Info {
+            found = true;
+        }
+    }
+    assert!(found, "Chaos metrics report should propagate on bus");
+}

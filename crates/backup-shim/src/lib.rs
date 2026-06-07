@@ -1433,4 +1433,493 @@ mod tests {
         assert!(result.file_exists);
         assert!(result.checksum_match.is_none());
     }
+
+    // --- Additional coverage tests ---
+
+    #[test]
+    fn test_backup_entry_serialization_roundtrip() {
+        let entry = BackupEntry {
+            filename: "mydb_20240101_120000.sql.gz".to_string(),
+            created_at: chrono::Utc::now(),
+            size_bytes: 1048576,
+            checksum: "abcdef1234567890".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: BackupEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.filename, "mydb_20240101_120000.sql.gz");
+        assert_eq!(deserialized.size_bytes, 1048576);
+        assert_eq!(deserialized.checksum, "abcdef1234567890");
+    }
+
+    #[test]
+    fn test_backup_meta_serialization_roundtrip() {
+        let meta = BackupMeta {
+            database: "mydb".to_string(),
+            db_type: "postgres".to_string(),
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            completed_at: Some("2024-01-01T00:01:00Z".to_string()),
+            path: "/tmp/backups/mydb_20240101.sql.gz".to_string(),
+            size_bytes: 1024000,
+            success: true,
+            error: None,
+            checksum: Some("abc123".to_string()),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: BackupMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.database, "mydb");
+        assert!(deserialized.success);
+        assert_eq!(deserialized.size_bytes, 1024000);
+    }
+
+    #[test]
+    fn test_backup_meta_failed_backup() {
+        let meta = BackupMeta {
+            database: "mydb".to_string(),
+            db_type: "mysql".to_string(),
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            completed_at: None,
+            path: String::new(),
+            size_bytes: 0,
+            success: false,
+            error: Some("connection refused".to_string()),
+            checksum: None,
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: BackupMeta = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.success);
+        assert_eq!(deserialized.error, Some("connection refused".to_string()));
+        assert!(deserialized.completed_at.is_none());
+    }
+
+    #[test]
+    fn test_verification_result_serialization_roundtrip() {
+        let result = VerificationResult {
+            success: true,
+            file_exists: true,
+            file_size: 1024,
+            checksum_match: Some(true),
+            restore_test: Some(false),
+            errors: vec![],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: VerificationResult = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.success);
+        assert_eq!(deserialized.file_size, 1024);
+        assert_eq!(deserialized.checksum_match, Some(true));
+    }
+
+    #[test]
+    fn test_verification_result_with_errors() {
+        let result = VerificationResult {
+            success: false,
+            file_exists: true,
+            file_size: 0,
+            checksum_match: Some(false),
+            restore_test: None,
+            errors: vec!["checksum mismatch".to_string(), "file corrupted".to_string()],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: VerificationResult = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.success);
+        assert_eq!(deserialized.errors.len(), 2);
+    }
+
+    #[test]
+    fn test_s3_config_from_env() {
+        temp_env::with_vars(
+            [
+                ("BACKUP_S3_BUCKET", Some("my-backup-bucket")),
+                ("BACKUP_S3_REGION", Some("eu-west-1")),
+                ("BACKUP_S3_ENDPOINT", Some("http://localhost:9000")),
+                ("BACKUP_S3_PREFIX", Some("db-backups")),
+                ("BACKUP_S3_FORCE_PATH_STYLE", Some("true")),
+                ("BACKUP_S3_SSE", Some("false")),
+            ],
+            || {
+                let shim = BackupShim::new();
+                assert_eq!(shim.s3_bucket(), "my-backup-bucket");
+                assert_eq!(shim.s3_region(), "eu-west-1");
+                assert_eq!(shim.s3_endpoint(), Some("http://localhost:9000"));
+                assert_eq!(shim.s3_prefix(), "db-backups");
+                assert!(shim.s3_force_path_style());
+                assert!(!shim.s3_server_side_encryption());
+            },
+        );
+    }
+
+    #[test]
+    fn test_s3_config_defaults() {
+        temp_env::with_vars(
+            [
+                ("BACKUP_S3_BUCKET", None::<&str>),
+                ("BACKUP_S3_REGION", None::<&str>),
+                ("BACKUP_S3_ENDPOINT", None::<&str>),
+                ("BACKUP_S3_PREFIX", None::<&str>),
+                ("BACKUP_S3_FORCE_PATH_STYLE", None::<&str>),
+                ("BACKUP_S3_SSE", None::<&str>),
+            ],
+            || {
+                let shim = BackupShim::new();
+                assert_eq!(shim.s3_bucket(), "");
+                assert_eq!(shim.s3_region(), "us-east-1");
+                assert!(shim.s3_endpoint().is_none());
+                assert_eq!(shim.s3_prefix(), "backups");
+                assert!(!shim.s3_force_path_style());
+                assert!(shim.s3_server_side_encryption());
+            },
+        );
+    }
+
+    #[test]
+    fn test_s3_config_force_path_style_values() {
+        for val in &["true", "1"] {
+            temp_env::with_var("BACKUP_S3_FORCE_PATH_STYLE", Some(*val), || {
+                let shim = BackupShim::new();
+                assert!(shim.s3_force_path_style());
+            });
+        }
+        for val in &["false", "0", "no", "yes"] {
+            temp_env::with_var("BACKUP_S3_FORCE_PATH_STYLE", Some(*val), || {
+                let shim = BackupShim::new();
+                if *val == "true" || *val == "1" {
+                    assert!(shim.s3_force_path_style());
+                } else {
+                    assert!(!shim.s3_force_path_style());
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn test_backup_shim_env_all_fields() {
+        temp_env::with_vars(
+            [
+                ("BACKUP_SCHEDULE", Some("0 3 * * *")),
+                ("BACKUP_STORAGE", Some("s3")),
+                ("BACKUP_PATH", Some("/data/backups")),
+                ("BACKUP_PREFIX", Some("prod/")),
+                ("BACKUP_RETENTION_DAYS", Some("60")),
+                ("BACKUP_DATABASE", Some("mydb")),
+                ("BACKUP_DB_TYPE", Some("mysql")),
+                ("BACKUP_DB_HOST", Some("db.internal")),
+                ("BACKUP_DB_PORT", Some("3306")),
+                ("BACKUP_DB_USER", Some("backup_user")),
+                ("BACKUP_DB_PASSWORD", Some("secret123")),
+                ("BACKUP_CMD", Some("mysqldump")),
+                ("BACKUP_OUTPUT_DIR", Some("/data/output")),
+                ("BACKUP_COMPRESSION", Some("zstd")),
+                ("BACKUP_TIMEOUT_SECS", Some("7200")),
+            ],
+            || {
+                let shim = BackupShim::new();
+                assert_eq!(shim.schedule, "0 3 * * *");
+                assert_eq!(shim.storage, "s3");
+                assert_eq!(shim.prefix, "prod/");
+                assert_eq!(shim.retention_days, 60);
+                assert_eq!(shim.database, "mydb");
+                assert_eq!(shim.db_type, "mysql");
+                assert_eq!(shim.db_host, "db.internal");
+                assert_eq!(shim.db_port, 3306);
+                assert_eq!(shim.db_user, "backup_user");
+                assert_eq!(shim.db_password, "secret123");
+                assert_eq!(shim.backup_cmd, "mysqldump");
+                assert_eq!(shim.output_dir, "/data/output");
+                assert_eq!(shim.compression, "zstd");
+                assert_eq!(shim.timeout_secs, 7200);
+            },
+        );
+    }
+
+    #[test]
+    fn test_backup_shim_retry_config_defaults() {
+        temp_env::with_vars(
+            [
+                ("BACKUP_RETRY_MAX_ATTEMPTS", None::<&str>),
+                ("BACKUP_RETRY_BASE_DELAY_MS", None::<&str>),
+                ("BACKUP_RETRY_MAX_DELAY_MS", None::<&str>),
+            ],
+            || {
+                let shim = BackupShim::new();
+                assert_eq!(shim.retry_max_attempts, 3);
+                assert_eq!(shim.retry_base_delay_ms, 1000);
+                assert_eq!(shim.retry_max_delay_ms, 30000);
+            },
+        );
+    }
+
+    #[test]
+    fn test_backup_shim_retry_config_from_env() {
+        temp_env::with_vars(
+            [
+                ("BACKUP_RETRY_MAX_ATTEMPTS", Some("5")),
+                ("BACKUP_RETRY_BASE_DELAY_MS", Some("500")),
+                ("BACKUP_RETRY_MAX_DELAY_MS", Some("60000")),
+            ],
+            || {
+                let shim = BackupShim::new();
+                assert_eq!(shim.retry_max_attempts, 5);
+                assert_eq!(shim.retry_base_delay_ms, 500);
+                assert_eq!(shim.retry_max_delay_ms, 60000);
+            },
+        );
+    }
+
+    #[test]
+    fn test_retention_policy_all_expired() {
+        let shim = BackupShim {
+            retention_days: 1,
+            ..BackupShim::new()
+        };
+
+        {
+            let mut state = shim.state.lock().unwrap();
+            state.backup_history.push(BackupEntry {
+                filename: "old1.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::days(10),
+                size_bytes: 100,
+                checksum: "ck1".to_string(),
+            });
+            state.backup_history.push(BackupEntry {
+                filename: "old2.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::days(5),
+                size_bytes: 200,
+                checksum: "ck2".to_string(),
+            });
+            state.backups_retained = 2;
+        }
+
+        let expired = shim.cleanup_retention();
+        assert_eq!(expired.len(), 2);
+        assert!(expired.contains(&"old1.sql.gz".to_string()));
+        assert!(expired.contains(&"old2.sql.gz".to_string()));
+
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.backup_history.len(), 0);
+        assert_eq!(state.backups_expired, 2);
+        assert_eq!(state.backups_retained, 0);
+    }
+
+    #[test]
+    fn test_retention_policy_boundary_exactly_on_day() {
+        let shim = BackupShim {
+            retention_days: 7,
+            ..BackupShim::new()
+        };
+
+        {
+            let mut state = shim.state.lock().unwrap();
+            // Just under 7 days old - should be retained
+            state.backup_history.push(BackupEntry {
+                filename: "boundary.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::hours(167),
+                size_bytes: 100,
+                checksum: "ck".to_string(),
+            });
+            state.backups_retained = 1;
+        }
+
+        let expired = shim.cleanup_retention();
+        assert!(expired.is_empty());
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.backup_history.len(), 1);
+    }
+
+    #[test]
+    fn test_retention_policy_boundary_one_day_over() {
+        let shim = BackupShim {
+            retention_days: 7,
+            ..BackupShim::new()
+        };
+
+        {
+            let mut state = shim.state.lock().unwrap();
+            // 8 days old - should be expired
+            state.backup_history.push(BackupEntry {
+                filename: "expired.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::days(8),
+                size_bytes: 100,
+                checksum: "ck".to_string(),
+            });
+            state.backups_retained = 1;
+        }
+
+        let expired = shim.cleanup_retention();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0], "expired.sql.gz");
+    }
+
+    #[test]
+    fn test_history_summary_empty() {
+        let shim = BackupShim::new();
+        let (count, total_bytes, oldest_days) = shim.history_summary();
+        assert_eq!(count, 0);
+        assert_eq!(total_bytes, 0);
+        assert_eq!(oldest_days, 0);
+    }
+
+    #[test]
+    fn test_history_summary_single_entry() {
+        let shim = BackupShim::new();
+        shim.record_backup("backup1.sql.gz".to_string(), 500, "checksum1".to_string());
+        let (count, total_bytes, _) = shim.history_summary();
+        assert_eq!(count, 1);
+        assert_eq!(total_bytes, 500);
+    }
+
+    #[test]
+    fn test_record_failure_increments() {
+        let shim = BackupShim::new();
+        shim.record_failure();
+        shim.record_failure();
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.backup_failure, 2);
+        assert_eq!(state.backup_success, 0);
+    }
+
+    #[test]
+    fn test_record_backup_updates_last_backup() {
+        let shim = BackupShim::new();
+        shim.record_backup("b1.sql.gz".to_string(), 100, "ck1".to_string());
+        let state = shim.state.lock().unwrap();
+        assert!(state.last_backup.is_some());
+        assert_eq!(state.last_backup_size, 100);
+    }
+
+    #[test]
+    fn test_record_backup_overwrites_last_backup() {
+        let shim = BackupShim::new();
+        shim.record_backup("b1.sql.gz".to_string(), 100, "ck1".to_string());
+        shim.record_backup("b2.sql.gz".to_string(), 200, "ck2".to_string());
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.last_backup_size, 200);
+    }
+
+    #[test]
+    fn test_backup_filename_different_databases() {
+        for (db, expected_ext) in &[
+            ("mydb", ".sql.gz"),
+            ("analytics", ".sql.gz"),
+        ] {
+            let shim = BackupShim {
+                database: db.to_string(),
+                compression: "gzip".to_string(),
+                ..BackupShim::new()
+            };
+            let name = shim.backup_filename();
+            assert!(name.starts_with(&format!("{}_", db)));
+            assert!(name.ends_with(expected_ext));
+        }
+    }
+
+    #[test]
+    fn test_backup_shim_name() {
+        let shim = BackupShim::new();
+        assert_eq!(shim.name(), "backup");
+    }
+
+    #[test]
+    fn test_backup_shim_default_trait() {
+        let shim = BackupShim::default();
+        assert_eq!(shim.db_type, "postgres");
+        assert_eq!(shim.retention_days, 30);
+    }
+
+    #[test]
+    fn test_backup_shim_accessor_methods() {
+        let shim = BackupShim::new();
+        assert_eq!(shim.db_type(), "postgres");
+        assert_eq!(shim.db_host(), "127.0.0.1");
+        assert_eq!(shim.db_port(), 5432);
+        assert_eq!(shim.db_user(), "postgres");
+        assert_eq!(shim.db_password(), "");
+        assert_eq!(shim.database(), "");
+        assert_eq!(shim.backup_cmd(), "pg_dump");
+        assert_eq!(shim.output_dir(), "/tmp/backups");
+        assert_eq!(shim.redis_url(), "redis://localhost:6379");
+        assert_eq!(shim.redis_password(), "");
+        assert_eq!(shim.timeout_secs(), 3600);
+    }
+
+    #[test]
+    fn test_compute_checksum_large_data() {
+        let data = vec![0u8; 1_000_000];
+        let hash = BackupShim::compute_checksum(&data);
+        assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
+    fn test_compute_checksum_binary_data() {
+        let data: Vec<u8> = (0..=255).collect();
+        let hash = BackupShim::compute_checksum(&data);
+        assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
+    fn test_validate_backup_short_checksum() {
+        let shim = BackupShim::new();
+        let entry = BackupEntry {
+            filename: "test.sql.gz".to_string(),
+            created_at: chrono::Utc::now(),
+            size_bytes: 10,
+            checksum: "short".to_string(),
+        };
+        assert!(!shim.validate_backup(&entry, b"0123456789"));
+    }
+
+    #[tokio::test]
+    async fn test_verify_file_read_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backup.sql");
+        std::fs::write(&path, b"content").unwrap();
+
+        let v = BackupVerifier::new(true, false);
+        // Valid file with matching checksum
+        let checksum = BackupShim::compute_checksum(b"content");
+        let result = v.verify(path.to_str().unwrap(), &checksum).await;
+        assert!(result.success);
+        assert_eq!(result.file_size, 7);
+    }
+
+    #[test]
+    fn test_retention_policy_mixed_ages() {
+        let shim = BackupShim {
+            retention_days: 30,
+            ..BackupShim::new()
+        };
+
+        {
+            let mut state = shim.state.lock().unwrap();
+            // 60 days old - expired
+            state.backup_history.push(BackupEntry {
+                filename: "60d.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::days(60),
+                size_bytes: 100,
+                checksum: "ck1".to_string(),
+            });
+            // 31 days old - expired
+            state.backup_history.push(BackupEntry {
+                filename: "31d.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::days(31),
+                size_bytes: 200,
+                checksum: "ck2".to_string(),
+            });
+            // 1 day old - retained
+            state.backup_history.push(BackupEntry {
+                filename: "1d.sql.gz".to_string(),
+                created_at: chrono::Utc::now() - chrono::Duration::days(1),
+                size_bytes: 300,
+                checksum: "ck3".to_string(),
+            });
+            state.backups_retained = 3;
+        }
+
+        let expired = shim.cleanup_retention();
+        assert_eq!(expired.len(), 2);
+
+        let state = shim.state.lock().unwrap();
+        assert_eq!(state.backup_history.len(), 1);
+        assert_eq!(state.backup_history[0].filename, "1d.sql.gz");
+        assert_eq!(state.backups_retained, 1);
+        assert_eq!(state.backups_expired, 2);
+    }
 }
