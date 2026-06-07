@@ -11,7 +11,7 @@ import {
   MigrationApplyResponse,
   MigrationRollbackResponse,
 } from "./types";
-import { APIError, ConnectionError, TimeoutError } from "./exceptions";
+import { EvergreenShimError, APIError, ConnectionError, TimeoutError } from "./exceptions";
 
 export interface ClientOptions {
   timeout?: number;
