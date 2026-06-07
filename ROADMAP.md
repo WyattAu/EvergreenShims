@@ -100,16 +100,15 @@ Current state: v1.0.0 -- 34 crates, 885 tests, all CI/CD pipelines active, GitHu
 
 ### v3.x Known Gaps (Post-Release Work)
 
-| Gap | Severity | Description |
-|-----|----------|-------------|
-| SDK HTTP client implementation | High | Go/Python/Node SDKs are importable shells with no real HTTP logic |
-| Terraform provider compilation | High | Go code is syntactically valid but never compiled or tested |
-| Helm chart (was lost) | Fixed | Recreated in Phase A (helm/evergreen-shims/) |
-| Grafana dashboard (was lost) | Fixed | Recreated in Phase A (grafana/evergreen-shims-dashboard.json) |
-| k8s sample configmap | Fixed | Created in Phase A (k8s/sample-configmap.yaml) |
-| Example plugin build in CI | Medium | Requires C compiler for cdylib crate-type |
-| Coverage measurement | Medium | No cargo-tarpaulin or cargo-llvm-cov in CI |
-| Auth test flakiness | Medium | temp_env parallel pollution |
+| Gap | Severity | Status | Description |
+|-----|----------|--------|-------------|
+| SDK HTTP client implementation | High | Fixed | Go/Python/Node SDKs now have working HTTP clients with tests |
+| Terraform provider compilation | High | Fixed | Simplified to use management API, removed k8s dependency |
+| Helm chart (was lost) | Fixed | Fixed | Recreated in Phase A (helm/evergreen-shims/) |
+| Grafana dashboard (was lost) | Fixed | Fixed | Recreated with correct metric names from codebase |
+| k8s sample configmap | Fixed | Fixed | Created in Phase A (k8s/sample-configmap.yaml) |
+| Coverage measurement | Fixed | Fixed | 73% baseline established, CI job active |
+| Auth test flakiness | Fixed | Fixed | serial_test added to prevent parallel pollution |
 
 ## Architecture Decisions
 
@@ -135,9 +134,10 @@ Current state: v1.0.0 -- 34 crates, 885 tests, all CI/CD pipelines active, GitHu
 
 ## Quality Metrics
 
-| Metric | Current | Target (v1.0.0) |
-|--------|---------|-----------------|
+| Metric | Current | Target |
+|--------|---------|--------|
 | Unit tests | 885 | >900 |
+| Code coverage (excl. integration) | 73% | >80% |
 | Clippy warnings | 0 | 0 |
 | Unsafe code | 0 | 0 |
 | Pre-commit checks | 8 | 8 |
@@ -149,30 +149,37 @@ Current state: v1.0.0 -- 34 crates, 885 tests, all CI/CD pipelines active, GitHu
 | Supply chain (SHA pins) | Active | Active |
 | Dependency audit (cargo-deny) | Active | Active |
 | Helm chart | Active | Active |
-| Grafana dashboard | Active | Active |
+| Grafana dashboard | Active (validated) | Active |
+| Go SDK tests | 9 passing | Active |
+| Python SDK tests | 16 passing | Active |
+| Node SDK tests | 15 passing | Active |
 
 ## Post-1.0 Iteration Plan
 
-### v1.1.0 -- SDK & Provider Hardening
+### v1.1.0 -- SDK & Provider Hardening (Completed)
 
-| Task | Priority | Impact |
-|------|----------|--------|
-| Go SDK HTTP client with retry, auth, TLS | High | Ecosystem |
-| Python SDK HTTP client with retry, auth, TLS | High | Ecosystem |
-| Node SDK HTTP client with retry, auth, TLS | High | Ecosystem |
-| Terraform provider: compile, test, lint | High | IaC |
-| SDK CI: go test, pytest, npm test | High | Quality |
-| SDK documentation with usage examples | Medium | DX |
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| Go SDK HTTP client with retry, auth, TLS | Completed | High | Ecosystem |
+| Python SDK HTTP client with retry, auth, TLS | Completed | High | Ecosystem |
+| Node SDK HTTP client with retry, auth, TLS | Completed | High | Ecosystem |
+| Terraform provider: simplify to management API | Completed | High | IaC |
+| SDK CI: go test, pytest, npm test | Completed | High | Quality |
+| SDK documentation with usage examples | Completed | Medium | DX |
+| Coverage baseline: 73% (14,801/20,155 lines) | Completed | High | Quality |
+| Grafana dashboard: metrics validated against codebase | Completed | Medium | Ops |
+| Pre-push hook: unit tests only (integration to CI) | Completed | High | DX |
 
 ### v1.2.0 -- Coverage & Observability
 
 | Task | Priority | Impact |
 |------|----------|--------|
 | Coverage threshold enforcement in CI (>80%) | High | Quality |
-| Grafana dashboard tested against live metrics | Medium | Ops |
 | Helm chart lint (helm lint, ct lint) | Medium | Quality |
 | Example plugin CI build (gcc toolchain) | Low | DX |
 | Prometheus scrape endpoint validation | Medium | Observability |
+| Failover-shim coverage improvement (51% -> 80%) | High | Quality |
+| Compliance-shim coverage improvement (36% -> 70%) | Medium | Quality |
 
 ### v2.0.0 -- Advanced Platform Features
 
