@@ -172,6 +172,8 @@ mod tests {
 
     #[test]
     fn trace_context_propagation() {
+        use opentelemetry::trace::TraceId;
+
         let provider = SdkTracerProvider::builder()
             .with_resource(Resource::new(vec![KeyValue::new(
                 "service.name",
@@ -293,6 +295,84 @@ mod tests {
         span.end();
 
         // Shutdown flushes the batch
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn trace_span_with_special_characters() {
+        let provider = SdkTracerProvider::builder()
+            .with_resource(Resource::new(vec![KeyValue::new(
+                "service.name",
+                "special-chars",
+            )]))
+            .build();
+        let tracer = provider.tracer("test-tracer");
+
+        let mut span = tracer.start("operation/with:special*chars");
+        span.set_attribute(KeyValue::new("key with spaces", "value"));
+        span.set_attribute(KeyValue::new("key\twith\ttabs", "value"));
+        span.end();
+
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn trace_multiple_spans_same_tracer() {
+        let provider = SdkTracerProvider::builder()
+            .with_resource(Resource::new(vec![KeyValue::new(
+                "service.name",
+                "multi-span",
+            )]))
+            .build();
+        let tracer = provider.tracer("test-tracer");
+
+        for i in 0..10 {
+            let mut span = tracer.start(format!("span-{}", i));
+            span.set_attribute(KeyValue::new("index", i as i64));
+            span.end();
+        }
+
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn trace_span_status_codes() {
+        use opentelemetry::trace::StatusCode;
+
+        let provider = SdkTracerProvider::builder()
+            .with_resource(Resource::new(vec![KeyValue::new(
+                "service.name",
+                "status-test",
+            )]))
+            .build();
+        let tracer = provider.tracer("test-tracer");
+
+        let mut span = tracer.start("status-span");
+        span.set_status(StatusCode::Ok);
+        span.set_status(StatusCode::Error);
+        span.set_status(StatusCode::Unset);
+        span.end();
+
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn trace_span_attribute_types() {
+        let provider = SdkTracerProvider::builder()
+            .with_resource(Resource::new(vec![KeyValue::new(
+                "service.name",
+                "attr-types",
+            )]))
+            .build();
+        let tracer = provider.tracer("test-tracer");
+
+        let mut span = tracer.start("attr-span");
+        span.set_attribute(KeyValue::new("str_key", "string_value"));
+        span.set_attribute(KeyValue::new("bool_key", true));
+        span.set_attribute(KeyValue::new("i64_key", 42i64));
+        span.set_attribute(KeyValue::new("f64_key", 3.14));
+        span.end();
+
         let _ = provider.shutdown();
     }
 }

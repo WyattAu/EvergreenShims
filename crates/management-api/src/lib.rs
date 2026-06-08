@@ -348,4 +348,117 @@ mod tests {
         };
         assert!(req.validate().is_ok());
     }
+
+    #[test]
+    fn test_extract_peer_no_header() {
+        let request = Request::new(());
+        let peer = extract_peer(&request);
+        assert_eq!(peer, IpAddr::from([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn test_extract_peer_with_forwarded_for() {
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-forwarded-for", "192.168.1.100".parse().unwrap());
+        let peer = extract_peer(&request);
+        assert_eq!(peer, "192.168.1.100".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn test_extract_peer_with_multiple_forwarded_for() {
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-forwarded-for", "10.0.0.1, 10.0.0.2".parse().unwrap());
+        let peer = extract_peer(&request);
+        assert_eq!(peer, "10.0.0.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn test_extract_peer_with_invalid_ip() {
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-forwarded-for", "not-an-ip".parse().unwrap());
+        let peer = extract_peer(&request);
+        assert_eq!(peer, IpAddr::from([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn test_extract_peer_with_whitespace() {
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-forwarded-for", "  172.16.0.1  ".parse().unwrap());
+        let peer = extract_peer(&request);
+        assert_eq!(peer, "172.16.0.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn test_get_status_capabilities_fields() {
+        let state = ShimState::new();
+        let request = Request::new(GetStatusRequest {});
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let response = rt.block_on(state.get_status(request)).unwrap();
+        let status = response.into_inner();
+
+        // Check metrics capability
+        let metrics_cap = status.capabilities.iter().find(|c| c.name == "metrics");
+        assert!(metrics_cap.is_some());
+        let mc = metrics_cap.unwrap();
+        assert!(mc.enabled);
+
+        // Check health capability
+        let health_cap = status.capabilities.iter().find(|c| c.name == "health");
+        assert!(health_cap.is_some());
+        let hc = health_cap.unwrap();
+        assert!(hc.enabled);
+        assert!(hc.healthy);
+    }
+
+    #[test]
+    fn test_get_metrics_includes_dynamic_uptime() {
+        let state = ShimState::new();
+        let request = Request::new(GetMetricsRequest {});
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let response = rt.block_on(state.get_metrics(request)).unwrap();
+        let metrics = response.into_inner().metrics;
+
+        // Find the uptime metric
+        let uptime = metrics.iter().find(|m| m.name == "shim_uptime_seconds");
+        assert!(uptime.is_some());
+        // The dynamic uptime should have a value >= 0
+        assert!(uptime.unwrap().value >= 0.0);
+    }
+
+    #[test]
+    fn test_reload_config_warning_message() {
+        let state = ShimState::new();
+        let request = Request::new(ReloadConfigRequest {
+            config_path: String::new(),
+        });
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let response = rt.block_on(state.reload_config(request)).unwrap();
+        let reload = response.into_inner();
+
+        assert!(reload
+            .warnings
+            .iter()
+            .any(|w| w.contains("No config path specified")));
+    }
+
+    #[test]
+    fn test_list_capabilities_version_info() {
+        let state = ShimState::new();
+        let request = Request::new(ListCapabilitiesRequest {});
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let response = rt.block_on(state.list_capabilities(request)).unwrap();
+        let caps = response.into_inner().capabilities;
+
+        for cap in &caps {
+            assert!(!cap.version.is_empty());
+        }
+    }
 }

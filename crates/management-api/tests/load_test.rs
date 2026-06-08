@@ -31,7 +31,9 @@ async fn start_server_on_random_port() -> (SocketAddr, tokio::task::JoinHandle<(
     (addr, handle)
 }
 
-async fn connect_client(port: u16) -> management_api::proto::shim_management_service_client::ShimManagementServiceClient<Channel> {
+async fn connect_client(
+    port: u16,
+) -> management_api::proto::shim_management_service_client::ShimManagementServiceClient<Channel> {
     let channel = Channel::from_shared(format!("http://127.0.0.1:{port}"))
         .unwrap()
         .connect()
@@ -116,10 +118,7 @@ async fn load_test_throughput_and_latency() {
     println!("p99: {p99:.2} ms");
     println!(
         "min: {:.2} ms",
-        all_latencies
-            .iter()
-            .cloned()
-            .fold(f64::INFINITY, f64::min)
+        all_latencies.iter().cloned().fold(f64::INFINITY, f64::min)
     );
     println!(
         "max: {:.2} ms",

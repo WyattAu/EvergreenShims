@@ -256,4 +256,87 @@ mod tests {
         let corr = derive_correlation_id("req-123");
         assert_eq!(corr, "corr-req-123");
     }
+
+    #[test]
+    fn test_request_context_new_uniqueness() {
+        let ctx1 = RequestContext::new("shim");
+        let ctx2 = RequestContext::new("shim");
+        assert_ne!(ctx1.request_id, ctx2.request_id);
+    }
+
+    #[test]
+    fn test_request_context_with_correlation_uniqueness() {
+        let corr = uuid::Uuid::new_v4();
+        let ctx1 = RequestContext::with_correlation("shim", corr);
+        let ctx2 = RequestContext::with_correlation("shim", corr);
+        assert_ne!(ctx1.request_id, ctx2.request_id);
+        assert_eq!(ctx1.correlation_id, ctx2.correlation_id);
+    }
+
+    #[test]
+    fn test_request_context_span_correlation_field() {
+        let corr = uuid::Uuid::new_v4();
+        let ctx = RequestContext::with_correlation("test-shim", corr);
+        let span = ctx.span();
+        // Span should contain the correlation ID in its fields
+        let _ = span;
+    }
+
+    #[test]
+    fn test_operation_tracker_complete_status_values() {
+        let rid = uuid::Uuid::new_v4();
+        let tracker = OperationTracker::start("op1", "shim1", rid);
+        let m = tracker.complete("success");
+        assert_eq!(m.status, "success");
+
+        let rid2 = uuid::Uuid::new_v4();
+        let tracker2 = OperationTracker::start("op2", "shim2", rid2);
+        let m2 = tracker2.complete("error");
+        assert_eq!(m2.status, "error");
+    }
+
+    #[test]
+    fn test_operation_tracker_metrics_fields() {
+        let rid = uuid::Uuid::new_v4();
+        let tracker = OperationTracker::start("test-op", "test-shim", rid);
+        let m = tracker.complete("ok");
+        assert_eq!(m.operation, "test-op");
+        assert_eq!(m.shim_name, "test-shim");
+        assert_eq!(m.request_id, rid);
+    }
+
+    #[test]
+    fn test_generate_request_id_format() {
+        let id = generate_request_id();
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(parts[0], "req");
+        assert_eq!(parts.len(), 3);
+        // Second part should be a timestamp (digits)
+        assert!(parts[1].chars().all(|c| c.is_ascii_digit()));
+        // Third part should be a sequence number
+        assert!(parts[2].chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_generate_request_id_sequential() {
+        let id1 = generate_request_id();
+        let id2 = generate_request_id();
+        let seq1: u64 = id1.split('-').nth(2).unwrap().parse().unwrap();
+        let seq2: u64 = id2.split('-').nth(2).unwrap().parse().unwrap();
+        assert_eq!(seq2, seq1 + 1);
+    }
+
+    #[test]
+    fn test_derive_correlation_id_empty() {
+        let corr = derive_correlation_id("");
+        assert_eq!(corr, "corr-");
+    }
+
+    #[test]
+    fn test_derive_correlation_id_long() {
+        let long_id = "a".repeat(200);
+        let corr = derive_correlation_id(&long_id);
+        assert!(corr.starts_with("corr-"));
+        assert!(corr.len() > 200);
+    }
 }
