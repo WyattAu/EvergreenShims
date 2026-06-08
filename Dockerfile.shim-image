@@ -46,9 +46,8 @@ RUN for attempt in 1 2 3; do \
         strip target/x86_64-unknown-linux-musl/release/shim && \
         cp target/x86_64-unknown-linux-musl/release/shim /shim && break; \
       fi; \
-      echo "Attempt $attempt failed, retrying in 10s..."; \
-      sleep 10; \
-      cargo clean 2>/dev/null || true; \
+      echo "Attempt $attempt failed, retrying in 30s..."; \
+      sleep 30; \
     done
 
 FROM scratch AS shim-health
