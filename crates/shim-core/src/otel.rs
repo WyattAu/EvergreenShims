@@ -76,9 +76,7 @@ mod tests {
     fn resource_detection_service_name() {
         let resource = Resource::new(vec![KeyValue::new("service.name", "test-shim")]);
         let attrs: Vec<KeyValue> = resource.iter().map(|(k, v)| KeyValue::new(k, v)).collect();
-        assert!(attrs
-            .iter()
-            .any(|a| a.key.as_str() == "service.name"));
+        assert!(attrs.iter().any(|a| a.key.as_str() == "service.name"));
     }
 
     #[test]
@@ -123,9 +121,10 @@ mod tests {
         let tracer = provider.tracer("test-tracer");
 
         let mut span = tracer.start("error-span");
-        span.record_error(opentelemetry::error::Error::from(
-            std::io::Error::new(std::io::ErrorKind::Other, "simulated failure"),
-        ));
+        span.record_error(opentelemetry::error::Error::from(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "simulated failure",
+        )));
         span.set_status(opentelemetry::trace::Status::error("simulated failure"));
         span.end();
 
@@ -157,8 +156,14 @@ mod tests {
         );
 
         let mut child_span = tracer.start_with_context("child", &opentelemetry::Context::current());
-        child_span.set_attribute(KeyValue::new("link.trace_id", linked_ctx.trace_id().to_string()));
-        child_span.set_attribute(KeyValue::new("link.span_id", linked_ctx.span_id().to_string()));
+        child_span.set_attribute(KeyValue::new(
+            "link.trace_id",
+            linked_ctx.trace_id().to_string(),
+        ));
+        child_span.set_attribute(KeyValue::new(
+            "link.span_id",
+            linked_ctx.span_id().to_string(),
+        ));
         child_span.end();
         parent_span.end();
 
@@ -180,9 +185,13 @@ mod tests {
         let parent_span_ctx = parent_span.span_context().clone();
 
         // Create child span using parent context
-        let parent_context = opentelemetry::Context::current().with_remote_span_context(parent_span_ctx);
+        let parent_context =
+            opentelemetry::Context::current().with_remote_span_context(parent_span_ctx);
         let mut child_span = tracer.start_with_context("child-span", &parent_context);
-        child_span.set_attribute(KeyValue::new("parent.trace_id", parent_span_ctx.trace_id().to_string()));
+        child_span.set_attribute(KeyValue::new(
+            "parent.trace_id",
+            parent_span_ctx.trace_id().to_string(),
+        ));
         child_span.end();
         parent_span.end();
 
@@ -221,16 +230,10 @@ mod tests {
     #[test]
     fn trace_multiple_providers_independent() {
         let provider1 = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "shim-1",
-            )]))
+            .with_resource(Resource::new(vec![KeyValue::new("service.name", "shim-1")]))
             .build();
         let provider2 = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "shim-2",
-            )]))
+            .with_resource(Resource::new(vec![KeyValue::new("service.name", "shim-2")]))
             .build();
 
         let tracer1 = provider1.tracer("tracer-1");

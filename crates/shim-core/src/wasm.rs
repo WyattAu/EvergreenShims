@@ -1187,8 +1187,7 @@ mod runtime_tests {
         assert!(result.is_err(), "invalid WASM binary should fail to load");
 
         // Empty bytes
-        let result =
-            loader.load_shim_bytes("empty", b"", &default_wasm_config(), &config);
+        let result = loader.load_shim_bytes("empty", b"", &default_wasm_config(), &config);
         assert!(result.is_err(), "empty bytes should fail to load");
 
         // Random non-WASM data

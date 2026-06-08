@@ -3039,9 +3039,18 @@ mod tests {
 
     #[test]
     fn test_multicluster_strategy_display() {
-        assert_eq!(format!("{}", MultiClusterFailoverStrategy::Sequential), "sequential");
-        assert_eq!(format!("{}", MultiClusterFailoverStrategy::LatencyBased), "latency");
-        assert_eq!(format!("{}", MultiClusterFailoverStrategy::WeightedRandom), "weighted");
+        assert_eq!(
+            format!("{}", MultiClusterFailoverStrategy::Sequential),
+            "sequential"
+        );
+        assert_eq!(
+            format!("{}", MultiClusterFailoverStrategy::LatencyBased),
+            "latency"
+        );
+        assert_eq!(
+            format!("{}", MultiClusterFailoverStrategy::WeightedRandom),
+            "weighted"
+        );
     }
 
     #[test]
@@ -3103,7 +3112,10 @@ mod tests {
                 assert_eq!(shim.primary, "10.0.0.1:5432");
                 assert_eq!(shim.replica, "10.0.0.2:5432");
                 assert_eq!(shim.failure_threshold, 5);
-                assert_eq!(shim.webhook, Some("https://hooks.slack.com/test".to_string()));
+                assert_eq!(
+                    shim.webhook,
+                    Some("https://hooks.slack.com/test".to_string())
+                );
                 assert_eq!(shim.db_type, "mysql");
             },
         );
@@ -3183,11 +3195,7 @@ mod tests {
 
     #[test]
     fn test_redis_sentinel_monitor_new_explicit() {
-        let monitor = RedisSentinelMonitor::new(
-            "redis://sentinel.prod:26379",
-            "prod-master",
-            3,
-        );
+        let monitor = RedisSentinelMonitor::new("redis://sentinel.prod:26379", "prod-master", 3);
         assert_eq!(monitor.sentinel_url(), "redis://sentinel.prod:26379");
         assert_eq!(monitor.master_name(), "prod-master");
         assert_eq!(monitor.check_interval_secs(), 3);
@@ -3309,7 +3317,10 @@ mod tests {
             Some("https://hooks.slack.com/test".to_string()),
         );
         assert_eq!(monitor.primary_cluster(), "us-east");
-        assert_eq!(monitor.failover_strategy(), &MultiClusterFailoverStrategy::Sequential);
+        assert_eq!(
+            monitor.failover_strategy(),
+            &MultiClusterFailoverStrategy::Sequential
+        );
         assert_eq!(monitor.cross_cluster_check_interval_secs(), 10);
         assert_eq!(monitor.failure_threshold(), 3);
         assert_eq!(monitor.clusters().len(), 1);
@@ -3381,7 +3392,10 @@ mod tests {
 
     #[test]
     fn test_multi_cluster_strategy_default() {
-        assert_eq!(MultiClusterFailoverStrategy::default(), MultiClusterFailoverStrategy::Sequential);
+        assert_eq!(
+            MultiClusterFailoverStrategy::default(),
+            MultiClusterFailoverStrategy::Sequential
+        );
     }
 
     #[test]
@@ -3484,16 +3498,8 @@ mod tests {
     #[test]
     fn test_multi_cluster_all_degraded_returns_none() {
         let mut monitor = make_all_healthy_monitor();
-        monitor
-            .clusters
-            .get_mut("eu-west")
-            .unwrap()
-            .status = ClusterStatus::Degraded;
-        monitor
-            .clusters
-            .get_mut("ap-south")
-            .unwrap()
-            .status = ClusterStatus::Degraded;
+        monitor.clusters.get_mut("eu-west").unwrap().status = ClusterStatus::Degraded;
+        monitor.clusters.get_mut("ap-south").unwrap().status = ClusterStatus::Degraded;
         assert!(monitor.select_failover_target().is_none());
     }
 
@@ -3595,11 +3601,7 @@ mod tests {
     #[test]
     fn test_multi_cluster_aggregate_status_one_failed() {
         let mut monitor = make_all_healthy_monitor();
-        monitor
-            .clusters
-            .get_mut("ap-south")
-            .unwrap()
-            .status = ClusterStatus::Failed;
+        monitor.clusters.get_mut("ap-south").unwrap().status = ClusterStatus::Failed;
         let healthy_count = monitor
             .clusters
             .values()
@@ -3611,16 +3613,8 @@ mod tests {
     #[test]
     fn test_multi_cluster_aggregate_status_all_failed() {
         let mut monitor = make_all_healthy_monitor();
-        monitor
-            .clusters
-            .get_mut("eu-west")
-            .unwrap()
-            .status = ClusterStatus::Failed;
-        monitor
-            .clusters
-            .get_mut("ap-south")
-            .unwrap()
-            .status = ClusterStatus::Failed;
+        monitor.clusters.get_mut("eu-west").unwrap().status = ClusterStatus::Failed;
+        monitor.clusters.get_mut("ap-south").unwrap().status = ClusterStatus::Failed;
         let healthy_count = monitor
             .clusters
             .values()
@@ -3654,16 +3648,8 @@ mod tests {
     #[test]
     fn test_multi_cluster_metrics_cluster_status_values() {
         let mut monitor = make_all_healthy_monitor();
-        monitor
-            .clusters
-            .get_mut("eu-west")
-            .unwrap()
-            .status = ClusterStatus::Degraded;
-        monitor
-            .clusters
-            .get_mut("ap-south")
-            .unwrap()
-            .status = ClusterStatus::Healthy;
+        monitor.clusters.get_mut("eu-west").unwrap().status = ClusterStatus::Degraded;
+        monitor.clusters.get_mut("ap-south").unwrap().status = ClusterStatus::Healthy;
         let metrics = monitor.metrics();
         let statuses: Vec<f64> = metrics
             .iter()
@@ -3690,26 +3676,10 @@ mod tests {
     #[test]
     fn test_multi_cluster_health_check_aggregation_mixed() {
         let mut monitor = make_all_healthy_monitor();
-        monitor
-            .clusters
-            .get_mut("eu-west")
-            .unwrap()
-            .status = ClusterStatus::Degraded;
-        monitor
-            .clusters
-            .get_mut("eu-west")
-            .unwrap()
-            .latency_ms = Some(150);
-        monitor
-            .clusters
-            .get_mut("ap-south")
-            .unwrap()
-            .status = ClusterStatus::Healthy;
-        monitor
-            .clusters
-            .get_mut("ap-south")
-            .unwrap()
-            .latency_ms = Some(30);
+        monitor.clusters.get_mut("eu-west").unwrap().status = ClusterStatus::Degraded;
+        monitor.clusters.get_mut("eu-west").unwrap().latency_ms = Some(150);
+        monitor.clusters.get_mut("ap-south").unwrap().status = ClusterStatus::Healthy;
+        monitor.clusters.get_mut("ap-south").unwrap().latency_ms = Some(30);
 
         // Select should skip degraded eu-west
         monitor.failover_strategy = MultiClusterFailoverStrategy::LatencyBased;
@@ -3728,7 +3698,10 @@ mod tests {
         // Now promote again (the other cluster is the remaining candidate)
         let second = monitor.promote_secondary().await.unwrap();
         assert!(second == "eu-west" || second == "ap-south");
-        assert_ne!(first, second, "second promotion should pick the other cluster");
+        assert_ne!(
+            first, second,
+            "second promotion should pick the other cluster"
+        );
         assert_eq!(monitor.primary_cluster(), &second);
         assert_eq!(monitor.promotions_total(), 2);
     }
@@ -3797,11 +3770,7 @@ mod tests {
     #[test]
     fn test_multi_cluster_cluster_status_unknown_is_not_healthy() {
         let mut monitor = make_all_healthy_monitor();
-        monitor
-            .clusters
-            .get_mut("ap-south")
-            .unwrap()
-            .status = ClusterStatus::Unknown;
+        monitor.clusters.get_mut("ap-south").unwrap().status = ClusterStatus::Unknown;
         // Only eu-west is Healthy
         let target = monitor.select_failover_target();
         assert_eq!(target, Some("eu-west".to_string()));

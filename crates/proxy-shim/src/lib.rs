@@ -1462,8 +1462,7 @@ mod tests {
         assert_eq!(shim.state.read().circuit_state, CircuitState::Open);
 
         // Set open_since to far past to simulate cooldown elapsed
-        shim.state.write().open_since =
-            Some(Instant::now() - Duration::from_secs(120));
+        shim.state.write().open_since = Some(Instant::now() - Duration::from_secs(120));
         assert!(shim.check_circuit());
         assert_eq!(shim.state.read().circuit_state, CircuitState::HalfOpen);
     }
@@ -1700,9 +1699,15 @@ mod tests {
         };
         shim.record_failure();
         let metrics = shim.metrics();
-        let circuit_state = metrics.iter().find(|m| m.name == "proxy_circuit_state").unwrap();
+        let circuit_state = metrics
+            .iter()
+            .find(|m| m.name == "proxy_circuit_state")
+            .unwrap();
         assert_eq!(circuit_state.value, 1.0); // Open
-        let failures = metrics.iter().find(|m| m.name == "proxy_circuit_failures").unwrap();
+        let failures = metrics
+            .iter()
+            .find(|m| m.name == "proxy_circuit_failures")
+            .unwrap();
         assert_eq!(failures.value, 1.0);
     }
 

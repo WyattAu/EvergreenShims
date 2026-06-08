@@ -2795,7 +2795,13 @@ async fn test_chaos_partition_triggers_failover() {
 
     // Start partition experiment
     let exp_id = orch
-        .start_experiment("partition-failover", FaultType::Partition, "db-primary", 1.0, 30)
+        .start_experiment(
+            "partition-failover",
+            FaultType::Partition,
+            "db-primary",
+            1.0,
+            30,
+        )
         .unwrap();
 
     // Emit chaos event

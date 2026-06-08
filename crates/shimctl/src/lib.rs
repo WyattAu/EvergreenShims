@@ -415,7 +415,13 @@ mod tests {
 
     #[test]
     fn test_long_endpoint_flag_all_commands() {
-        let cli = parse_args(&["shimctl", "--endpoint", "http://prod:9090", "migration", "status"]);
+        let cli = parse_args(&[
+            "shimctl",
+            "--endpoint",
+            "http://prod:9090",
+            "migration",
+            "status",
+        ]);
         assert_eq!(cli.endpoint, "http://prod:9090");
         match cli.command {
             Command::Migration { action } => assert!(matches!(action, MigrationAction::Status)),
@@ -470,7 +476,8 @@ mod tests {
 
     #[test]
     fn test_migration_status_no_pending() {
-        let json = r#"{"current_version":"5","pending":[],"applied":["001","002","003","004","005"]}"#;
+        let json =
+            r#"{"current_version":"5","pending":[],"applied":["001","002","003","004","005"]}"#;
         let resp: client::MigrationStatusResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.current_version, "5");
         assert!(resp.pending.is_empty());

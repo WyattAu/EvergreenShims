@@ -1253,7 +1253,10 @@ mod tests {
 
         // Verify metrics reflect the lifecycle
         let metrics = shim.metrics();
-        let injected_metric = metrics.iter().find(|m| m.name == "chaos_faults_injected").unwrap();
+        let injected_metric = metrics
+            .iter()
+            .find(|m| m.name == "chaos_faults_injected")
+            .unwrap();
         assert!(injected_metric.value > 0.0);
     }
 
@@ -1400,7 +1403,11 @@ mod tests {
 
         // Run 5 times
         for i in 0..5 {
-            assert!(orch.can_run_scheduled(&id), "Should be able to run at iteration {}", i);
+            assert!(
+                orch.can_run_scheduled(&id),
+                "Should be able to run at iteration {}",
+                i
+            );
             orch.record_scheduled_run(&id);
         }
 
@@ -1435,9 +1442,18 @@ mod tests {
         };
 
         // Start multiple experiments simultaneously
-        let id1 = shim.start_experiment("concurrent-1", FaultType::Latency, "all", 1.0, 60).id.clone();
-        let id2 = shim.start_experiment("concurrent-2", FaultType::Error, "all", 0.5, 30).id.clone();
-        let id3 = shim.start_experiment("concurrent-3", FaultType::Partition, "all", 1.0, 120).id.clone();
+        let id1 = shim
+            .start_experiment("concurrent-1", FaultType::Latency, "all", 1.0, 60)
+            .id
+            .clone();
+        let id2 = shim
+            .start_experiment("concurrent-2", FaultType::Error, "all", 0.5, 30)
+            .id
+            .clone();
+        let id3 = shim
+            .start_experiment("concurrent-3", FaultType::Partition, "all", 1.0, 120)
+            .id
+            .clone();
 
         // All three should be active
         assert_eq!(shim.active_experiments().len(), 3);

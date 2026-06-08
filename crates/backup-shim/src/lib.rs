@@ -1516,7 +1516,10 @@ mod tests {
             file_size: 0,
             checksum_match: Some(false),
             restore_test: None,
-            errors: vec!["checksum mismatch".to_string(), "file corrupted".to_string()],
+            errors: vec![
+                "checksum mismatch".to_string(),
+                "file corrupted".to_string(),
+            ],
         };
         let json = serde_json::to_string(&result).unwrap();
         let deserialized: VerificationResult = serde_json::from_str(&json).unwrap();
@@ -1796,10 +1799,7 @@ mod tests {
 
     #[test]
     fn test_backup_filename_different_databases() {
-        for (db, expected_ext) in &[
-            ("mydb", ".sql.gz"),
-            ("analytics", ".sql.gz"),
-        ] {
+        for (db, expected_ext) in &[("mydb", ".sql.gz"), ("analytics", ".sql.gz")] {
             let shim = BackupShim {
                 database: db.to_string(),
                 compression: "gzip".to_string(),

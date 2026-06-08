@@ -286,9 +286,7 @@ mod tests {
     /// Compile a C file to a shared library and return the path.
     fn compile_plugin(c_source: &str, name: &str) -> PathBuf {
         let id = PLUGIN_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let out_dir = std::env::temp_dir().join(format!(
-            "shim_plugin_test_{id}"
-        ));
+        let out_dir = std::env::temp_dir().join(format!("shim_plugin_test_{id}"));
         std::fs::create_dir_all(&out_dir).unwrap();
         let so_path = out_dir.join(format!("lib{name}.so"));
         let status = std::process::Command::new("gcc")
@@ -302,7 +300,11 @@ mod tests {
             .status()
             .expect("failed to run gcc");
         assert!(status.success(), "gcc compilation failed for {c_source}");
-        assert!(so_path.exists(), "shared library not created at {}", so_path.display());
+        assert!(
+            so_path.exists(),
+            "shared library not created at {}",
+            so_path.display()
+        );
         so_path
     }
 
