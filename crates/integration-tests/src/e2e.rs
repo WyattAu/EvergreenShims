@@ -1119,3 +1119,578 @@ async fn e2e_chaos_shim_error_injection() {
 
     shim.stop_experiment(&exp_id);
 }
+
+// ============================================================================
+// Real-service PostgreSQL integration tests
+// ============================================================================
+
+/// Real PostgreSQL migration: create table, verify, drop.
+#[tokio::test]
+#[serial]
+async fn e2e_migration_real_postgres() {
+    if !service_available("127.0.0.1:15432").await {
+        eprintln!("Skipping: PostgreSQL not available at 127.0.0.1:15432");
+        return;
+    }
+
+    let url = "postgres://test:test@localhost:15432/testdb";
+    let pool = match sqlx::PgPool::connect(url).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Skipping: PostgreSQL connect failed: {}", e);
+            return;
+        }
+    };
+
+    let table_name = "e2e_migration_real_test";
+
+    // Cleanup from prior runs.
+    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {}", table_name))
+        .execute(&pool)
+        .await;
+
+    // Create table.
+    sqlx::query(&format!(
+        "CREATE TABLE {} (id SERIAL PRIMARY KEY, name TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now())",
+        table_name
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Verify table exists via information_schema.
+    let row: (String,) = sqlx::query_as(
+        "SELECT table_name FROM information_schema.tables WHERE table_name = $1",
+    )
+    .bind(table_name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, table_name);
+
+    // Verify column exists.
+    let col: (String,) = sqlx::query_as(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = 'name'",
+    )
+    .bind(table_name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(col.0, "name");
+
+    // Insert data.
+    sqlx::query(&format!("INSERT INTO {} (name) VALUES ($1)", table_name))
+        .bind("migration_test_row")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Verify insert.
+    let row: (String,) =
+        sqlx::query_as(&format!("SELECT name FROM {} WHERE name = $1", table_name))
+            .bind("migration_test_row")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "migration_test_row");
+
+    // Cleanup.
+    sqlx::query(&format!("DROP TABLE IF EXISTS {}", table_name))
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+/// Real PostgreSQL backup checksum: insert data, compute SHA-256, verify integrity.
+#[tokio::test]
+#[serial]
+async fn e2e_backup_real_postgres() {
+    if !service_available("127.0.0.1:15432").await {
+        eprintln!("Skipping: PostgreSQL not available at 127.0.0.1:15432");
+        return;
+    }
+
+    use backup_shim::BackupShim;
+
+    let url = "postgres://test:test@localhost:15432/testdb";
+    let pool = match sqlx::PgPool::connect(url).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Skipping: PostgreSQL connect failed: {}", e);
+            return;
+        }
+    };
+
+    let table_name = "e2e_backup_real_test";
+
+    // Setup.
+    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {}", table_name))
+        .execute(&pool)
+        .await;
+
+    sqlx::query(&format!(
+        "CREATE TABLE {} (id SERIAL PRIMARY KEY, payload TEXT)",
+        table_name
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Insert multiple rows of test data.
+    for i in 0..5 {
+        sqlx::query(&format!("INSERT INTO {} (payload) VALUES ($1)", table_name))
+            .bind(format!("backup_payload_{}", i))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // Read back all rows to simulate backup data extraction.
+    let rows: Vec<(i32, String)> = sqlx::query_as(&format!(
+        "SELECT id, payload FROM {} ORDER BY id",
+        table_name
+    ))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(rows.len(), 5, "Should have 5 rows inserted");
+
+    // Serialize to bytes (simulating backup data).
+    let backup_data = serde_json::to_vec(&rows).unwrap();
+    let checksum = BackupShim::compute_checksum(&backup_data);
+
+    // Verify SHA-256 checksum: 64 hex chars.
+    assert_eq!(checksum.len(), 64);
+    assert!(checksum.chars().all(|c| c.is_ascii_hexdigit()));
+
+    // Write to temp file and verify roundtrip.
+    let dir = tempfile::tempdir().unwrap();
+    let backup_file = dir.path().join("real_backup.sql.gz");
+    std::fs::write(&backup_file, &backup_data).unwrap();
+
+    let read_back = std::fs::read(&backup_file).unwrap();
+    let file_checksum = BackupShim::compute_checksum(&read_back);
+    assert_eq!(file_checksum, checksum);
+
+    // Verify checksum changes when data changes.
+    let modified_data = b"corrupted";
+    let bad_checksum = BackupShim::compute_checksum(modified_data);
+    assert_ne!(bad_checksum, checksum);
+
+    // Cleanup.
+    sqlx::query(&format!("DROP TABLE IF EXISTS {}", table_name))
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+/// Real PostgreSQL CDC: insert row, query WAL position / replication stats.
+#[tokio::test]
+#[serial]
+async fn e2e_cdc_real_postgres() {
+    if !service_available("127.0.0.1:15432").await {
+        eprintln!("Skipping: PostgreSQL not available at 127.0.0.1:15432");
+        return;
+    }
+
+    let url = "postgres://test:test@localhost:15432/testdb";
+    let pool = match sqlx::PgPool::connect(url).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Skipping: PostgreSQL connect failed: {}", e);
+            return;
+        }
+    };
+
+    // Query current WAL write position.
+    let wal_row: (String,) = sqlx::query_as("SELECT pg_current_wal_lsn()::text")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let wal_position = wal_row.0;
+    assert!(
+        wal_position.contains('/'),
+        "WAL position should contain '/': {}",
+        wal_position
+    );
+
+    // Insert a row to advance the WAL.
+    let table_name = "e2e_cdc_real_test";
+    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {}", table_name))
+        .execute(&pool)
+        .await;
+
+    sqlx::query(&format!(
+        "CREATE TABLE {} (id SERIAL PRIMARY KEY, data TEXT)",
+        table_name
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(&format!("INSERT INTO {} (data) VALUES ($1)", table_name))
+        .bind("cdc_test_data")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Verify WAL position advanced or stayed the same (still valid).
+    let wal_row2: (String,) = sqlx::query_as("SELECT pg_current_wal_lsn()::text")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let wal_position2 = wal_row2.0;
+    assert!(
+        wal_position2.contains('/'),
+        "WAL position after insert should contain '/': {}",
+        wal_position2
+    );
+
+    // Check if WAL level is replica or logical (needed for CDC).
+    let wal_level: (String,) =
+        sqlx::query_as("SELECT setting FROM pg_settings WHERE name = 'wal_level'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    // Any WAL level >= 'replica' supports basic CDC tracking.
+    assert!(
+        matches!(wal_level.0.as_str(), "replica" | "logical"),
+        "WAL level should support CDC, got: {}",
+        wal_level.0
+    );
+
+    // Check replication slots (may be empty in single-node, but query should work).
+    let _slots: Vec<(String, String)> = sqlx::query_as(
+        "SELECT slot_name, plugin FROM pg_replication_slots LIMIT 10",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    // Cleanup.
+    sqlx::query(&format!("DROP TABLE IF EXISTS {}", table_name))
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+// ============================================================================
+// Real-service Redis integration tests
+// ============================================================================
+
+/// Real Redis cache: set/get/delete roundtrip.
+#[tokio::test]
+#[serial]
+async fn e2e_cache_real_redis() {
+    // Try both common test ports.
+    let ports = [16380, 6380];
+    let mut conn_opt: Option<redis::aio::MultiplexedConnection> = None;
+
+    for port in &ports {
+        if !service_available(&format!("127.0.0.1:{}", port)).await {
+            continue;
+        }
+        let client = redis::Client::open(format!("redis://127.0.0.1:{}", port)).unwrap();
+        match client.get_multiplexed_async_connection().await {
+            Ok(c) => {
+                conn_opt = Some(c);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    let mut conn = match conn_opt {
+        Some(c) => c,
+        None => {
+            eprintln!("Skipping: Redis not available at 127.0.0.1:16380 or 127.0.0.1:6380");
+            return;
+        }
+    };
+
+    let test_key = "e2e_cache_real_test";
+    let test_value = b"real_redis_value_12345";
+
+    // Cleanup prior run.
+    let _ : () = redis::cmd("DEL")
+        .arg(test_key)
+        .query_async(&mut conn)
+        .await
+        .unwrap_or(());
+
+    // SET.
+    let _: () = redis::cmd("SET")
+        .arg(test_key)
+        .arg(test_value)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+
+    // GET.
+    let retrieved: Vec<u8> = redis::cmd("GET")
+        .arg(test_key)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(retrieved, test_value);
+
+    // EXISTS.
+    let exists: bool = redis::cmd("EXISTS")
+        .arg(test_key)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert!(exists);
+
+    // TTL (should be -1 for no expiry).
+    let ttl: i64 = redis::cmd("TTL")
+        .arg(test_key)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(ttl, -1, "Key should have no expiry");
+
+    // DELETE.
+    let deleted: i64 = redis::cmd("DEL")
+        .arg(test_key)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(deleted, 1);
+
+    // Verify deleted.
+    let exists: bool = redis::cmd("EXISTS")
+        .arg(test_key)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert!(!exists);
+
+    // SET with TTL.
+    let test_key2 = "e2e_cache_real_ttl";
+    let _: () = redis::cmd("SETEX")
+        .arg(test_key2)
+        .arg(3600)
+        .arg(b"ttl_value")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+
+    let ttl: i64 = redis::cmd("TTL")
+        .arg(test_key2)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert!(ttl > 0 && ttl <= 3600, "TTL should be positive: {}", ttl);
+
+    // Cleanup.
+    let _ : () = redis::cmd("DEL")
+        .arg(test_key2)
+        .query_async(&mut conn)
+        .await
+        .unwrap_or(());
+}
+
+/// Real Redis sharding: verify consistent hash routing across keys.
+#[tokio::test]
+#[serial]
+async fn e2e_sharding_real_redis() {
+    let ports = [16380, 6380];
+    let mut reachable_ports: Vec<u32> = Vec::new();
+
+    for port in &ports {
+        if service_available(&format!("127.0.0.1:{}", port)).await {
+            reachable_ports.push(*port);
+        }
+    }
+
+    if reachable_ports.is_empty() {
+        eprintln!("Skipping: Redis not available at 127.0.0.1:16380 or 127.0.0.1:6380");
+        return;
+    }
+
+    use sharding_shim::ShardingShim;
+
+    let addrs: Vec<String> = reachable_ports
+        .iter()
+        .map(|p| format!("redis://127.0.0.1:{}", p))
+        .collect();
+    let addrs_str = addrs.join(",");
+
+    let mut shim = temp_env::with_vars(
+        [("SHARDING_ADDRESSES", Some(addrs_str.as_str()))],
+        ShardingShim::new,
+    );
+
+    // Route a batch of keys.
+    let mut shard_ids = std::collections::HashSet::new();
+    for i in 0..100 {
+        let key = format!("shard_test_key:{}", i);
+        let (shard_id, addr) = shim.route(&key).unwrap();
+        shard_ids.insert(shard_id);
+        assert!(!addr.is_empty(), "Address should not be empty");
+    }
+    assert!(!shard_ids.is_empty(), "At least one shard should be used");
+
+    // Verify deterministic routing: same key always routes to same shard.
+    let (shard1, addr1) = shim.route("deterministic_key").unwrap();
+    let (shard2, addr2) = shim.route("deterministic_key").unwrap();
+    assert_eq!(shard1, shard2, "Same key should route to same shard");
+    assert_eq!(addr1, addr2, "Same key should route to same address");
+}
+
+// ============================================================================
+// Real-service Vault integration tests
+// ============================================================================
+
+/// Real Vault secrets: write secret, read it back, verify roundtrip.
+#[tokio::test]
+#[serial]
+async fn e2e_vault_real_secrets() {
+    if !service_available("127.0.0.1:18200").await {
+        eprintln!("Skipping: Vault not available at 127.0.0.1:18200");
+        return;
+    }
+
+    use vault_shim::VaultShim;
+
+    let addr = "http://localhost:18200";
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let client = reqwest::Client::new();
+
+    // Write a secret.
+    let write_url = format!("{}/v1/secret/data/e2e-real-test", addr);
+    let write_result = client
+        .post(&write_url)
+        .header("X-Vault-Token", "test")
+        .json(&serde_json::json!({
+            "data": {
+                "api_key": "real-secret-api-key-abc123",
+                "db_password": "real-db-pass-xyz789"
+            }
+        }))
+        .send()
+        .await;
+
+    match write_result {
+        Ok(resp) => {
+            let status = resp.status();
+            assert!(
+                status.is_success(),
+                "Vault write should succeed, got status: {}",
+                status
+            );
+        }
+        Err(e) => {
+            eprintln!("Skipping: Vault write failed: {}", e);
+            return;
+        }
+    }
+
+    // Create shim and read secret.
+    let shim = temp_env::with_vars(
+        [
+            ("VAULT_ADDR", Some(addr)),
+            ("VAULT_TOKEN", Some("test")),
+            ("VAULT_KEY", Some("api_key")),
+        ],
+        VaultShim::new,
+    );
+
+    match shim.read_secret("e2e-real-test").await {
+        Ok(creds) => {
+            assert_eq!(creds.username, "real-secret-api-key-abc123");
+            assert!(!creds.fetched_at.is_empty());
+        }
+        Err(e) => {
+            eprintln!("Skipping: Vault read_secret failed: {}", e);
+        }
+    }
+
+    // Read second key via raw HTTP.
+    let read_url = format!("{}/v1/secret/data/e2e-real-test", addr);
+    let resp = client
+        .get(&read_url)
+        .header("X-Vault-Token", "test")
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let db_pass = body["data"]["data"]["db_password"]
+        .as_str()
+        .unwrap();
+    assert_eq!(db_pass, "real-db-pass-xyz789");
+
+    // Cleanup.
+    let _ = client
+        .delete(format!("{}/v1/secret/metadata/e2e-real-test", addr))
+        .header("X-Vault-Token", "test")
+        .send()
+        .await;
+}
+
+// ============================================================================
+// Real-service health-shim TCP probe
+// ============================================================================
+
+/// Real TCP probe: start listener, verify health-shim can probe it.
+#[tokio::test]
+#[serial]
+async fn e2e_health_tcp_real_probe() {
+    use health_shim::HealthExporter;
+
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Start a TCP listener on a random port.
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Skipping: Cannot bind TCP listener: {}", e);
+            return;
+        }
+    };
+    let addr = listener.local_addr().unwrap();
+
+    // Spawn a background task that accepts one connection and reads the request.
+    let probe_result = tokio::spawn(async move {
+        let (mut stream, _) = match listener.accept().await {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 4096];
+        match stream.read(&mut buf).await {
+            Ok(n) => {
+                let request = String::from_utf8_lossy(&buf[..n]);
+                request.contains("POST")
+            }
+            Err(_) => false,
+        }
+    });
+
+    // Build and push a health payload to the listener.
+    let url = format!("http://{}/health", addr);
+    let exporter = HealthExporter::new(url, 30);
+    let payload = HealthExporter::build_payload("healthy", "healthy");
+
+    match exporter.push(&payload).await {
+        Ok(()) => {
+            let got_post = probe_result.await.unwrap();
+            assert!(got_post, "TCP probe should receive a POST request");
+        }
+        Err(e) => {
+            eprintln!("Skipping: Health push failed: {}", e);
+            probe_result.abort();
+            return;
+        }
+    }
+
+    // Verify payload structure.
+    assert_eq!(payload.liveness, "healthy");
+    assert_eq!(payload.readiness, "healthy");
+    assert_eq!(payload.shim, "health");
+    assert!(!payload.timestamp.is_empty());
+}

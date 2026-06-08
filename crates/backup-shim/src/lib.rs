@@ -6,7 +6,7 @@
 //! ## Environment Variables
 //!
 //! ```text
-//! BACKUP_SCHEDULE      Cron schedule (default: 0 2 * * *)
+//! BACKUP_SCHEDULE      Cron schedule (default: 0 0 2 * * *)
 //! BACKUP_STORAGE       Storage backend: s3, local (default: local)
 //! BACKUP_PATH          Local path or S3 bucket
 //! BACKUP_PREFIX        Key prefix for backups
@@ -196,7 +196,7 @@ impl BackupShim {
     /// Create a new backup shim from environment variables.
     pub fn new() -> Self {
         Self {
-            schedule: std::env::var("BACKUP_SCHEDULE").unwrap_or_else(|_| "0 2 * * *".to_string()),
+            schedule: std::env::var("BACKUP_SCHEDULE").unwrap_or_else(|_| "0 0 2 * * *".to_string()),
             storage: std::env::var("BACKUP_STORAGE").unwrap_or_else(|_| "local".to_string()),
             backup_path: std::env::var("BACKUP_PATH")
                 .unwrap_or_else(|_| "/var/backups".to_string()),
@@ -940,7 +940,7 @@ impl Capability for BackupShim {
         let retry_max_delay_ms = self.retry_max_delay_ms;
 
         let schedule = cron::Schedule::from_str(&schedule_str).unwrap_or_else(|_| {
-            cron::Schedule::from_str("0 2 * * *").expect("hardcoded valid cron expression")
+            cron::Schedule::from_str("0 0 2 * * *").expect("hardcoded valid cron expression")
         });
 
         tokio::spawn(async move {
@@ -1597,7 +1597,7 @@ mod tests {
     fn test_backup_shim_env_all_fields() {
         temp_env::with_vars(
             [
-                ("BACKUP_SCHEDULE", Some("0 3 * * *")),
+                ("BACKUP_SCHEDULE", Some("0 0 3 * * *")),
                 ("BACKUP_STORAGE", Some("s3")),
                 ("BACKUP_PATH", Some("/data/backups")),
                 ("BACKUP_PREFIX", Some("prod/")),
@@ -1615,7 +1615,7 @@ mod tests {
             ],
             || {
                 let shim = BackupShim::new();
-                assert_eq!(shim.schedule, "0 3 * * *");
+                assert_eq!(shim.schedule, "0 0 3 * * *");
                 assert_eq!(shim.storage, "s3");
                 assert_eq!(shim.prefix, "prod/");
                 assert_eq!(shim.retention_days, 60);
