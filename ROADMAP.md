@@ -328,3 +328,17 @@ Current state: v3.2.0 -- 35 crates, 1200+ tests, deployed to test server (192.16
 | CI fix: deny.toml backoff/derivative advisories | Completed | Medium | Dependency audit |
 | Coverage push: +37 tests (management-api, shim-core) | Completed | High | Code quality |
 | **CI STATUS: ALL 16 JOBS GREEN** | Completed | High | Pipeline health |
+
+### v3.3.0 -- Quickstart & Real-Service Validation (Completed)
+
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| Makefile with build/deploy/test/fmt/clippy targets | Completed | High | Developer onboarding |
+| docker-compose.standalone.yml (one-command startup) | Completed | High | Developer onboarding |
+| db-shim deployed on port 9102 | Completed | High | Production validation |
+| proxy-shim deployed on port 9103 | Completed | High | Production validation |
+| Real PostgreSQL integration tests (migration, backup, CDC) | Completed | High | Service validation |
+| Real Redis integration tests (cache, sharding) | Completed | High | Service validation |
+| Real Vault integration tests (secret write/read) | Completed | High | Service validation |
+| Real TCP health probe test | Completed | Medium | Health validation |
+| backup-shim cron expression fix (5-field -> 6-field) | Completed | High | Bug fix |
