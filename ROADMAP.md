@@ -1,6 +1,6 @@
 # Roadmap
 
-Current state: v3.0.0 -- 35 crates, 1200+ tests, all CI/CD pipelines green, GitHub Pages deployed, all roadmap items completed.
+Current state: v3.2.0 -- 35 crates, 1200+ tests, deployed to test server (192.168.1.191), all CI/CD pipelines active, GitHub Pages deployed.
 
 ## Completed Milestones
 
@@ -311,3 +311,13 @@ Current state: v3.0.0 -- 35 crates, 1200+ tests, all CI/CD pipelines green, GitH
 | Consolidation analysis (audit/compliance, archival/backup, queue/scheduler) | Completed | Medium | Architecture clarity |
 | **Priority 5: Deployment Guide** | Completed | Medium | Developer onboarding |
 | Zero-to-production walkthrough | Completed | Medium | Adoption |
+
+### v3.2.0 -- Production Deployment Verification (Completed)
+
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| Release binary build (health-shim, 2.4MB stripped) | Completed | High | Deployment artifact |
+| Deploy to test server (192.168.1.191) | Completed | High | Production validation |
+| Docker Compose services (Postgres, Redis, MariaDB, Vault) | Completed | High | Service infrastructure |
+| Health-shim running with livez/readyz/metrics | Completed | High | Runtime verification |
+| All Docker services healthy | Completed | High | Infrastructure validation |
