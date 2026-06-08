@@ -518,6 +518,7 @@ async fn e2e_encryption_wrong_key_fails() {
 #[serial]
 async fn e2e_alerting_shim_webhook_delivery() {
     use alerting_shim::{AlertingShim, Severity};
+    use shim_core::Capability;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -553,8 +554,19 @@ async fn e2e_alerting_shim_webhook_delivery() {
         axum::serve(listener, app).await.unwrap();
     });
 
-    // Give the server a moment to start.
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    // Give the server time to start.
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Verify server is reachable before proceeding.
+    for attempt in 0..10 {
+        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        if attempt == 9 {
+            panic!("Mock server failed to start after 10 attempts");
+        }
+    }
 
     let webhook_url = format!("http://{}/webhook", addr);
 
@@ -570,8 +582,9 @@ async fn e2e_alerting_shim_webhook_delivery() {
         AlertingShim::new,
     );
 
-    // Initialize the shim to set up the HTTP client.
-    // AlertingShim doesn't implement Capability::init, use it directly.
+    // Initialize the shim -- this creates the HTTP client needed for webhooks.
+    let config = shim_core::Config::default();
+    shim.init(&config).await.unwrap();
 
     let alert = alerting_shim::Alert {
         id: "e2e-001".into(),
@@ -595,8 +608,17 @@ async fn e2e_alerting_shim_webhook_delivery() {
     let count = shim.process_alert(alert).await.unwrap();
     assert!(count > 0, "Should have sent to at least one target");
 
+    // Give the async webhook send time to complete (up to 2 seconds with retries).
+    for _ in 0..20 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        let received_alerts = received.lock().await;
+        if !received_alerts.is_empty() {
+            break;
+        }
+        drop(received_alerts);
+    }
+
     // Verify the webhook received the alert.
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     let received_alerts = received.lock().await;
     assert!(
         !received_alerts.is_empty(),
