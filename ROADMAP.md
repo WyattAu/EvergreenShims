@@ -1,6 +1,6 @@
 # Roadmap
 
-Current state: v2.0.0 -- 34 crates, 1148 tests, all CI/CD pipelines green, GitHub Pages deployed, all roadmap items completed.
+Current state: v3.0.0 -- 35 crates, 1200+ tests, all CI/CD pipelines green, GitHub Pages deployed, all roadmap items completed.
 
 ## Completed Milestones
 
@@ -255,3 +255,40 @@ Current state: v2.0.0 -- 34 crates, 1148 tests, all CI/CD pipelines green, GitHu
 | Load testing proxy-shim circuit breaker | Completed | High | Performance (+22 tests) |
 | Chaos testing with real databases | Completed | High | Resilience (+27 tests) |
 | OpenTelemetry SDK integration for shims | Completed | Medium | Observability (+9 tests) |
+
+### v3.0.0 -- Production Maturity (Completed)
+
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| **Phase A: E2E Integration Tests** | Completed | High | Reliability (+18 E2E tests) |
+| health-shim TCP probe and lifecycle | Completed | High | Health verification |
+| migration-shim PostgreSQL migration | Completed | High | Database lifecycle |
+| backup-shim SHA-256 checksum | Completed | High | Data integrity |
+| vault-shim secret read (real Vault) | Completed | High | Secrets lifecycle |
+| cache-shim Redis set/get/delete | Completed | High | Cache lifecycle |
+| encryption-shim AES-GCM roundtrip | Completed | High | Crypto verification |
+| alerting-shim webhook delivery | Completed | Medium | Alerting verification |
+| config-shim file change detection | Completed | Medium | Config lifecycle |
+| queue-shim worker/retry/DLQ | Completed | Medium | Job queue lifecycle |
+| scheduler-shim cron task lifecycle | Completed | Medium | Scheduling verification |
+| cdc-shim event capture + WAL tracking | Completed | High | CDC verification |
+| chaos-shim experiment lifecycle | Completed | Medium | Chaos verification |
+| **Phase B: Management API Hardening** | Completed | High | Security (+7 tests) |
+| Request validation (ports, metrics, strings) | Completed | High | Input safety |
+| Rate limiting middleware (per-IP RPM) | Completed | High | DoS protection |
+| Audit logging for sensitive operations | Completed | Medium | Compliance |
+| Input sanitization (control chars, null bytes) | Completed | High | Security |
+| **Phase C: Cloud Metadata Plugin** | Completed | Medium | DX (example plugin) |
+| AWS EC2 metadata fetcher plugin | Completed | Medium | Extensibility |
+| C ABI vtable, lifecycle, metrics | Completed | Medium | Plugin SDK validation |
+| Plugin documentation (build/deploy/config) | Completed | Medium | Developer onboarding |
+| **Phase D: Kubernetes Operator** | Completed | High | Platform (+20 tests) |
+| Reconciliation loop for ShimConfig CRD | Completed | High | K8s automation |
+| ConfigMap generation from CRD spec | Completed | High | Configuration |
+| Deployment sidecar injection | Completed | High | Deployment |
+| Status conditions and events | Completed | Medium | Observability |
+| **Phase E: Production Hardening** | Completed | High | Production readiness |
+| Structured logging with request IDs | Completed | Medium | Observability |
+| Graceful shutdown with drain timeout | Completed | High | Reliability |
+| Resource monitoring (CPU, memory, FDs) | Completed | Medium | Operations |
+| Health check hardening (readiness/liveness/startup) | Completed | High | Kubernetes |
