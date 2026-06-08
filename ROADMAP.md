@@ -292,3 +292,22 @@ Current state: v3.0.0 -- 35 crates, 1200+ tests, all CI/CD pipelines green, GitH
 | Graceful shutdown with drain timeout | Completed | High | Reliability |
 | Resource monitoring (CPU, memory, FDs) | Completed | Medium | Operations |
 | Health check hardening (readiness/liveness/startup) | Completed | High | Kubernetes |
+
+### v3.1.0 -- CI Stability & Validation (Completed)
+
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| **Priority 1: CI Stability** | Completed | High | Reliability |
+| Dockerfile pinned to rust:1.91-alpine3.21 | Completed | High | Reproducible builds |
+| E2E CI job with Docker Compose services | Completed | High | Integration verification |
+| E2E tests skip gracefully when services unavailable | Completed | Medium | CI stability |
+| **Priority 2: Kubernetes E2E** | Completed | High | Platform validation |
+| Kind cluster CI job (CRD apply, operator deploy) | Completed | High | K8s automation |
+| Operator RBAC and deployment specs | Completed | Medium | Security |
+| **Priority 3: Load Testing** | Completed | High | Performance validation |
+| Management API load test (100 clients, 10K requests) | Completed | High | Throughput/latency |
+| Threshold gates (throughput >1000, p99 <100ms) | Completed | Medium | Regression detection |
+| **Priority 4: Crate Consolidation** | Completed | Medium | Maintenance reduction |
+| Consolidation analysis (audit/compliance, archival/backup, queue/scheduler) | Completed | Medium | Architecture clarity |
+| **Priority 5: Deployment Guide** | Completed | Medium | Developer onboarding |
+| Zero-to-production walkthrough | Completed | Medium | Adoption |
