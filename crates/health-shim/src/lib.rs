@@ -12,6 +12,8 @@
 pub mod checker;
 pub mod server;
 
+use std::collections::HashMap;
+
 use shim_core::{Capability, Config, Metric, Result};
 
 use checker::HealthChecker;
@@ -22,6 +24,38 @@ use shim_core::CommandHealthCheck;
 pub struct HealthShim {
     checker: Option<HealthChecker>,
     listen: String,
+    /// Registered capability health checkers for per-capability breakdown.
+    capabilities: HashMap<String, CapabilityHealthStatus>,
+    /// Whether initialization is complete.
+    initialized: bool,
+}
+
+/// Health status for a specific capability.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CapabilityHealthStatus {
+    /// Name of the capability.
+    pub name: String,
+    /// Whether the capability is healthy.
+    pub healthy: bool,
+    /// Optional status message.
+    pub message: Option<String>,
+}
+
+/// Detailed health status response with per-capability breakdown.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DetailedHealthStatus {
+    /// Overall liveness status.
+    pub liveness: String,
+    /// Overall readiness status.
+    pub readiness: String,
+    /// Startup probe status.
+    pub startup: String,
+    /// Per-capability health breakdown.
+    pub capabilities: Vec<CapabilityHealthStatus>,
+    /// Process uptime in seconds.
+    pub uptime_secs: u64,
+    /// Whether the shim is initialized.
+    pub initialized: bool,
 }
 
 impl HealthShim {
@@ -30,6 +64,62 @@ impl HealthShim {
         Self {
             checker: None,
             listen: "0.0.0.0:9101".to_string(),
+            capabilities: HashMap::new(),
+            initialized: false,
+        }
+    }
+
+    /// Register a capability for health monitoring.
+    pub fn register_capability(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        self.capabilities.insert(
+            name.clone(),
+            CapabilityHealthStatus {
+                name,
+                healthy: true,
+                message: Some("registered".into()),
+            },
+        );
+    }
+
+    /// Update a capability's health status.
+    pub fn set_capability_health(&mut self, name: &str, healthy: bool, message: Option<String>) {
+        if let Some(cap) = self.capabilities.get_mut(name) {
+            cap.healthy = healthy;
+            cap.message = message;
+        }
+    }
+
+    /// Get the detailed health status with per-capability breakdown.
+    pub fn detailed_status(&self, uptime_secs: u64) -> DetailedHealthStatus {
+        let all_healthy = self.capabilities.values().all(|c| c.healthy);
+        let liveness = if all_healthy && self.initialized {
+            "healthy".to_string()
+        } else if self.initialized {
+            "degraded".to_string()
+        } else {
+            "starting".to_string()
+        };
+
+        let readiness = if all_healthy && self.initialized {
+            "ready".to_string()
+        } else {
+            "not_ready".to_string()
+        };
+
+        let startup = if self.initialized {
+            "complete".to_string()
+        } else {
+            "in_progress".to_string()
+        };
+
+        DetailedHealthStatus {
+            liveness,
+            readiness,
+            startup,
+            capabilities: self.capabilities.values().cloned().collect(),
+            uptime_secs,
+            initialized: self.initialized,
         }
     }
 }
@@ -75,13 +165,14 @@ impl Capability for HealthShim {
         });
 
         self.checker = Some(HealthChecker::new(health_check));
+        self.initialized = true;
         tracing::info!("HealthShim initialized (listen={})", self.listen);
         Ok(())
     }
 
     async fn start(&mut self) -> Result<()> {
         if let Some(checker) = self.checker.take() {
-            let server = HealthServer::new(checker, &self.listen);
+            let server = HealthServer::new(checker, &self.listen, self.capabilities.clone());
             let listen = self.listen.clone();
 
             // Spawn server in background
@@ -237,6 +328,7 @@ mod tests {
         assert!(result.is_ok());
         assert!(shim.checker.is_some());
         assert_eq!(shim.listen, "127.0.0.1:9999");
+        assert!(shim.initialized);
     }
 
     #[tokio::test]
@@ -251,6 +343,74 @@ mod tests {
         let shim = HealthShim::new();
         let metrics = shim.metrics();
         assert!(metrics.is_empty());
+    }
+
+    #[test]
+    fn test_register_capability() {
+        let mut shim = HealthShim::new();
+        shim.register_capability("vault");
+        assert!(shim.capabilities.contains_key("vault"));
+        assert!(shim.capabilities.get("vault").unwrap().healthy);
+    }
+
+    #[test]
+    fn test_set_capability_health() {
+        let mut shim = HealthShim::new();
+        shim.register_capability("backup");
+        shim.set_capability_health("backup", false, Some("disk full".into()));
+
+        let cap = shim.capabilities.get("backup").unwrap();
+        assert!(!cap.healthy);
+        assert_eq!(cap.message.as_deref(), Some("disk full"));
+    }
+
+    #[test]
+    fn test_detailed_status_healthy() {
+        let mut shim = HealthShim::new();
+        shim.register_capability("health");
+        shim.initialized = true;
+
+        let status = shim.detailed_status(120);
+        assert_eq!(status.liveness, "healthy");
+        assert_eq!(status.readiness, "ready");
+        assert_eq!(status.startup, "complete");
+        assert!(status.initialized);
+        assert_eq!(status.uptime_secs, 120);
+        assert_eq!(status.capabilities.len(), 1);
+    }
+
+    #[test]
+    fn test_detailed_status_degraded() {
+        let mut shim = HealthShim::new();
+        shim.register_capability("vault");
+        shim.set_capability_health("vault", false, None);
+        shim.initialized = true;
+
+        let status = shim.detailed_status(60);
+        assert_eq!(status.liveness, "degraded");
+        assert_eq!(status.readiness, "not_ready");
+    }
+
+    #[test]
+    fn test_detailed_status_starting() {
+        let shim = HealthShim::new();
+        let status = shim.detailed_status(0);
+        assert_eq!(status.liveness, "starting");
+        assert_eq!(status.startup, "in_progress");
+        assert!(!status.initialized);
+    }
+
+    #[test]
+    fn test_detailed_status_serialization() {
+        let mut shim = HealthShim::new();
+        shim.register_capability("test");
+        shim.initialized = true;
+
+        let status = shim.detailed_status(100);
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["liveness"], "healthy");
+        assert_eq!(json["startup"], "complete");
+        assert!(json["capabilities"].is_array());
     }
 
     #[test]

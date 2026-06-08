@@ -10,9 +10,10 @@
 //! ```text
 //! SHUTDOWN_TIMEOUT_SECS  Global shutdown timeout in seconds (default: 30)
 //! SHUTDOWN_STRATEGY      Shutdown strategy: postgres, redis, generic (default: generic)
+//! SHIM_DRAIN_TIMEOUT_SECS Drain timeout for in-flight operations (default: 30)
 //! ```
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -72,6 +73,10 @@ pub struct ShutdownResult {
     pub duration_ms: u64,
     /// Number of signals sent.
     pub signals_sent: u32,
+    /// Number of in-flight operations that completed.
+    pub operations_completed: u64,
+    /// Total in-flight operations at shutdown start.
+    pub operations_total: u64,
     /// Human-readable log of the shutdown sequence.
     pub log: Vec<String>,
 }
@@ -110,6 +115,8 @@ impl GracefulShutdown for PostgresShutdown {
                 db_type: DatabaseType::Postgres,
                 duration_ms: start.elapsed().as_millis() as u64,
                 signals_sent,
+                operations_completed: 0,
+                operations_total: 0,
                 log,
             });
         }
@@ -134,6 +141,8 @@ impl GracefulShutdown for PostgresShutdown {
                 db_type: DatabaseType::Postgres,
                 duration_ms: start.elapsed().as_millis() as u64,
                 signals_sent,
+                operations_completed: 0,
+                operations_total: 0,
                 log,
             });
         }
@@ -166,6 +175,8 @@ impl GracefulShutdown for PostgresShutdown {
             db_type: DatabaseType::Postgres,
             duration_ms: start.elapsed().as_millis() as u64,
             signals_sent,
+            operations_completed: 0,
+            operations_total: 0,
             log,
         })
     }
@@ -203,6 +214,8 @@ impl GracefulShutdown for RedisShutdown {
                 db_type: DatabaseType::Redis,
                 duration_ms: start.elapsed().as_millis() as u64,
                 signals_sent,
+                operations_completed: 0,
+                operations_total: 0,
                 log,
             });
         }
@@ -224,6 +237,8 @@ impl GracefulShutdown for RedisShutdown {
                 db_type: DatabaseType::Redis,
                 duration_ms: start.elapsed().as_millis() as u64,
                 signals_sent,
+                operations_completed: 0,
+                operations_total: 0,
                 log,
             });
         }
@@ -251,6 +266,8 @@ impl GracefulShutdown for RedisShutdown {
             db_type: DatabaseType::Redis,
             duration_ms: start.elapsed().as_millis() as u64,
             signals_sent,
+            operations_completed: 0,
+            operations_total: 0,
             log,
         })
     }
@@ -288,6 +305,8 @@ impl GracefulShutdown for GenericShutdown {
                 db_type: DatabaseType::Generic,
                 duration_ms: start.elapsed().as_millis() as u64,
                 signals_sent,
+                operations_completed: 0,
+                operations_total: 0,
                 log,
             });
         }
@@ -324,6 +343,8 @@ impl GracefulShutdown for GenericShutdown {
                 db_type: DatabaseType::Generic,
                 duration_ms: start.elapsed().as_millis() as u64,
                 signals_sent,
+                operations_completed: 0,
+                operations_total: 0,
                 log,
             })
         } else {
@@ -333,6 +354,8 @@ impl GracefulShutdown for GenericShutdown {
                 db_type: DatabaseType::Generic,
                 duration_ms: start.elapsed().as_millis() as u64,
                 signals_sent,
+                operations_completed: 0,
+                operations_total: 0,
                 log,
             })
         }
@@ -361,15 +384,29 @@ pub struct ShutdownManager {
     timeout_secs: u64,
     /// Whether shutdown has been initiated.
     initiated: Arc<AtomicBool>,
+    /// Drain timeout for in-flight operations.
+    drain_timeout_secs: u64,
+    /// Total in-flight operations.
+    in_flight_total: Arc<AtomicUsize>,
+    /// Completed in-flight operations.
+    in_flight_completed: Arc<AtomicUsize>,
 }
 
 impl ShutdownManager {
     /// Create a new shutdown manager.
     pub fn new(db_type: DatabaseType, timeout_secs: u64) -> Self {
+        let drain_timeout_secs = std::env::var("SHIM_DRAIN_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+
         Self {
             handler: shutdown_handler(db_type),
             timeout_secs,
             initiated: Arc::new(AtomicBool::new(false)),
+            drain_timeout_secs,
+            in_flight_total: Arc::new(AtomicUsize::new(0)),
+            in_flight_completed: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -383,15 +420,76 @@ impl ShutdownManager {
         self.handler.description()
     }
 
+    /// Record that an operation has started (in-flight tracking).
+    pub fn operation_started(&self) {
+        self.in_flight_total.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Record that an operation has completed.
+    pub fn operation_completed(&self) {
+        self.in_flight_completed.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Get the number of in-flight operations.
+    pub fn in_flight_count(&self) -> usize {
+        let total = self.in_flight_total.load(Ordering::SeqCst);
+        let completed = self.in_flight_completed.load(Ordering::SeqCst);
+        total.saturating_sub(completed)
+    }
+
     /// Initiate graceful shutdown of a process.
     pub async fn shutdown(&self, pid: u32) -> Result<ShutdownResult> {
         self.initiated.store(true, Ordering::SeqCst);
+        let in_flight = self.in_flight_count();
+        let total = self.in_flight_total.load(Ordering::SeqCst);
+
         tracing::info!(
-            "Initiating {} graceful shutdown for PID {} (timeout={}s)",
+            "Initiating {} graceful shutdown for PID {} (timeout={}s, drain={}s, in_flight={})",
             self.handler.db_type(),
             pid,
-            self.timeout_secs
+            self.timeout_secs,
+            self.drain_timeout_secs,
+            in_flight
         );
+
+        // Wait for in-flight operations to drain (with timeout)
+        if in_flight > 0 {
+            tracing::info!(
+                "Draining {} in-flight operations (timeout={}s)",
+                in_flight,
+                self.drain_timeout_secs
+            );
+
+            let drain_deadline =
+                tokio::time::Instant::now() + Duration::from_secs(self.drain_timeout_secs);
+            let completed = self.in_flight_completed.clone();
+            let total_clone = self.in_flight_total.clone();
+
+            tokio::time::timeout_at(drain_deadline, async {
+                loop {
+                    let current_completed = completed.load(Ordering::SeqCst);
+                    let current_total = total_clone.load(Ordering::SeqCst);
+                    if current_completed >= current_total {
+                        break;
+                    }
+                    tracing::debug!(
+                        "{} of {} operations completed",
+                        current_completed,
+                        current_total
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .ok();
+
+            let final_completed = self.in_flight_completed.load(Ordering::SeqCst);
+            tracing::info!(
+                "Drain complete: {} of {} operations completed",
+                final_completed,
+                total
+            );
+        }
 
         let result = self.handler.shutdown(pid, self.timeout_secs).await;
 
@@ -484,6 +582,14 @@ impl ShutdownStrategy {
             .unwrap_or(30)
     }
 
+    /// Get the drain timeout from `SHIM_DRAIN_TIMEOUT_SECS` env var.
+    pub fn drain_timeout() -> u64 {
+        std::env::var("SHIM_DRAIN_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30)
+    }
+
     /// Convert to `DatabaseType`.
     pub fn to_database_type(&self) -> DatabaseType {
         match self {
@@ -528,6 +634,8 @@ pub async fn graceful_shutdown(
             db_type: strategy.to_database_type(),
             duration_ms: start.elapsed().as_millis() as u64,
             signals_sent,
+            operations_completed: 0,
+            operations_total: 0,
             log,
         });
     }
@@ -572,6 +680,8 @@ pub async fn graceful_shutdown(
             db_type: strategy.to_database_type(),
             duration_ms: start.elapsed().as_millis() as u64,
             signals_sent,
+            operations_completed: 0,
+            operations_total: 0,
             log,
         });
     }
@@ -584,6 +694,8 @@ pub async fn graceful_shutdown(
             db_type: strategy.to_database_type(),
             duration_ms: start.elapsed().as_millis() as u64,
             signals_sent,
+            operations_completed: 0,
+            operations_total: 0,
             log,
         });
     }
@@ -609,6 +721,8 @@ pub async fn graceful_shutdown(
         db_type: strategy.to_database_type(),
         duration_ms: start.elapsed().as_millis() as u64,
         signals_sent,
+        operations_completed: 0,
+        operations_total: 0,
         log,
     })
 }
@@ -663,11 +777,14 @@ mod tests {
             db_type: DatabaseType::Postgres,
             duration_ms: 1500,
             signals_sent: 1,
+            operations_completed: 5,
+            operations_total: 5,
             log: vec!["test".to_string()],
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("clean_exit"));
         assert!(json.contains("Postgres"));
+        assert!(json.contains("operations_completed"));
     }
 
     #[test]
@@ -681,6 +798,40 @@ mod tests {
     fn test_shutdown_manager_description() {
         let manager = ShutdownManager::new(DatabaseType::Redis, 10);
         assert!(manager.description().contains("Redis"));
+    }
+
+    #[test]
+    fn test_shutdown_manager_in_flight_tracking() {
+        let manager = ShutdownManager::new(DatabaseType::Generic, 10);
+        assert_eq!(manager.in_flight_count(), 0);
+
+        manager.operation_started();
+        assert_eq!(manager.in_flight_count(), 1);
+
+        manager.operation_started();
+        assert_eq!(manager.in_flight_count(), 2);
+
+        manager.operation_completed();
+        assert_eq!(manager.in_flight_count(), 1);
+
+        manager.operation_completed();
+        assert_eq!(manager.in_flight_count(), 0);
+    }
+
+    #[test]
+    fn test_shutdown_manager_drain_timeout_from_env() {
+        temp_env::with_var("SHIM_DRAIN_TIMEOUT_SECS", Some("60"), || {
+            let manager = ShutdownManager::new(DatabaseType::Generic, 30);
+            assert_eq!(manager.drain_timeout_secs, 60);
+        });
+    }
+
+    #[test]
+    fn test_shutdown_manager_drain_timeout_default() {
+        temp_env::with_var_unset("SHIM_DRAIN_TIMEOUT_SECS", || {
+            let manager = ShutdownManager::new(DatabaseType::Generic, 30);
+            assert_eq!(manager.drain_timeout_secs, 30);
+        });
     }
 
     #[test]
@@ -815,6 +966,17 @@ mod tests {
 
         temp_env::with_vars([("SHUTDOWN_TIMEOUT_SECS", Some("60"))], || {
             assert_eq!(ShutdownStrategy::default_timeout(), 60);
+        });
+    }
+
+    #[test]
+    fn test_shutdown_strategy_drain_timeout() {
+        temp_env::with_var_unset("SHIM_DRAIN_TIMEOUT_SECS", || {
+            assert_eq!(ShutdownStrategy::drain_timeout(), 30);
+        });
+
+        temp_env::with_vars([("SHIM_DRAIN_TIMEOUT_SECS", Some("45"))], || {
+            assert_eq!(ShutdownStrategy::drain_timeout(), 45);
         });
     }
 

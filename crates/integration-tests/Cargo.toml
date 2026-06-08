@@ -44,3 +44,7 @@ serial_test.workspace = true
 pretty_assertions.workspace = true
 temp-env.workspace = true
 serial_test.workspace = true
+axum.workspace = true
+anyhow.workspace = true
+tokio-test.workspace = true
+rustls.workspace = true

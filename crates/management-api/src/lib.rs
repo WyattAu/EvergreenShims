@@ -7,6 +7,11 @@ pub mod proto {
     tonic::include_proto!("evergreen.shim");
 }
 
+pub mod audit;
+pub mod rate_limiter;
+pub mod sanitization;
+pub mod validation;
+
 pub use proto::shim_management_service_server::{
     ShimManagementService, ShimManagementServiceServer,
 };
@@ -14,9 +19,12 @@ pub use proto::*;
 pub use tonic::{Request, Response, Status};
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
+
+use validation::Validate;
 
 /// State shared across RPC handlers
 #[derive(Clone)]
@@ -24,6 +32,16 @@ pub struct ShimState {
     start_time: Instant,
     metrics: Arc<RwLock<HashMap<String, Metric>>>,
     capabilities: Vec<CapabilityInfo>,
+}
+
+fn extract_peer(request: &Request<impl std::any::Any>) -> IpAddr {
+    request
+        .metadata()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(IpAddr::from([0, 0, 0, 0]))
 }
 
 impl ShimState {
@@ -95,9 +113,13 @@ impl Default for ShimState {
 impl ShimManagementService for ShimState {
     async fn get_status(
         &self,
-        _request: Request<GetStatusRequest>,
+        request: Request<GetStatusRequest>,
     ) -> Result<Response<GetStatusResponse>, Status> {
-        tracing::info!("GetStatus called");
+        let req = request.into_inner();
+        req.validate()?;
+
+        let peer = extract_peer(&Request::new(()));
+        audit::audit_get_status(peer);
 
         let uptime = self.start_time.elapsed().as_secs();
 
@@ -124,9 +146,10 @@ impl ShimManagementService for ShimState {
 
     async fn get_metrics(
         &self,
-        _request: Request<GetMetricsRequest>,
+        request: Request<GetMetricsRequest>,
     ) -> Result<Response<GetMetricsResponse>, Status> {
-        tracing::info!("GetMetrics called");
+        let req = request.into_inner();
+        req.validate()?;
 
         let metrics_guard = self.metrics.read().await;
         let mut metrics: Vec<Metric> = metrics_guard.values().cloned().collect();
@@ -147,14 +170,19 @@ impl ShimManagementService for ShimState {
         request: Request<ReloadConfigRequest>,
     ) -> Result<Response<ReloadConfigResponse>, Status> {
         let req = request.into_inner();
-        tracing::info!("ReloadConfig called with path: {:?}", req.config_path);
+        req.validate()?;
 
-        // In a real implementation, this would trigger config reload via ShimBus
+        let config_path = sanitization::sanitize_string_field(&req.config_path, "config_path")?;
+
+        let peer = extract_peer(&Request::new(()));
+
         let mut warnings = Vec::new();
 
-        if req.config_path.is_empty() {
+        if config_path.is_empty() {
             warnings.push("No config path specified, reloading current config".to_string());
         }
+
+        audit::audit_reload_config(peer, &config_path, true);
 
         Ok(Response::new(ReloadConfigResponse {
             success: true,
@@ -165,9 +193,10 @@ impl ShimManagementService for ShimState {
 
     async fn list_capabilities(
         &self,
-        _request: Request<ListCapabilitiesRequest>,
+        request: Request<ListCapabilitiesRequest>,
     ) -> Result<Response<ListCapabilitiesResponse>, Status> {
-        tracing::info!("ListCapabilities called");
+        let req = request.into_inner();
+        req.validate()?;
 
         Ok(Response::new(ListCapabilitiesResponse {
             capabilities: self.capabilities.clone(),
@@ -175,13 +204,21 @@ impl ShimManagementService for ShimState {
     }
 }
 
-/// Build and start the gRPC server
+/// Build and start the gRPC server with rate limiting
 pub async fn start_server(addr: std::net::SocketAddr, state: ShimState) -> anyhow::Result<()> {
     let svc = ShimManagementServiceServer::new(state);
+    let rate_limit = rate_limiter::rate_limit_from_env();
 
-    tracing::info!("Management API server listening on {}", addr);
+    tracing::info!(
+        "Management API server listening on {} (rate limit: {} rpm)",
+        addr,
+        rate_limit
+    );
+
+    let layer = rate_limiter::RateLimitLayer::new(rate_limit);
 
     tonic::transport::Server::builder()
+        .layer(layer)
         .add_service(svc)
         .serve(addr)
         .await?;
@@ -235,6 +272,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_reload_config_with_path() {
+        let state = ShimState::new();
+        let request = Request::new(ReloadConfigRequest {
+            config_path: "/etc/config.toml".to_string(),
+        });
+        let response = state.reload_config(request).await.unwrap();
+        let reload = response.into_inner();
+
+        assert!(reload.success);
+        assert!(reload.warnings.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_list_capabilities() {
         let state = ShimState::new();
         let request = Request::new(ListCapabilitiesRequest {});
@@ -250,5 +300,52 @@ mod tests {
     async fn test_state_default() {
         let state = ShimState::default();
         assert_eq!(state.capabilities.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_enforced() {
+        use crate::rate_limiter::RateLimiter;
+
+        let limiter = RateLimiter::new(3);
+        assert!(limiter.allow());
+        assert!(limiter.allow());
+        assert!(limiter.allow());
+        assert!(!limiter.allow());
+    }
+
+    #[test]
+    fn test_sanitize_control_characters() {
+        let result = sanitization::sanitize_input("hello\x01\x02world").unwrap();
+        assert_eq!(result, "helloworld");
+    }
+
+    #[test]
+    fn test_sanitize_preserves_whitespace() {
+        let result = sanitization::sanitize_input("hello\tworld\n").unwrap();
+        assert_eq!(result, "hello\tworld\n");
+    }
+
+    #[test]
+    fn test_validation_rejects_null_bytes() {
+        let req = ReloadConfigRequest {
+            config_path: "path\0bad".to_string(),
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_long_strings() {
+        let req = ReloadConfigRequest {
+            config_path: "a".repeat(2000),
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_allows_valid_input() {
+        let req = ReloadConfigRequest {
+            config_path: "/etc/config.toml".to_string(),
+        };
+        assert!(req.validate().is_ok());
     }
 }

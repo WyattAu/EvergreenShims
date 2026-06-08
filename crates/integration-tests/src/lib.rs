@@ -6,6 +6,7 @@
 use serial_test::serial;
 
 mod backup;
+pub mod e2e;
 mod failover;
 mod graceful_degradation;
 mod vault;

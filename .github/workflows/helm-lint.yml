@@ -1,0 +1,34 @@
+name: Helm Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'helm/**'
+
+jobs:
+  helm-lint:
+    name: Lint and Validate Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: Helm lint
+        run: helm lint helm/evergreen-shims/
+
+      - name: Helm template (render manifests)
+        run: |
+          helm template evergreen-shims helm/evergreen-shims/ > /tmp/rendered-manifest.yaml
+          echo "Rendered manifest:"
+          head -30 /tmp/rendered-manifest.yaml
+
+      - name: Upload rendered manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-rendered-manifest
+          path: /tmp/rendered-manifest.yaml
+          retention-days: 30

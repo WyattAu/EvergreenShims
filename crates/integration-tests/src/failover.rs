@@ -233,6 +233,8 @@ async fn test_shutdown_result_serialization() {
         db_type: DatabaseType::Postgres,
         duration_ms: 1500,
         signals_sent: 1,
+        operations_completed: 10,
+        operations_total: 12,
         log: vec![
             "Step 1: SIGTERM sent".to_string(),
             "Step 2: Clean exit".to_string(),

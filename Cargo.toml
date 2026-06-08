@@ -34,9 +34,10 @@ members = [
     "crates/management-api",
     "crates/shimctl",
     "crates/shim-plugin",
+    "crates/shim-operator",
 ]
 resolver = "2"
-exclude = ["examples/custom-shim-plugin"]
+exclude = ["examples/custom-shim-plugin", "examples/cloud-metadata-plugin"]
 
 [workspace.package]
 version = "1.0.0"
