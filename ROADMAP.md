@@ -323,4 +323,8 @@ Current state: v3.2.0 -- 35 crates, 1200+ tests, deployed to test server (192.16
 | All Docker services healthy | Completed | High | Infrastructure validation |
 | Live E2E tests: 9/9 passed | Completed | High | Production validation |
 | CI fix: duplicate e2e job key resolution | Completed | High | Pipeline stability |
+| CI fix: replace non-existent docker/compose-action | Completed | High | E2E pipeline |
+| CI fix: rate limit env var pollution (temp_env) | Completed | High | Test stability |
+| CI fix: deny.toml backoff/derivative advisories | Completed | Medium | Dependency audit |
 | Coverage push: +37 tests (management-api, shim-core) | Completed | High | Code quality |
+| **CI STATUS: ALL 16 JOBS GREEN** | Completed | High | Pipeline health |
