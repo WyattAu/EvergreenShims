@@ -342,3 +342,16 @@ Current state: v3.2.0 -- 35 crates, 1200+ tests, deployed to test server (192.16
 | Real Vault integration tests (secret write/read) | Completed | High | Service validation |
 | Real TCP health probe test | Completed | Medium | Health validation |
 | backup-shim cron expression fix (5-field -> 6-field) | Completed | High | Bug fix |
+
+### v3.4.0 -- Kubernetes Deployment (Completed)
+
+| Task | Status | Priority | Impact |
+|------|--------|----------|--------|
+| kind cluster created on test server | Completed | High | K8s infrastructure |
+| CRD shimconfigs.evergreen.dev applied | Completed | High | Custom resource |
+| RBAC (ClusterRole, ServiceAccount, Binding) | Completed | High | Security |
+| health-shim deployed as Deployment + Service | Completed | High | Runtime verification |
+| Health check bug fix: set_healthy(true) after capabilities start | Completed | High | Bug fix |
+| Health check: use exec:true instead of exec:sleep | Completed | High | Liveness probe fix |
+| Pod liveness=1.0, readiness=1.0 | Completed | High | Probe verification |
+| 9/9 Kubernetes E2E tests passed | Completed | High | K8s validation |
