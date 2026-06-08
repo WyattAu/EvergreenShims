@@ -27,7 +27,7 @@ jobs:
   build:
     name: Build ${{ matrix.variant }} (${{ matrix.features }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       matrix:
         include:
