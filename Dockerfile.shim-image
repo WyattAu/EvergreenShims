@@ -27,24 +27,29 @@ RUN if [ "$TARGETARCH" = "riscv64" ]; then \
 WORKDIR /src
 COPY . .
 
-# Determine target triple
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      export TARGET="aarch64-unknown-linux-musl"; \
-      rustup target add "$TARGET"; \
-      cargo build --release -p evergreen-shim --no-default-features --features "$FEATURES" --target "$TARGET" && \
-      strip target/"$TARGET"/release/shim && \
-      cp target/"$TARGET"/release/shim /shim; \
-    elif [ "$TARGETARCH" = "riscv64" ]; then \
-      export TARGET="riscv64gc-unknown-linux-musl"; \
-      rustup target add "$TARGET"; \
-      cargo build --release -p evergreen-shim --no-default-features --features "$FEATURES" --target "$TARGET" && \
-      strip target/"$TARGET"/release/shim && \
-      cp target/"$TARGET"/release/shim /shim; \
-    else \
-      cargo build --release -p evergreen-shim --no-default-features --features "$FEATURES" --target x86_64-unknown-linux-musl && \
-      strip target/x86_64-unknown-linux-musl/release/shim && \
-      cp target/x86_64-unknown-linux-musl/release/shim /shim; \
-    fi
+# Determine target triple (with retry for transient network errors)
+RUN for attempt in 1 2 3; do \
+      if [ "$TARGETARCH" = "arm64" ]; then \
+        export TARGET="aarch64-unknown-linux-musl"; \
+        rustup target add "$TARGET"; \
+        cargo build --release -p evergreen-shim --no-default-features --features "$FEATURES" --target "$TARGET" && \
+        strip target/"$TARGET"/release/shim && \
+        cp target/"$TARGET"/release/shim /shim && break; \
+      elif [ "$TARGETARCH" = "riscv64" ]; then \
+        export TARGET="riscv64gc-unknown-linux-musl"; \
+        rustup target add "$TARGET"; \
+        cargo build --release -p evergreen-shim --no-default-features --features "$FEATURES" --target "$TARGET" && \
+        strip target/"$TARGET"/release/shim && \
+        cp target/"$TARGET"/release/shim /shim && break; \
+      else \
+        cargo build --release -p evergreen-shim --no-default-features --features "$FEATURES" --target x86_64-unknown-linux-musl && \
+        strip target/x86_64-unknown-linux-musl/release/shim && \
+        cp target/x86_64-unknown-linux-musl/release/shim /shim && break; \
+      fi; \
+      echo "Attempt $attempt failed, retrying in 10s..."; \
+      sleep 10; \
+      cargo clean 2>/dev/null || true; \
+    done
 
 FROM scratch AS shim-health
 COPY --from=builder /shim /shim
