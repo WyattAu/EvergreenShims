@@ -918,12 +918,25 @@ mod tests {
 
     #[test]
     fn test_default_db_fields() {
-        let shim = ReplicationShim::new();
-        assert_eq!(shim.db_host, "127.0.0.1");
-        assert_eq!(shim.db_port, 5432);
-        assert_eq!(shim.db_user, "postgres");
-        assert_eq!(shim.db_name, "postgres");
-        assert_eq!(shim.lag_threshold_bytes, 1_048_576);
+        // Clear any env vars that might have been set by parallel tests
+        temp_env::with_vars(
+            [
+                ("REPLICATION_DB_HOST", None::<&str>),
+                ("REPLICATION_DB_PORT", None::<&str>),
+                ("REPLICATION_DB_USER", None::<&str>),
+                ("REPLICATION_DB_PASSWORD", None::<&str>),
+                ("REPLICATION_DB_NAME", None::<&str>),
+                ("REPLICATION_LAG_THRESHOLD_BYTES", None::<&str>),
+            ],
+            || {
+                let shim = ReplicationShim::new();
+                assert_eq!(shim.db_host, "127.0.0.1");
+                assert_eq!(shim.db_port, 5432);
+                assert_eq!(shim.db_user, "postgres");
+                assert_eq!(shim.db_name, "postgres");
+                assert_eq!(shim.lag_threshold_bytes, 1_048_576);
+            },
+        );
     }
 
     #[test]
