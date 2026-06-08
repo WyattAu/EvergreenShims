@@ -408,5 +408,4 @@ jobs:
       - name: Run E2E tests
         run: cargo test --package evergreen-shims-integration --lib -- e2e -- --test-threads=1
       - name: Tear down services
-        if: always()
-        run: docker compose -f tests/docker-compose.yml down -v
+        run: docker compose -f tests/docker-compose.yml down -v || true
