@@ -321,3 +321,6 @@ Current state: v3.2.0 -- 35 crates, 1200+ tests, deployed to test server (192.16
 | Docker Compose services (Postgres, Redis, MariaDB, Vault) | Completed | High | Service infrastructure |
 | Health-shim running with livez/readyz/metrics | Completed | High | Runtime verification |
 | All Docker services healthy | Completed | High | Infrastructure validation |
+| Live E2E tests: 9/9 passed | Completed | High | Production validation |
+| CI fix: duplicate e2e job key resolution | Completed | High | Pipeline stability |
+| Coverage push: +37 tests (management-api, shim-core) | Completed | High | Code quality |
