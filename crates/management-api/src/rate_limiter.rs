@@ -189,9 +189,9 @@ mod tests {
 
     #[test]
     fn test_rate_limit_from_env_custom() {
-        std::env::set_var("MGMT_RATE_LIMIT_RPM", "120");
-        assert_eq!(rate_limit_from_env(), 120);
-        std::env::remove_var("MGMT_RATE_LIMIT_RPM");
+        temp_env::with_vars([("MGMT_RATE_LIMIT_RPM", Some("120"))], || {
+            assert_eq!(rate_limit_from_env(), 120);
+        });
     }
 
     #[test]

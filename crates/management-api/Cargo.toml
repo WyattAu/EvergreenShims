@@ -35,3 +35,4 @@ tonic-build = "0.12"
 tonic = { version = "0.12", features = ["transport"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 tokio-stream = "0.1"
+temp-env = "0.3"
