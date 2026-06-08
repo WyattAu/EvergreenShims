@@ -39,18 +39,13 @@ spec:
         - name: operator
           image: ghcr.io/wyattau/evergreen-operator:latest
           imagePullPolicy: IfNotPresent
-          args:
-            - --metrics-bind-addr=:8080
-            - --leader-elect
-            - --health-probe-bind-addr=:8081
           ports:
-            - name: metrics
-              containerPort: 8080
-              protocol: TCP
             - name: health
               containerPort: 8081
               protocol: TCP
           env:
+            - name: RUST_LOG
+              value: "info,shim_operator=debug"
             - name: EVERGREEN_LOG_LEVEL
               value: "info"
             - name: EVERGREEN_JSON_LOGGING

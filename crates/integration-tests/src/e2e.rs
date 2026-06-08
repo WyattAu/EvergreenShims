@@ -7,6 +7,11 @@
 
 use serial_test::serial;
 
+#[allow(dead_code)]
+async fn service_available(addr: &str) -> bool {
+    tokio::net::TcpStream::connect(addr).await.is_ok()
+}
+
 // ============================================================================
 // health-shim E2E
 // ============================================================================
@@ -109,6 +114,11 @@ async fn e2e_health_shim_lifecycle() {
 #[tokio::test]
 #[serial]
 async fn e2e_migration_shim_postgres() {
+    if !service_available("127.0.0.1:15432").await {
+        eprintln!("Skipping: PostgreSQL not available at 127.0.0.1:15432");
+        return;
+    }
+
     let url = "postgres://test:test@localhost:15432/testdb";
 
     // Check if PostgreSQL is reachable.
@@ -162,7 +172,13 @@ async fn e2e_migration_shim_postgres() {
     // Verify migration-shim in-memory apply + checksum.
     use migration_shim::{Migration, MigrationShim};
 
-    let mut shim = MigrationShim::new();
+    let mut shim = temp_env::with_vars(
+        [(
+            "MIGRATION_DB_URL",
+            Some("postgres://test:test@localhost:15432/testdb"),
+        )],
+        MigrationShim::new,
+    );
     let m = Migration {
         version: 1,
         name: "create_e2e_table".to_string(),
@@ -199,6 +215,11 @@ async fn e2e_migration_shim_postgres() {
 #[tokio::test]
 #[serial]
 async fn e2e_backup_shim_checksum() {
+    if !service_available("127.0.0.1:15432").await {
+        eprintln!("Skipping: PostgreSQL not available at 127.0.0.1:15432");
+        return;
+    }
+
     use backup_shim::BackupShim;
 
     let url = "postgres://test:test@localhost:15432/testdb";
@@ -236,7 +257,7 @@ async fn e2e_backup_shim_checksum() {
     let backup_file = dir.path().join("e2e_backup.sql.gz");
     std::fs::write(&backup_file, backup_data).unwrap();
 
-    let shim = BackupShim::new();
+    let shim = temp_env::with_vars([("_CLEAR", None::<&str>)], BackupShim::new);
 
     let entry = backup_shim::BackupEntry {
         filename: backup_file
@@ -278,18 +299,14 @@ async fn e2e_backup_shim_checksum() {
 #[tokio::test]
 #[serial]
 async fn e2e_vault_shim_read_secret() {
+    if !service_available("127.0.0.1:18200").await {
+        eprintln!("Skipping: Vault not available at 127.0.0.1:18200");
+        return;
+    }
+
     use vault_shim::VaultShim;
 
     let addr = "http://localhost:18200";
-
-    // Check if Vault is reachable via TCP.
-    let reachable = tokio::net::TcpStream::connect("127.0.0.1:18200")
-        .await
-        .is_ok();
-    if !reachable {
-        println!("Vault not available at localhost:18200, skipping");
-        return;
-    }
 
     // Write a secret to Vault using raw HTTP.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -912,7 +929,7 @@ async fn e2e_cdc_shim_event_lifecycle() {
 async fn e2e_cdc_shim_wal_tracking() {
     use cdc_shim::CdcShim;
 
-    let mut shim = CdcShim::new();
+    let mut shim = temp_env::with_vars([("CDC_TABLES", Some(""))], CdcShim::new);
 
     // Set initial WAL position.
     shim.set_wal_position("0/1000000", 1, 0);

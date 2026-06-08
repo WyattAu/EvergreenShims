@@ -1,0 +1,147 @@
+name: Kubernetes E2E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/shim-operator/**'
+      - 'k8s/**'
+
+concurrency:
+  group: k8s-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  KIND_CLUSTER_NAME: evergreen-e2e
+  OPERATOR_IMAGE: evergreen-operator:local
+
+jobs:
+  e2e:
+    name: Kind Cluster E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install kind
+        uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde # v1.10.0
+        with:
+          install_only: true
+
+      - name: Create kind cluster
+        run: |
+          kind create cluster \
+            --name "$KIND_CLUSTER_NAME" \
+            --wait 120s \
+            --config - <<'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+          - role: control-plane
+          - role: worker
+          EOF
+
+      - name: Build operator image
+        run: |
+          docker build -t "${OPERATOR_IMAGE}" \
+            -f crates/shim-operator/Dockerfile \
+            .
+
+      - name: Load image into kind
+        run: kind load docker-image "${OPERATOR_IMAGE}" --name "$KIND_CLUSTER_NAME"
+
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Apply CRD
+        run: kubectl apply -f k8s/crd.yaml
+
+      - name: Wait for CRD to be established
+        run: |
+          kubectl wait --for=condition=Established \
+            crd/shimconfigs.evergreen.dev \
+            --timeout=60s
+
+      - name: Apply RBAC
+        run: kubectl apply -f k8s/operator-rbac.yaml
+
+      - name: Apply operator deployment
+        run: |
+          # Override image to locally-built one
+          kubectl apply -f k8s/operator-deployment.yaml
+          kubectl -n evergreen-system set image \
+            deployment/evergreen-operator \
+            operator="${OPERATOR_IMAGE}"
+
+      - name: Wait for operator to be ready
+        run: |
+          kubectl -n evergreen-system rollout status \
+            deployment/evergreen-operator \
+            --timeout=120s
+
+      - name: Create test ShimConfig
+        run: |
+          kubectl apply -f - <<'EOF'
+          apiVersion: evergreen.dev/v1alpha1
+          kind: ShimConfig
+          metadata:
+            name: e2e-test-shim
+            namespace: default
+          spec:
+            childCommand: "/bin/echo"
+            childArgs: ["hello"]
+            features:
+              - health
+            shimConfig:
+              logLevel: "info"
+              jsonLogging: false
+              metricsPort: 9090
+              healthPort: 9091
+          EOF
+
+      - name: Wait for reconciliation
+        run: |
+          for i in $(seq 1 30); do
+            STATUS=$(kubectl get shimconfig e2e-test-shim -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+            if [ "$STATUS" = "True" ]; then
+              echo "ShimConfig reconciled successfully"
+              break
+            fi
+            echo "Waiting for reconciliation... attempt $i/30"
+            sleep 5
+          done
+
+          # Final check
+          kubectl get shimconfig e2e-test-shim -o yaml | grep -A5 status
+
+      - name: Verify ConfigMap was created
+        run: |
+          CM_NAME="shim-config-e2e-test-shim"
+          kubectl get configmap "$CM_NAME" -o yaml
+
+          # Verify expected data keys
+          kubectl get configmap "$CM_NAME" -o jsonpath='{.data.SHIM_CHILD_COMMAND}' | grep -q "/bin/echo"
+          kubectl get configmap "$CM_NAME" -o jsonpath='{.data.SHIM_FEATURES}' | grep -q "health"
+          echo "ConfigMap verification passed"
+
+      - name: Verify status conditions
+        run: |
+          # Check Ready condition is True
+          READY=$(kubectl get shimconfig e2e-test-shim \
+            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+          [ "$READY" = "True" ] || { echo "Ready condition not True: $READY"; exit 1; }
+
+          # Check observedGeneration is set
+          OG=$(kubectl get shimconfig e2e-test-shim \
+            -o jsonpath='{.status.observedGeneration}')
+          [ -n "$OG" ] && [ "$OG" != "0" ] || { echo "observedGeneration not set"; exit 1; }
+
+          echo "Status conditions verified"
+
+      - name: Cleanup kind cluster
+        if: always()
+        run: kind delete cluster --name "$KIND_CLUSTER_NAME" 2>/dev/null || true

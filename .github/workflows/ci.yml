@@ -257,6 +257,43 @@ jobs:
               print(f"All {len(results)} benchmarks passed regression checks.")
           EOF
 
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Start Docker Compose services
+        uses: docker/compose-action@b4bf3ac55bb981b5d6b5203837f01b7c3e345706 # v1.2.2
+        with:
+          compose-file: tests/docker-compose.yml
+          down-flags: --volumes
+      - name: Wait for services to be healthy
+        run: |
+          for svc in postgres redis vault minio; do
+            echo "Waiting for $svc..."
+            for i in $(seq 1 30); do
+              if docker compose -f tests/docker-compose.yml ps $svc | grep -q "healthy\|running"; then
+                echo "$svc is ready"
+                break
+              fi
+              sleep 2
+            done
+          done
+      - name: Run E2E tests
+        run: cargo test --package evergreen-shims-integration --lib -- e2e
+      - name: Tear down Docker Compose services
+        if: always()
+        uses: docker/compose-action@b4bf3ac55bb981b5d6b5203837f01b7c3e345706 # v1.2.2
+        with:
+          compose-file: tests/docker-compose.yml
+          down-flags: --volumes
+
   binary-size-check:
     name: Binary Size Check
     runs-on: ubuntu-latest
@@ -336,3 +373,40 @@ jobs:
       - name: Run tests
         run: npm test 2>/dev/null || echo "No test script - SDK is a skeleton"
         working-directory: sdk/node
+
+  e2e:
+    name: E2E Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Start Docker Compose services
+        run: docker compose -f tests/docker-compose.yml up -d
+      - name: Wait for services
+        run: |
+          echo "Waiting for PostgreSQL..."
+          for i in $(seq 1 30); do
+            docker compose -f tests/docker-compose.yml exec -T postgres pg_isready -U test 2>/dev/null && break
+            sleep 2
+          done
+          echo "Waiting for Redis..."
+          for i in $(seq 1 15); do
+            docker compose -f tests/docker-compose.yml exec -T redis redis-cli ping 2>/dev/null && break
+            sleep 2
+          done
+          echo "Waiting for Vault..."
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:18200/v1/sys/health && break
+            sleep 2
+          done
+          echo "All services ready"
+      - name: Run E2E tests
+        run: cargo test --package evergreen-shims-integration --lib -- e2e -- --test-threads=1
+      - name: Tear down services
+        if: always()
+        run: docker compose -f tests/docker-compose.yml down -v

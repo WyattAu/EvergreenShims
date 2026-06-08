@@ -1,0 +1,77 @@
+name: Load Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/management-api/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/management-api/**'
+
+concurrency:
+  group: load-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  load-test:
+    name: Management API Load Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Build load test (release)
+        run: cargo test --package management-api --test load_test --release --no-run 2>&1
+
+      - name: Run load test
+        run: |
+          cargo test --package management-api --test load_test --release -- \
+            --nocapture 2>&1 | tee /tmp/load_test_output.txt
+
+      - name: Check thresholds
+        run: |
+          python3 - <<'EOF'
+          import re
+          import sys
+
+          with open('/tmp/load_test_output.txt', 'r') as f:
+              output = f.read()
+
+          # Extract throughput
+          throughput_match = re.search(r'throughput: ([\d.]+) req/s', output)
+          throughput = float(throughput_match.group(1)) if throughput_match else 0.0
+
+          # Extract p99 latency
+          p99_match = re.search(r'p99: ([\d.]+) ms', output)
+          p99 = float(p99_match.group(1)) if p99_match else 0.0
+
+          print(f'Throughput: {throughput:.1f} req/s (threshold: >1000)')
+          print(f'p99 latency: {p99:.2f} ms (threshold: <100)')
+
+          failures = []
+          if throughput < 1000.0:
+              failures.append(f'Throughput {throughput:.1f} req/s below 1000 req/s threshold')
+          if p99 > 100.0:
+              failures.append(f'p99 latency {p99:.2f} ms exceeds 100 ms threshold')
+
+          if failures:
+              print('\nFAILED:')
+              for f in failures:
+                  print(f'  - {f}')
+              sys.exit(1)
+          else:
+              print('\nAll thresholds passed')
+          EOF

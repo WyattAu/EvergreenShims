@@ -81,7 +81,7 @@ async fn test_backup_checksum_verification() {
 
     let data = b"PGDMP-1500-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00";
     let checksum = BackupShim::compute_checksum(data);
-    let shim = BackupShim::new();
+    let shim = temp_env::with_vars([("_CLEAR", None::<&str>)], BackupShim::new);
 
     let entry = backup_shim::BackupEntry {
         filename: "testdb_20260101_120000.sql.gz".to_string(),
@@ -132,7 +132,17 @@ async fn test_replication_wal_tracking_config() {
 async fn test_replication_lag_threshold_default() {
     use replication_shim::ReplicationShim;
 
-    let shim = ReplicationShim::new();
+    let shim = temp_env::with_vars(
+        [
+            ("REPLICATION_DB_HOST", None::<&str>),
+            ("REPLICATION_DB_PORT", None::<&str>),
+            ("REPLICATION_DB_USER", None::<&str>),
+            ("REPLICATION_DB_PASSWORD", None::<&str>),
+            ("REPLICATION_DB_NAME", None::<&str>),
+            ("REPLICATION_LAG_THRESHOLD_BYTES", None::<&str>),
+        ],
+        ReplicationShim::new,
+    );
     assert_eq!(shim.lag_threshold_bytes(), 1_048_576); // 1MB default
 }
 
@@ -142,7 +152,17 @@ async fn test_replication_lag_threshold_default() {
 async fn test_replication_lag_state_transitions() {
     use replication_shim::{ReplicationShim, ReplicationState};
 
-    let mut shim = ReplicationShim::new();
+    let mut shim = temp_env::with_vars(
+        [
+            ("REPLICATION_DB_HOST", None::<&str>),
+            ("REPLICATION_DB_PORT", None::<&str>),
+            ("REPLICATION_DB_USER", None::<&str>),
+            ("REPLICATION_DB_PASSWORD", None::<&str>),
+            ("REPLICATION_DB_NAME", None::<&str>),
+            ("REPLICATION_LAG_THRESHOLD_BYTES", None::<&str>),
+        ],
+        ReplicationShim::new,
+    );
     shim.add_replica("rep1:5432".to_string());
 
     // Low lag -> Healthy
@@ -167,7 +187,17 @@ async fn test_replication_lag_state_transitions() {
 async fn test_replication_wal_position_update() {
     use replication_shim::ReplicationShim;
 
-    let mut shim = ReplicationShim::new();
+    let mut shim = temp_env::with_vars(
+        [
+            ("REPLICATION_DB_HOST", None::<&str>),
+            ("REPLICATION_DB_PORT", None::<&str>),
+            ("REPLICATION_DB_USER", None::<&str>),
+            ("REPLICATION_DB_PASSWORD", None::<&str>),
+            ("REPLICATION_DB_NAME", None::<&str>),
+            ("REPLICATION_LAG_THRESHOLD_BYTES", None::<&str>),
+        ],
+        ReplicationShim::new,
+    );
     shim.set_wal_position("0/1A00000", 2, 4096);
 
     let wal = shim.wal_position();
@@ -213,7 +243,7 @@ async fn test_migration_db_url_override() {
 async fn test_migration_sequential_apply_with_checksum() {
     use migration_shim::{Migration, MigrationShim};
 
-    let mut shim = MigrationShim::new();
+    let mut shim = temp_env::with_vars([("_CLEAR", None::<&str>)], MigrationShim::new);
 
     let m1 = Migration {
         version: 1,
@@ -254,7 +284,7 @@ async fn test_migration_sequential_apply_with_checksum() {
 async fn test_migration_rollback_restores_version() {
     use migration_shim::{Migration, MigrationShim};
 
-    let mut shim = MigrationShim::new();
+    let mut shim = temp_env::with_vars([("_CLEAR", None::<&str>)], MigrationShim::new);
 
     let m1 = Migration {
         version: 1,
@@ -868,7 +898,7 @@ async fn test_cache_lifecycle() {
 async fn test_cdc_event_lifecycle() {
     use cdc_shim::CdcShim;
 
-    let mut shim = CdcShim::new();
+    let mut shim = temp_env::with_vars([("CDC_TABLES", Some(""))], CdcShim::new);
 
     // Create event
     let event = shim.create_event(
@@ -1917,7 +1947,7 @@ async fn test_cdc_table_filter_blocks_non_matching() {
 async fn test_cdc_wal_segment_rollover() {
     use cdc_shim::CdcShim;
 
-    let mut shim = CdcShim::new();
+    let mut shim = temp_env::with_vars([("CDC_TABLES", Some(""))], CdcShim::new);
     shim.set_wal_position("0/FFFFFF0", 0, 0x0FFF_FFF0);
     shim.advance_wal(0x100);
     assert_eq!(shim.stats().events_captured, 0);
@@ -1956,7 +1986,7 @@ async fn test_cdc_full_event_lifecycle() {
 async fn test_cdc_event_serialization_roundtrip() {
     use cdc_shim::{CdcOperation, CdcShim};
 
-    let shim = CdcShim::new();
+    let shim = temp_env::with_vars([("CDC_TABLES", Some(""))], CdcShim::new);
     let event = cdc_shim::CdcEvent {
         event_id: "cdc-001".to_string(),
         lsn: "0/100".to_string(),
