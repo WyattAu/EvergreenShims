@@ -434,6 +434,9 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
         "All critical capabilities started, child process running, waiting for shutdown signal"
     );
 
+    // Mark shim as healthy now that all capabilities are running
+    metrics.set_healthy(true);
+
     // Wait for shutdown signal or child exit
     let signal_handler = shim_core::SignalHandler::new();
     let mut shutdown_rx = signal_handler.subscribe();
