@@ -1,0 +1,168 @@
+name: Helm Deploy
+
+on:
+  release:
+    types: [published]
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+
+concurrency:
+  group: helm-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CHART_DIR: helm/evergreen-shims
+  STAGING_NS: evergreen-shims-staging
+  PRODUCTION_NS: evergreen-shims
+
+jobs:
+  lint:
+    name: Lint Chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Lint chart
+        run: helm lint ${{ env.CHART_DIR }}
+
+      - name: Template chart
+        run: helm template evergreen-shims ${{ env.CHART_DIR }} > /dev/null
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: staging
+      url: https://staging.example.com
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > $HOME/.kube/config
+
+      - name: Deploy to staging
+        run: |
+          helm upgrade --install evergreen-shims ${{ env.CHART_DIR }} \
+            --namespace ${{ env.STAGING_NS }} \
+            --create-namespace \
+            --set image.tag=${{ github.event.release.tag_name }} \
+            --wait \
+            --timeout 300s \
+            --atomic
+
+      - name: Verify staging deployment
+        run: |
+          kubectl get pods -n ${{ env.STAGING_NS }} -l app.kubernetes.io/name=evergreen-shims
+          kubectl rollout status deployment/evergreen-shims -n ${{ env.STAGING_NS }} --timeout=120s
+
+  smoke-tests:
+    name: Smoke Tests
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > $HOME/.kube/config
+
+      - name: Check pod readiness
+        run: |
+          READY=$(kubectl get pods -n ${{ env.STAGING_NS }} \
+            -l app.kubernetes.io/name=evergreen-shims \
+            -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}')
+          if [ "$READY" != "True" ]; then
+            echo "::error::Pods not ready"
+            kubectl describe pods -n ${{ env.STAGING_NS }}
+            exit 1
+          fi
+          echo "Pods are ready"
+
+      - name: Check service endpoints
+        run: |
+          kubectl get svc -n ${{ env.STAGING_NS }}
+          ENDPOINTS=$(kubectl get endpoints -n ${{ env.STAGING_NS }} \
+            -l app.kubernetes.io/name=evergreen-shims \
+            -o jsonpath='{.items[*].subsets[*].addresses[*].ip}')
+          if [ -z "$ENDPOINTS" ]; then
+            echo "::warning::No endpoints found (may be expected for headless service)"
+          else
+            echo "Endpoints: ${ENDPOINTS}"
+          fi
+
+      - name: Health probe check
+        continue-on-error: true
+        run: |
+          SVC_IP=$(kubectl get svc -n ${{ env.STAGING_NS }} \
+            -l app.kubernetes.io/name=evergreen-shims \
+            -o jsonpath='{.items[0].spec.clusterIP}')
+          if [ "$SVC_IP" != "None" ]; then
+            kubectl run health-check --rm -i --restart=Never \
+              --image=curlimages/curl:latest \
+              --namespace=${{ env.STAGING_NS }} \
+              -- curl -sf "http://${SVC_IP}:9101/livez" || echo "::warning::Health check failed"
+          fi
+
+  deploy-production:
+    name: Promote to Production
+    needs: smoke-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://example.com
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > $HOME/.kube/config
+
+      - name: Deploy to production
+        run: |
+          helm upgrade --install evergreen-shims ${{ env.CHART_DIR }} \
+            --namespace ${{ env.PRODUCTION_NS }} \
+            --create-namespace \
+            --set image.tag=${{ github.event.release.tag_name }} \
+            --wait \
+            --timeout 300s \
+            --atomic
+
+      - name: Verify production deployment
+        run: |
+          kubectl get pods -n ${{ env.PRODUCTION_NS }} -l app.kubernetes.io/name=evergreen-shims
+          kubectl rollout status deployment/evergreen-shims -n ${{ env.PRODUCTION_NS }} --timeout=120s
+
+      - name: Cleanup staging
+        continue-on-error: true
+        run: |
+          helm uninstall evergreen-shims --namespace ${{ env.STAGING_NS }} || true
+          kubectl delete namespace ${{ env.STAGING_NS }} --ignore-not-found

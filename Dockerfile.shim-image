@@ -12,6 +12,14 @@
 # =============================================================================
 # Pin to Rust 1.87 for reproducible builds.
 # MSRV: aws-config@1.8.18 requires rustc >= 1.91.1, so this Docker image must be >= 1.91.
+FROM rust:1.91-alpine3.21 AS chef
+RUN cargo install cargo-chef --locked
+WORKDIR /src
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
 FROM rust:1.91-alpine3.21 AS builder
 
 ARG TARGETARCH
@@ -27,10 +35,14 @@ RUN if [ "$TARGETARCH" = "riscv64" ]; then \
     fi
 
 WORKDIR /src
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release -p evergreen-shim --no-default-features --features "$FEATURES" --recipe-path recipe.json
 COPY . .
 
 # Determine target triple (with retry for transient network errors)
-RUN for attempt in 1 2 3; do \
+RUN --mount=type=cache,target=/src/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    for attempt in 1 2 3; do \
       if [ "$TARGETARCH" = "arm64" ]; then \
         export TARGET="aarch64-unknown-linux-musl"; \
         rustup target add "$TARGET"; \
