@@ -18,10 +18,12 @@ async fn start_server_on_random_port() -> (SocketAddr, tokio::task::JoinHandle<(
 
     let state = management_api::ShimState::new();
     let svc = management_api::ShimManagementServiceServer::new(state);
+    let layer = management_api::rate_limiter::RateLimitLayer::new(60);
 
     let handle = tokio::spawn(async move {
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
         tonic::transport::Server::builder()
+            .layer(layer)
             .add_service(svc)
             .serve_with_incoming(incoming)
             .await

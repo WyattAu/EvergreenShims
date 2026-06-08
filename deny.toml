@@ -20,6 +20,10 @@ ignore = [
     "RUSTSEC-2026-0099",
     # rustls-webpki 0.101.x CRL parsing panic; same as above
     "RUSTSEC-2026-0104",
+    # backoff unmaintained; no vulnerability, used for retry logic only
+    "RUSTSEC-2025-0012",
+    # derivative unmaintained; no vulnerability, derive macro still works
+    "RUSTSEC-2024-0388",
 ]
 
 [licenses]
