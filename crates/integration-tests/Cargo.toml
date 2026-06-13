@@ -48,3 +48,4 @@ axum.workspace = true
 anyhow.workspace = true
 tokio-test.workspace = true
 rustls.workspace = true
+uuid.workspace = true

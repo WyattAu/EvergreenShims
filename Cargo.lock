@@ -2225,6 +2225,7 @@ dependencies = [
  "tls-shim",
  "tokio",
  "tokio-test",
+ "uuid",
  "vault-shim",
 ]
 

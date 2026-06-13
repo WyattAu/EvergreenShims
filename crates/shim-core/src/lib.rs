@@ -17,6 +17,10 @@ pub mod health;
 pub mod hotreload;
 /// Prometheus metrics collector and HTTP server for shim observability.
 pub mod metrics;
+/// Prometheus metrics export server with per-shim metrics (port 9101).
+pub mod metrics_export;
+/// AlertManager webhook integration for ShimBus events.
+pub mod alerting;
 /// Child process lifecycle management.
 pub mod process;
 /// Resource quota monitoring and enforcement.
