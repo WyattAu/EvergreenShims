@@ -5484,6 +5484,7 @@ dependencies = [
  "chrono",
  "cron",
  "dirs",
+ "libc",
  "nix",
  "notify",
  "opentelemetry",

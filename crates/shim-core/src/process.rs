@@ -85,6 +85,23 @@ impl ChildProcess {
             cmd.current_dir(dir);
         }
 
+        // CRITICAL: When PID 1 spawns a child, grandchildren that exit become
+        // zombies if nobody reaps them. This is the root cause of the Forgejo
+        // git-process accumulation issue. By setting ourselves as the subreaper,
+        // we become responsible for reaping ALL descendant processes, not just
+        // our direct child.
+        //
+        // This prevents the "[git]" zombie processes that accumulate when
+        // Forgejo spawns git subprocesses that exit.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            // PR_SET_CHILD_SUBREAPER = 36
+            // This makes us (the shim/PID 1) the subreaper for all orphaned
+            // descendants. Combined with the SIGCHLD reaper below, this ensures
+            // no zombies accumulate.
+            libc::prctl(36, 1, 0, 0, 0);
+        }
+
         let child = cmd.spawn()?;
         let pid = child.id().unwrap_or(0);
 
@@ -97,6 +114,27 @@ impl ChildProcess {
         self.pid = Some(pid);
         self.child = Some(child);
         self.state = ProcessState::Running;
+
+        // Spawn a background task that continuously reaps zombie processes.
+        // This handles grandchildren (e.g., Forgejo's git subprocesses) that
+        // get reparented to us via PR_SET_CHILD_SUBREAPER.
+        tokio::spawn(async {
+            loop {
+                // waitpid(-1, WNOHANG) reaps any zombie child/descendant
+                use nix::sys::wait::{waitpid, WaitStatus, WaitPidFlag};
+                match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
+                    Ok(WaitStatus::StillAlive) | Ok(WaitStatus::Exited(_, _)) | Ok(WaitStatus::Signaled(_, _, _)) => {
+                        // Reaped a zombie or no zombie available
+                    }
+                    Err(_) => {
+                        // No children to reap, sleep briefly
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    }
+                    _ => {}
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            }
+        });
 
         tracing::info!("Child process started with PID {}", pid);
         Ok(())

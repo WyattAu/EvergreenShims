@@ -28,6 +28,7 @@ chrono.workspace = true
 uuid.workspace = true
 dirs.workspace = true
 nix.workspace = true
+libc = "0.2"
 parking_lot.workspace = true
 axum.workspace = true
 cron.workspace = true
