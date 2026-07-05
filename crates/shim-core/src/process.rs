@@ -39,6 +39,9 @@ pub struct ChildProcess {
 
     /// Database type for shutdown sequence selection.
     db_type: DatabaseType,
+
+    /// Child exit code (set when child exits or is killed).
+    exit_code: Option<i32>,
 }
 
 impl ChildProcess {
@@ -50,6 +53,7 @@ impl ChildProcess {
             child: None,
             state: ProcessState::Stopped,
             db_type: DatabaseType::Generic,
+            exit_code: None,
         }
     }
 
@@ -61,6 +65,7 @@ impl ChildProcess {
             child: None,
             state: ProcessState::Stopped,
             db_type,
+            exit_code: None,
         }
     }
 
@@ -115,24 +120,59 @@ impl ChildProcess {
         self.child = Some(child);
         self.state = ProcessState::Running;
 
-        // Spawn a background task that continuously reaps zombie processes.
+        // Spawn a background task that continuously reaps zombie grandchildren.
         // This handles grandchildren (e.g., Forgejo's git subprocesses) that
         // get reparented to us via PR_SET_CHILD_SUBREAPER.
-        tokio::spawn(async {
+        //
+        // We use waitpid(-1, WNOHANG) which reaps ANY child. If the main child
+        // is reaped here, is_running() will detect it via ECHILD on the next
+        // check, so the race is harmless.
+        let main_pid = pid;
+        tokio::spawn(async move {
             loop {
                 // waitpid(-1, WNOHANG) reaps any zombie child/descendant
-                use nix::sys::wait::{waitpid, WaitStatus, WaitPidFlag};
+                use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
                 match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
-                    Ok(WaitStatus::StillAlive) | Ok(WaitStatus::Exited(_, _)) | Ok(WaitStatus::Signaled(_, _, _)) => {
-                        // Reaped a zombie or no zombie available
+                    Ok(WaitStatus::Exited(pid, code)) => {
+                        if pid.as_raw() == main_pid as i32 {
+                            tracing::info!(
+                                "Main child process {} exited with code {} (reaped by background reaper)",
+                                main_pid, code
+                            );
+                        } else {
+                            tracing::debug!(
+                                "Reaped grandchild zombie: PID {} (code {})",
+                                pid,
+                                code
+                            );
+                        }
+                        // Continue immediately — there might be more zombies
+                        continue;
+                    }
+                    Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                        if pid.as_raw() == main_pid as i32 {
+                            tracing::warn!(
+                                "Main child process {} killed by signal {:?} (reaped by background reaper)",
+                                main_pid, sig
+                            );
+                        } else {
+                            tracing::debug!(
+                                "Reaped grandchild zombie: PID {} (signal {:?})",
+                                pid,
+                                sig
+                            );
+                        }
+                        continue;
+                    }
+                    Ok(WaitStatus::StillAlive) => {
+                        // No zombie available
                     }
                     Err(_) => {
-                        // No children to reap, sleep briefly
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        // No children to reap
                     }
                     _ => {}
                 }
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         });
 
@@ -189,9 +229,44 @@ impl ChildProcess {
     }
 
     /// Check if the child process is running.
-    pub fn is_running(&self) -> bool {
+    ///
+    /// Uses `waitpid(pid, WNOHANG)` instead of `kill(pid, 0)` because kill
+    /// returns success for **zombie processes**. When a child is killed
+    /// (e.g., OOM-killed) it becomes a zombie until reaped. `kill(pid, 0)`
+    /// on a zombie returns Ok, causing a false positive — the shim thinks
+    /// the child is alive when it's actually dead, and keeps running
+    /// indefinitely with no working service.
+    ///
+    /// `waitpid(pid, WNOHANG)` correctly distinguishes:
+    /// - `StillAlive` → process is running (returns true)
+    /// - `Exited/Signaled` → process died, zombie is reaped (returns false)
+    /// - `ECHILD` → already reaped by background task (returns false)
+    pub fn is_running(&mut self) -> bool {
         if let Some(pid) = self.pid {
-            signal::kill(Pid::from_raw(pid as i32), None).is_ok()
+            use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+            let nix_pid = Pid::from_raw(pid as i32);
+            match waitpid(Some(nix_pid), Some(WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::StillAlive) => true,
+                Ok(WaitStatus::Exited(_, code)) => {
+                    tracing::info!("Child process PID {} exited with code {}", pid, code);
+                    self.exit_code = Some(code as i32);
+                    self.state = ProcessState::Failed;
+                    false
+                }
+                Ok(WaitStatus::Signaled(_, sig, _)) => {
+                    tracing::warn!("Child process PID {} killed by signal {:?}", pid, sig);
+                    self.exit_code = Some(128 + sig as i32);
+                    self.state = ProcessState::Failed;
+                    false
+                }
+                Err(_) => {
+                    // ECHILD: child was already reaped by the background reaper
+                    tracing::info!("Child process PID {} already reaped (ECHILD)", pid);
+                    self.state = ProcessState::Failed;
+                    false
+                }
+                _ => true,
+            }
         } else {
             false
         }
@@ -206,6 +281,13 @@ impl ChildProcess {
     pub fn state(&self) -> &ProcessState {
         &self.state
     }
+
+    /// Get the child process exit code (if exited).
+    /// Returns None if the process is still running or hasn't been started.
+    /// For signal deaths, returns 128 + signal_number (POSIX convention).
+    pub fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
 }
 
 #[cfg(test)]
@@ -215,10 +297,11 @@ mod tests {
     #[test]
     fn test_child_process_new() {
         let config = ProcessConfig::default();
-        let proc = ChildProcess::new(config);
+        let mut proc = ChildProcess::new(config);
         assert_eq!(*proc.state(), ProcessState::Stopped);
         assert!(!proc.is_running());
         assert_eq!(proc.pid(), None);
+        assert_eq!(proc.exit_code(), None);
     }
 
     #[test]

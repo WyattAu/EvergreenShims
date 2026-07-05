@@ -196,7 +196,8 @@ impl BackupShim {
     /// Create a new backup shim from environment variables.
     pub fn new() -> Self {
         Self {
-            schedule: std::env::var("BACKUP_SCHEDULE").unwrap_or_else(|_| "0 0 2 * * *".to_string()),
+            schedule: std::env::var("BACKUP_SCHEDULE")
+                .unwrap_or_else(|_| "0 0 2 * * *".to_string()),
             storage: std::env::var("BACKUP_STORAGE").unwrap_or_else(|_| "local".to_string()),
             backup_path: std::env::var("BACKUP_PATH")
                 .unwrap_or_else(|_| "/var/backups".to_string()),

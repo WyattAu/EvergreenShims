@@ -377,8 +377,8 @@ impl AlertManager {
         webhook: &AlertManagerWebhook,
         payload: &WebhookPayload,
     ) -> crate::error::Result<()> {
-        let body = serde_json::to_vec(payload)
-            .map_err(|e| crate::error::Error::Serialization(e))?;
+        let body =
+            serde_json::to_vec(payload).map_err(|e| crate::error::Error::Serialization(e))?;
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -404,13 +404,17 @@ impl AlertManager {
     /// Manually convert a ShimEvent to a WebhookPayload (for testing / external use).
     pub fn convert_event(&self, event: &ShimEvent) -> WebhookPayload {
         let alert = self.event_to_alert(event);
-        let webhook = self.webhooks.first().cloned().unwrap_or(AlertManagerWebhook {
-            name: "default".to_string(),
-            url: "http://localhost:9093".to_string(),
-            min_severity: AlertSeverity::Info,
-            headers: HashMap::new(),
-            group: None,
-        });
+        let webhook = self
+            .webhooks
+            .first()
+            .cloned()
+            .unwrap_or(AlertManagerWebhook {
+                name: "default".to_string(),
+                url: "http://localhost:9093".to_string(),
+                min_severity: AlertSeverity::Info,
+                headers: HashMap::new(),
+                group: None,
+            });
         self.build_webhook_payload(alert, &webhook)
     }
 
@@ -458,7 +462,7 @@ fn severity_rank_event(s: &Severity) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::event::{EventType, Severity, ShimEvent};
+    use crate::event::{EventType, Severity, ShimEvent};
 
     fn make_event(source: &str, event_type: EventType, severity: Severity) -> ShimEvent {
         ShimEvent::new(source, event_type, severity)
@@ -683,15 +687,11 @@ use crate::event::{EventType, Severity, ShimEvent};
         // Different event names → different dedup keys
         let key1 = format!(
             "{}:{}:{}",
-            alert1.source,
-            alert1.event_type,
-            alert1.severity
+            alert1.source, alert1.event_type, alert1.severity
         );
         let key2 = format!(
             "{}:{}:{}",
-            alert2.source,
-            alert2.event_type,
-            alert2.severity
+            alert2.source, alert2.event_type, alert2.severity
         );
         // Same event_type but different underlying event — but dedup key
         // only uses event_name which is the same for same EventType variant
@@ -707,9 +707,7 @@ use crate::event::{EventType, Severity, ShimEvent};
         let alert3 = am.event_to_alert(&evt3);
         let key3 = format!(
             "{}:{}:{}",
-            alert3.source,
-            alert3.event_type,
-            alert3.severity
+            alert3.source, alert3.event_type, alert3.severity
         );
         assert_ne!(key1, key3);
     }

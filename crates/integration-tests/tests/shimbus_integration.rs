@@ -13,10 +13,10 @@ use shim_core::alerting::{
     AlertManager, AlertManagerAlert, AlertManagerWebhook, AlertSeverity, WebhookPayload,
 };
 use shim_core::event::{EventType, Severity, ShimEvent};
-use shim_core::metrics_export::MetricsExporter;
 use shim_core::metrics::ShimMetrics;
+use shim_core::metrics_export::MetricsExporter;
 use shim_core::wiring::{BackupEncryptionHandler, HealthFailoverHandler};
-use shim_core::{ShimBus, Severity as CoreSeverity};
+use shim_core::{Severity as CoreSeverity, ShimBus};
 
 // ============================================================================
 // Task 3.1: Event publish/subscribe roundtrip
@@ -199,7 +199,10 @@ async fn test_cross_shim_health_to_failover() {
             assert_eq!(evt.severity, CoreSeverity::Critical);
         }
     }
-    assert!(found, "health→failover chain should produce FailoverTriggered");
+    assert!(
+        found,
+        "health→failover chain should produce FailoverTriggered"
+    );
 }
 
 /// Test backup → encryption chain.
@@ -229,7 +232,10 @@ async fn test_cross_shim_backup_to_encryption() {
             assert_eq!(key_id, "backup-postgres-daily");
         }
     }
-    assert!(found, "backup→encryption chain should produce EncryptionKeyRotated");
+    assert!(
+        found,
+        "backup→encryption chain should produce EncryptionKeyRotated"
+    );
 }
 
 /// Test multi-source sequencing: different sources get independent sequences.
@@ -275,13 +281,16 @@ async fn test_multi_source_sequencing() {
 #[tokio::test]
 async fn test_alertmanager_webhook_payload_conversion() {
     let bus = ShimBus::new();
-    let am = AlertManager::new(bus, vec![AlertManagerWebhook {
-        name: "test".into(),
-        url: "http://localhost:9093/api/v2/alerts".into(),
-        min_severity: AlertSeverity::Info,
-        headers: HashMap::new(),
-        group: Some("test-group".into()),
-    }]);
+    let am = AlertManager::new(
+        bus,
+        vec![AlertManagerWebhook {
+            name: "test".into(),
+            url: "http://localhost:9093/api/v2/alerts".into(),
+            min_severity: AlertSeverity::Info,
+            headers: HashMap::new(),
+            group: Some("test-group".into()),
+        }],
+    );
 
     let evt = ShimEvent::new(
         "backup-shim",
@@ -408,7 +417,10 @@ async fn test_alertmanager_alert_labels() {
     let alert = am.convert_event(&evt).alerts.into_iter().next().unwrap();
     assert_eq!(alert.labels.get("source").unwrap(), "failover-shim");
     assert_eq!(alert.labels.get("severity").unwrap(), "CRITICAL");
-    assert_eq!(alert.labels.get("event_type").unwrap(), "failover_triggered");
+    assert_eq!(
+        alert.labels.get("event_type").unwrap(),
+        "failover_triggered"
+    );
 }
 
 // ============================================================================
@@ -482,9 +494,7 @@ async fn test_healthz_endpoint_json_response() {
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    let mut stream = tokio::net::TcpStream::connect(actual_addr)
-        .await
-        .unwrap();
+    let mut stream = tokio::net::TcpStream::connect(actual_addr).await.unwrap();
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     stream
         .write_all(b"GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n")
@@ -524,9 +534,7 @@ async fn test_metrics_server_tcp_metrics_endpoint() {
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    let mut stream = tokio::net::TcpStream::connect(actual_addr)
-        .await
-        .unwrap();
+    let mut stream = tokio::net::TcpStream::connect(actual_addr).await.unwrap();
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     stream
         .write_all(b"GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n")

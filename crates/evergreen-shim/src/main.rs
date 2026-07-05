@@ -435,6 +435,7 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
     );
 
     // Mark shim as healthy now that all capabilities are running
+    let metrics = shim_core::metrics::ShimMetrics::new();
     metrics.set_healthy(true);
 
     // Wait for shutdown signal or child exit
@@ -442,12 +443,14 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
     let mut shutdown_rx = signal_handler.subscribe();
 
     // Wait for SIGTERM/SIGINT or child exit
+    let mut child_died = false;
     loop {
         if signal_handler.is_shutdown() {
             break;
         }
         if !child.is_running() {
-            tracing::info!("Child process exited, initiating shutdown");
+            tracing::warn!("Child process exited unexpectedly, initiating shutdown");
+            child_died = true;
             break;
         }
         tokio::select! {
@@ -461,11 +464,14 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
                     break;
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
                 // Periodically check child process
             }
         }
     }
+
+    // Capture exit code before stop() clears it
+    let child_exit_code = if child_died { child.exit_code() } else { None };
 
     // Stop child process
     child.stop().await?;
@@ -476,6 +482,15 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
     }
 
     tracing::info!("EvergreenShim stopped");
+
+    // If the child process died unexpectedly, propagate its exit code.
+    // This ensures Docker's restart policy kicks in (restart: unless-stopped)
+    // and the container doesn't appear "healthy" when the service is dead.
+    if let Some(code) = child_exit_code {
+        tracing::info!("Exiting with child exit code {}", code);
+        std::process::exit(code);
+    }
+
     Ok(())
 }
 

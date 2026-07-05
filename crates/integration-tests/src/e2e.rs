@@ -1159,13 +1159,12 @@ async fn e2e_migration_real_postgres() {
     .unwrap();
 
     // Verify table exists via information_schema.
-    let row: (String,) = sqlx::query_as(
-        "SELECT table_name FROM information_schema.tables WHERE table_name = $1",
-    )
-    .bind(table_name)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row: (String,) =
+        sqlx::query_as("SELECT table_name FROM information_schema.tables WHERE table_name = $1")
+            .bind(table_name)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(row.0, table_name);
 
     // Verify column exists.
@@ -1361,12 +1360,11 @@ async fn e2e_cdc_real_postgres() {
     );
 
     // Check replication slots (may be empty in single-node, but query should work).
-    let _slots: Vec<(String, String)> = sqlx::query_as(
-        "SELECT slot_name, plugin FROM pg_replication_slots LIMIT 10",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let _slots: Vec<(String, String)> =
+        sqlx::query_as("SELECT slot_name, plugin FROM pg_replication_slots LIMIT 10")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
 
     // Cleanup.
     sqlx::query(&format!("DROP TABLE IF EXISTS {}", table_name))
@@ -1413,7 +1411,7 @@ async fn e2e_cache_real_redis() {
     let test_value = b"real_redis_value_12345";
 
     // Cleanup prior run.
-    let _ : () = redis::cmd("DEL")
+    let _: () = redis::cmd("DEL")
         .arg(test_key)
         .query_async(&mut conn)
         .await
@@ -1485,7 +1483,7 @@ async fn e2e_cache_real_redis() {
     assert!(ttl > 0 && ttl <= 3600, "TTL should be positive: {}", ttl);
 
     // Cleanup.
-    let _ : () = redis::cmd("DEL")
+    let _: () = redis::cmd("DEL")
         .arg(test_key2)
         .query_async(&mut conn)
         .await
@@ -1619,9 +1617,7 @@ async fn e2e_vault_real_secrets() {
     assert!(resp.status().is_success());
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    let db_pass = body["data"]["data"]["db_password"]
-        .as_str()
-        .unwrap();
+    let db_pass = body["data"]["data"]["db_password"].as_str().unwrap();
     assert_eq!(db_pass, "real-db-pass-xyz789");
 
     // Cleanup.

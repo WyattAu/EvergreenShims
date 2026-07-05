@@ -6,14 +6,17 @@
 
 use std::collections::HashMap;
 
-use shim_core::alerting::{
-    Alert, AlertManager, AlertManagerWebhook, AlertSeverity, Severity,
-};
+use shim_core::alerting::{Alert, AlertManager, AlertManagerWebhook, AlertSeverity, Severity};
 use shim_core::ShimBus;
 
 #[test]
 fn test_alert_creation() {
-    let alert = Alert::new("test-shim", Severity::Warning, "Test Alert", "This is a test");
+    let alert = Alert::new(
+        "test-shim",
+        Severity::Warning,
+        "Test Alert",
+        "This is a test",
+    );
     assert_eq!(alert.source, "test-shim");
     assert_eq!(alert.severity, Severity::Warning);
     assert!(!alert.id.is_empty());

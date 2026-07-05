@@ -3,6 +3,9 @@
 //! This crate provides the foundational abstractions that all shims implement.
 //! Includes the `ShimBus` event system for cross-shim communication.
 
+/// AlertManager webhook integration for ShimBus events.
+#[cfg(feature = "http")]
+pub mod alerting;
 /// In-process event broadcast bus for cross-shim communication.
 pub mod bus;
 /// Configuration types and validation for all shims.
@@ -19,8 +22,6 @@ pub mod hotreload;
 pub mod metrics;
 /// Prometheus metrics export server with per-shim metrics (port 9101).
 pub mod metrics_export;
-/// AlertManager webhook integration for ShimBus events.
-pub mod alerting;
 /// Child process lifecycle management.
 pub mod process;
 /// Resource quota monitoring and enforcement.

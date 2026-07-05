@@ -249,9 +249,7 @@ struct MetricsServerState {
 }
 
 /// Handler for GET /metrics — returns Prometheus text format.
-async fn metrics_handler(
-    State(state): State<MetricsServerState>,
-) -> Response {
+async fn metrics_handler(State(state): State<MetricsServerState>) -> Response {
     state.exporter.scrape_count.fetch_add(1, Ordering::Relaxed);
 
     let body = state.exporter.export_all();
@@ -264,9 +262,7 @@ async fn metrics_handler(
 }
 
 /// Handler for GET /healthz — returns JSON health status.
-async fn healthz_handler(
-    State(state): State<MetricsServerState>,
-) -> Response {
+async fn healthz_handler(State(state): State<MetricsServerState>) -> Response {
     let healthy = state.exporter.is_running();
     let status = serde_json::json!({
         "status": if healthy { "healthy" } else { "unhealthy" },
@@ -278,11 +274,7 @@ async fn healthz_handler(
     let body = match serde_json::to_string(&status) {
         Ok(b) => b,
         Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal server error",
-            )
-                .into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
         }
     };
 
@@ -459,9 +451,7 @@ mod tests {
 
         // Test /metrics
         {
-            let mut stream = tokio::net::TcpStream::connect(actual_addr)
-                .await
-                .unwrap();
+            let mut stream = tokio::net::TcpStream::connect(actual_addr).await.unwrap();
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             stream
                 .write_all(b"GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n")
@@ -476,9 +466,7 @@ mod tests {
 
         // Test /healthz
         {
-            let mut stream = tokio::net::TcpStream::connect(actual_addr)
-                .await
-                .unwrap();
+            let mut stream = tokio::net::TcpStream::connect(actual_addr).await.unwrap();
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             stream
                 .write_all(b"GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n")
