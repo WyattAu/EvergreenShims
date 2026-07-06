@@ -172,24 +172,25 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
 
     // Override with CLI args
     if let Some(cmd) = command {
-        // If the command contains spaces and no explicit args were passed
-        // via `--`, split it into command + args. This matches the behavior
-        // of Docker's shell-form ENTRYPOINT and the old supervisor-mode shim.
-        // E.g., "docker-entrypoint.sh node server.js" → cmd="docker-entrypoint.sh", args=["node", "server.js"]
-        if args.is_empty() {
-            let parts: Vec<&str> = cmd.split_whitespace().collect();
-            if parts.len() > 1 {
-                config.process.command = parts[0].to_string();
-                config.process.args = parts[1..].iter().map(|s| s.to_string()).collect();
-            } else {
-                config.process.command = cmd;
-            }
+        // Always split the command string on whitespace. This handles EIR
+        // Dockerfiles that use ENTRYPOINT ["shim", "run", "-c", "cmd arg1 arg2"]
+        // where the entire "cmd arg1 arg2" is a single -c value.
+        // Docker CMD args (passed after the entrypoint) are appended to the
+        // split args so they reach the child process correctly.
+        // E.g., -c "docker-entrypoint.sh mariadbd" + CMD ["--foo=bar"] →
+        //   command="docker-entrypoint.sh", args=["mariadbd", "--foo=bar"]
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.len() > 1 {
+            config.process.command = parts[0].to_string();
+            config.process.args = parts[1..].iter().map(|s| s.to_string()).collect();
+            // Append Docker CMD args after the split command args
+            config.process.args.extend(args);
         } else {
             config.process.command = cmd;
+            if !args.is_empty() {
+                config.process.args = args;
+            }
         }
-    }
-    if !args.is_empty() {
-        config.process.args = args;
     }
 
     // Create capabilities
