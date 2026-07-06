@@ -230,42 +230,40 @@ impl ChildProcess {
 
     /// Check if the child process is running.
     ///
-    /// Uses `waitpid(pid, WNOHANG)` instead of `kill(pid, 0)` because kill
-    /// returns success for **zombie processes**. When a child is killed
-    /// (e.g., OOM-killed) it becomes a zombie until reaped. `kill(pid, 0)`
-    /// on a zombie returns Ok, causing a false positive — the shim thinks
-    /// the child is alive when it's actually dead, and keeps running
-    /// indefinitely with no working service.
+    /// Reads `/proc/<pid>/status` to determine the process state.
+    /// This avoids race conditions between concurrent `waitpid` calls
+    /// from the background reaper and this method.
     ///
-    /// `waitpid(pid, WNOHANG)` correctly distinguishes:
-    /// - `StillAlive` → process is running (returns true)
-    /// - `Exited/Signaled` → process died, zombie is reaped (returns false)
-    /// - `ECHILD` → already reaped by background task (returns false)
-    pub fn is_running(&mut self) -> bool {
+    /// State values from /proc/<pid>/status:
+    /// - R (running), S (sleeping), D (disk sleep), T (stopped) → alive
+    /// - Z (zombie) → dead (exited but not yet reaped)
+    /// - file not found → dead (fully reaped/gone)
+    pub fn is_running(&self) -> bool {
         if let Some(pid) = self.pid {
-            use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-            let nix_pid = Pid::from_raw(pid as i32);
-            match waitpid(Some(nix_pid), Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::StillAlive) => true,
-                Ok(WaitStatus::Exited(_, code)) => {
-                    tracing::info!("Child process PID {} exited with code {}", pid, code);
-                    self.exit_code = Some(code as i32);
-                    self.state = ProcessState::Failed;
-                    false
-                }
-                Ok(WaitStatus::Signaled(_, sig, _)) => {
-                    tracing::warn!("Child process PID {} killed by signal {:?}", pid, sig);
-                    self.exit_code = Some(128 + sig as i32);
-                    self.state = ProcessState::Failed;
-                    false
+            let status_path = format!("/proc/{}/status", pid);
+            match std::fs::read_to_string(&status_path) {
+                Ok(content) => {
+                    for line in content.lines() {
+                        if line.starts_with("State:") {
+                            if line.contains("(zombie)") {
+                                tracing::info!(
+                                    "Child process PID {} is zombie (exited)",
+                                    pid
+                                );
+                                return false;
+                            }
+                            return true;
+                        }
+                    }
+                    true
                 }
                 Err(_) => {
-                    // ECHILD: child was already reaped by the background reaper
-                    tracing::info!("Child process PID {} already reaped (ECHILD)", pid);
-                    self.state = ProcessState::Failed;
+                    tracing::info!(
+                        "Child process PID {} status file gone (exited)",
+                        pid
+                    );
                     false
                 }
-                _ => true,
             }
         } else {
             false
@@ -297,7 +295,7 @@ mod tests {
     #[test]
     fn test_child_process_new() {
         let config = ProcessConfig::default();
-        let mut proc = ChildProcess::new(config);
+        let proc = ChildProcess::new(config);
         assert_eq!(*proc.state(), ProcessState::Stopped);
         assert!(!proc.is_running());
         assert_eq!(proc.pid(), None);
@@ -314,7 +312,7 @@ mod tests {
     #[test]
     fn test_child_process_set_db_type() {
         let config = ProcessConfig::default();
-        let mut proc = ChildProcess::new(config);
+        let proc = ChildProcess::new(config);
         assert_eq!(*proc.db_type(), DatabaseType::Generic);
 
         proc.set_db_type(DatabaseType::Redis);
