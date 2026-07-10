@@ -71,7 +71,7 @@ LABEL org.opencontainers.image.title="health-shim" \
       org.opencontainers.image.description="EvergreenShims health probe binary - statically linked musl" \
       org.opencontainers.image.vendor="WyattAu" \
       org.opencontainers.image.source="https://github.com/WyattAu/EvergreenShims" \
-      org.opencontainers.image.version="1.3.0" \
+      org.opencontainers.image.version="2.0.0" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 FROM scratch AS shim-full
@@ -81,7 +81,7 @@ LABEL org.opencontainers.image.title="evergreen-shim" \
       org.opencontainers.image.description="EvergreenShims full binary (all 27 shims) - statically linked musl" \
       org.opencontainers.image.vendor="WyattAu" \
       org.opencontainers.image.source="https://github.com/WyattAu/EvergreenShims" \
-      org.opencontainers.image.version="1.3.0" \
+      org.opencontainers.image.version="2.0.0" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 FROM scratch AS shim-db
@@ -91,7 +91,7 @@ LABEL org.opencontainers.image.title="db-shim" \
       org.opencontainers.image.description="EvergreenShims DB binary (health+vault+backup+migration+audit) - statically linked musl" \
       org.opencontainers.image.vendor="WyattAu" \
       org.opencontainers.image.source="https://github.com/WyattAu/EvergreenShims" \
-      org.opencontainers.image.version="1.3.0" \
+      org.opencontainers.image.version="2.0.0" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 FROM scratch AS shim-cache
@@ -101,5 +101,5 @@ LABEL org.opencontainers.image.title="cache-shim" \
       org.opencontainers.image.description="EvergreenShims cache binary (health+cache) - statically linked musl" \
       org.opencontainers.image.vendor="WyattAu" \
       org.opencontainers.image.source="https://github.com/WyattAu/EvergreenShims" \
-      org.opencontainers.image.version="1.3.0" \
+      org.opencontainers.image.version="2.0.0" \
       org.opencontainers.image.licenses="Apache-2.0"

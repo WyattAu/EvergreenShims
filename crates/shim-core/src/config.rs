@@ -442,6 +442,13 @@ pub struct ProcessConfig {
     /// Graceful shutdown timeout in seconds.
     #[serde(default = "default_shutdown_timeout")]
     pub shutdown_timeout_secs: u64,
+
+    /// Startup grace period in seconds. If the child exits during this
+    /// period, the shim restarts it once instead of shutting down.
+    /// This prevents crash loops when apps briefly exit during init
+    /// (e.g., Rust binaries, Java JVM startup).
+    #[serde(default = "default_startup_grace")]
+    pub startup_grace_secs: u64,
 }
 
 /// Resource quota limits for the shim process.
@@ -471,12 +478,17 @@ impl Default for ProcessConfig {
             args: vec![],
             working_dir: None,
             shutdown_timeout_secs: default_shutdown_timeout(),
+            startup_grace_secs: default_startup_grace(),
         }
     }
 }
 
 fn default_shutdown_timeout() -> u64 {
     30
+}
+
+fn default_startup_grace() -> u64 {
+    5
 }
 
 impl Config {

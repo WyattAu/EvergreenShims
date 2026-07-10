@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "alerting-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "archival-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -302,7 +302,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audit-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "auth-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "backup-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "cache-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "cassandra-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "cdc-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1155,7 +1155,7 @@ dependencies = [
 
 [[package]]
 name = "chaos-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "cockroachdb-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "compliance-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "config-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1424,7 +1424,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cost-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1961,7 +1961,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "dynamodb-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2002,7 +2002,7 @@ dependencies = [
 
 [[package]]
 name = "elasticsearch-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2060,7 +2060,7 @@ dependencies = [
 
 [[package]]
 name = "encryption-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2130,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "evergreen-benchmarks"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "backup-shim",
  "cache-shim",
@@ -2144,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "evergreen-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "alerting-shim",
  "anyhow",
@@ -2166,6 +2166,7 @@ dependencies = [
  "encryption-shim",
  "failover-shim",
  "health-shim",
+ "libc",
  "management-api",
  "migration-shim",
  "mongodb-shim",
@@ -2185,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "evergreen-shims-integration"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "alerting-shim",
  "anyhow",
@@ -2231,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "failover-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2733,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "health-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3612,7 +3613,7 @@ dependencies = [
 
 [[package]]
 name = "management-api"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3687,7 +3688,7 @@ dependencies = [
 
 [[package]]
 name = "migration-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3740,7 +3741,7 @@ dependencies = [
 
 [[package]]
 name = "mongodb-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4585,7 +4586,7 @@ checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
 
 [[package]]
 name = "proxy-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4624,7 +4625,7 @@ dependencies = [
 
 [[package]]
 name = "queue-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4858,7 +4859,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "replication-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5127,7 +5128,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5461,7 +5462,7 @@ dependencies = [
 
 [[package]]
 name = "sharding-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5476,7 +5477,7 @@ dependencies = [
 
 [[package]]
 name = "shim-core"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5513,7 +5514,7 @@ dependencies = [
 
 [[package]]
 name = "shim-operator"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5533,7 +5534,7 @@ dependencies = [
 
 [[package]]
 name = "shim-plugin"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5548,7 +5549,7 @@ dependencies = [
 
 [[package]]
 name = "shimctl"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6106,7 +6107,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tls-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "acme-micro",
  "anyhow",
@@ -6691,7 +6692,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault-shim"
-version = "1.3.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",

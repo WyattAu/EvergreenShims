@@ -155,6 +155,18 @@ struct CapabilityOutcome {
     error: Option<String>,
 }
 
+/// Check if a pidfd is readable (child exited) using poll with a 500ms timeout.
+/// Returns true if the fd is readable (child exited), false on timeout.
+async fn pidfd_readable(fd: std::os::fd::RawFd) -> bool {
+    tokio::task::spawn_blocking(move || {
+        let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        let ret = unsafe { libc::poll(&mut pfd, 1, 500) };
+        ret > 0 && (pfd.revents & libc::POLLIN) != 0
+    })
+    .await
+    .unwrap_or(false)
+}
+
 async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<String>) -> Result<()> {
     tracing::info!("EvergreenShim starting");
 
@@ -457,30 +469,108 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
     let signal_handler = shim_core::SignalHandler::new();
     let mut shutdown_rx = signal_handler.subscribe();
 
+    // Create pidfd-based async monitor if available, otherwise fall back to polling
+    let pidfd = child.pidfd();
+    let grace_secs = child.startup_grace_secs();
+    let child_started = std::time::Instant::now();
+    let mut grace_retried = false;
+
     // Wait for SIGTERM/SIGINT or child exit
     let mut child_died = false;
     loop {
         if signal_handler.is_shutdown() {
             break;
         }
+
+        // Check child via /proc (works everywhere, low overhead)
         if !child.is_running() {
-            tracing::warn!("Child process exited unexpectedly, initiating shutdown");
-            child_died = true;
-            break;
-        }
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("Received Ctrl+C");
+            let elapsed = child_started.elapsed().as_secs();
+            if elapsed < grace_secs && !grace_retried {
+                tracing::warn!(
+                    "Child exited during startup grace ({}s < {}s), restarting...",
+                    elapsed, grace_secs
+                );
+                grace_retried = true;
+                child.stop().await.ok();
+                match child.start().await {
+                    Ok(()) => {
+                        tracing::info!("Child restarted successfully after grace-period exit");
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to restart child after grace period: {}", e);
+                        child_died = true;
+                        break;
+                    }
+                }
+            } else {
+                tracing::warn!("Child process exited unexpectedly, initiating shutdown");
+                child_died = true;
                 break;
             }
-            result = shutdown_rx.recv() => {
-                if let Ok(signal) = result {
-                    tracing::info!("Received signal: {:?}", signal);
+        }
+
+        // Use pidfd for instant notification if available (zero-polling).
+        // Fall back to 500ms polling if pidfd unavailable.
+        if let Some(fd) = pidfd {
+            // pidfd approach: wait for fd to become readable (child exited)
+            // or timeout for periodic signal checks
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Received Ctrl+C");
                     break;
                 }
+                result = shutdown_rx.recv() => {
+                    if let Ok(signal) = result {
+                        tracing::info!("Received signal: {:?}", signal);
+                        break;
+                    }
+                }
+                readable = pidfd_readable(fd) => {
+                    if readable {
+                        let elapsed = child_started.elapsed().as_secs();
+                        if elapsed < grace_secs && !grace_retried {
+                            tracing::warn!(
+                                "Child exited during startup grace ({}s < {}s), restarting...",
+                                elapsed, grace_secs
+                            );
+                            grace_retried = true;
+                            child.stop().await.ok();
+                            match child.start().await {
+                                Ok(()) => {
+                                    tracing::info!("Child restarted after grace-period exit");
+                                    continue;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to restart: {}", e);
+                                    child_died = true;
+                                    break;
+                                }
+                            }
+                        } else {
+                            tracing::warn!("Child process exited (pidfd notification)");
+                            child_died = true;
+                            break;
+                        }
+                    }
+                }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
-                // Periodically check child process
+        } else {
+            // Fallback: poll /proc every 500ms
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Received Ctrl+C");
+                    break;
+                }
+                result = shutdown_rx.recv() => {
+                    if let Ok(signal) = result {
+                        tracing::info!("Received signal: {:?}", signal);
+                        break;
+                    }
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                    // Periodically check child process via /proc
+                }
             }
         }
     }

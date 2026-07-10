@@ -42,6 +42,10 @@ pub struct ChildProcess {
 
     /// Child exit code (set when child exits or is killed).
     exit_code: Option<i32>,
+
+    /// pidfd for zero-polling child exit detection (Linux 5.3+).
+    /// None if pidfd_open is unavailable (falls back to /proc polling).
+    pidfd: Option<std::os::fd::RawFd>,
 }
 
 impl ChildProcess {
@@ -54,6 +58,7 @@ impl ChildProcess {
             state: ProcessState::Stopped,
             db_type: DatabaseType::Generic,
             exit_code: None,
+            pidfd: None,
         }
     }
 
@@ -66,6 +71,7 @@ impl ChildProcess {
             state: ProcessState::Stopped,
             db_type,
             exit_code: None,
+            pidfd: None,
         }
     }
 
@@ -119,6 +125,24 @@ impl ChildProcess {
         self.pid = Some(pid);
         self.child = Some(child);
         self.state = ProcessState::Running;
+
+        // Create a pidfd for zero-polling child exit detection.
+        // pidfd_open() is available on Linux 5.3+ (SYS_pidfd_open = 434).
+        // If unavailable, we fall back to /proc polling in is_running().
+        #[cfg(target_os = "linux")]
+        {
+            const SYS_PIDFD_OPEN: libc::c_long = 434;
+            let fd = unsafe { libc::syscall(SYS_PIDFD_OPEN, pid as libc::pid_t, 0u32) };
+            if fd >= 0 {
+                self.pidfd = Some(fd as std::os::fd::RawFd);
+                tracing::debug!("Created pidfd {} for child PID {}", fd, pid);
+            } else {
+                tracing::debug!(
+                    "pidfd_open failed (errno {}), falling back to /proc polling",
+                    unsafe { *libc::__errno_location() }
+                );
+            }
+        }
 
         // Spawn a background task that continuously reaps zombie grandchildren.
         // This handles grandchildren (e.g., Forgejo's git subprocesses) that
@@ -213,6 +237,7 @@ impl ChildProcess {
             // Take the child handle so it's dropped
             self.child = None;
             self.pid = None;
+            self.close_pidfd();
             self.state = ProcessState::Stopped;
             tracing::info!("Child process stopped ({}ms)", result.duration_ms);
         }
@@ -286,6 +311,31 @@ impl ChildProcess {
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code
     }
+
+    /// Get the pidfd for async child exit monitoring.
+    /// Returns None if pidfd_open is unavailable.
+    /// The fd becomes readable when the child process exits.
+    pub fn pidfd(&self) -> Option<std::os::fd::RawFd> {
+        self.pidfd
+    }
+
+    /// Get the startup grace period in seconds.
+    pub fn startup_grace_secs(&self) -> u64 {
+        self.config.startup_grace_secs
+    }
+
+    /// Close the pidfd if open. Called during shutdown.
+    pub fn close_pidfd(&mut self) {
+        if let Some(fd) = self.pidfd.take() {
+            unsafe { libc::close(fd); }
+        }
+    }
+}
+
+impl Drop for ChildProcess {
+    fn drop(&mut self) {
+        self.close_pidfd();
+    }
 }
 
 #[cfg(test)]
@@ -312,7 +362,7 @@ mod tests {
     #[test]
     fn test_child_process_set_db_type() {
         let config = ProcessConfig::default();
-        let proc = ChildProcess::new(config);
+        let mut proc = ChildProcess::new(config);
         assert_eq!(*proc.db_type(), DatabaseType::Generic);
 
         proc.set_db_type(DatabaseType::Redis);

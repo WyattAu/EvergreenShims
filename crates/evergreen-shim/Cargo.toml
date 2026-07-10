@@ -59,6 +59,7 @@ otel = ["shim-core/otel"]
 
 [dependencies]
 shim-core = { path = "../shim-core", default-features = false }
+libc = "0.2"
 health-shim = { path = "../health-shim", optional = true }
 vault-shim = { path = "../vault-shim", optional = true }
 backup-shim = { path = "../backup-shim", optional = true }
