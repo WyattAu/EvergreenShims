@@ -1,70 +1,51 @@
-use opentelemetry::trace::TracerProvider;
-use opentelemetry::KeyValue;
-use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::trace::TracerProvider as SdkTracerProvider;
-use opentelemetry_sdk::Resource;
-use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, EnvFilter};
-
 /// Initialize the OpenTelemetry tracing pipeline alongside structured logging.
 ///
-/// Spans and events are exported to the given OTLP `endpoint` (e.g.
-/// `"http://localhost:4317"`).  The returned [`SdkTracerProvider`] should be
-/// shut down when the process exits so that any buffered telemetry is flushed.
-pub fn init_otel_tracing(endpoint: &str, debug: bool, json: bool) -> SdkTracerProvider {
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_endpoint(endpoint)
-        .build()
-        .expect("failed to build OTLP span exporter");
-
-    let provider = SdkTracerProvider::builder()
-        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
-        .with_resource(Resource::new(vec![KeyValue::new(
-            "service.name",
-            "evergreen-shim",
-        )]))
-        .build();
-
+/// Delegates to `otelkit` for tracing subscriber setup and OTLP export.
+/// The returned [`otelkit::TelemetryGuard`] should be held for the process
+/// lifetime so that buffered telemetry is flushed on exit.
+pub fn init_otel_tracing(
+    endpoint: &str,
+    debug: bool,
+    json: bool,
+) -> Option<otelkit::TelemetryGuard> {
     let default_level = if debug { "debug" } else { "info" };
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+    let log_level = std::env::var("OTEL_LOG_LEVEL").unwrap_or_else(|_| default_level.to_string());
 
-    if json {
-        let otel_layer = OpenTelemetryLayer::new(provider.tracer("evergreen-shim"));
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(
-                fmt::layer()
-                    .json()
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_file(true)
-                    .with_line_number(true),
-            )
-            .with(otel_layer)
-            .init();
+    let log_format = if json {
+        otelkit::LogFormat::Json
     } else {
-        let otel_layer = OpenTelemetryLayer::new(provider.tracer("evergreen-shim"));
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(fmt::layer())
-            .with(otel_layer)
-            .init();
-    }
+        otelkit::LogFormat::Text
+    };
 
-    provider
+    let config = otelkit::TelemetryConfig::default()
+        .service_name("evergreen-shim")
+        .service_version(env!("CARGO_PKG_VERSION"))
+        .log_level(log_level)
+        .log_format(log_format)
+        .otlp_endpoint(endpoint);
+
+    match otelkit::init(config) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            tracing::warn!(error = ?e, "Failed to initialise otelkit, falling back to fmt-only");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opentelemetry::trace::{Span, Tracer, TracerProvider as _};
+    use opentelemetry::trace::{Span, Status, Tracer, TracerProvider};
     use opentelemetry::KeyValue;
-    use opentelemetry_sdk::trace::TracerProvider as SdkTracerProvider;
-    use opentelemetry_sdk::Resource;
+    use opentelemetry_sdk::resource::Resource;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+
+    fn test_resource(name: &'static str) -> Resource {
+        Resource::builder()
+            .with_attributes(vec![KeyValue::new("service.name", name)])
+            .build()
+    }
 
     #[test]
     fn provider_type_is_send_sync() {
@@ -74,18 +55,26 @@ mod tests {
 
     #[test]
     fn resource_detection_service_name() {
-        let resource = Resource::new(vec![KeyValue::new("service.name", "test-shim")]);
-        let attrs: Vec<KeyValue> = resource.iter().map(|(k, v)| KeyValue::new(k, v)).collect();
+        let resource = test_resource("test-shim");
+        let attrs: Vec<KeyValue> = resource
+            .iter()
+            .map(|(k, v)| KeyValue::new(k.clone(), v.clone()))
+            .collect();
         assert!(attrs.iter().any(|a| a.key.as_str() == "service.name"));
     }
 
     #[test]
     fn resource_detection_service_version() {
-        let resource = Resource::new(vec![
-            KeyValue::new("service.name", "test-shim"),
-            KeyValue::new("service.version", "1.2.3"),
-        ]);
-        let attrs: Vec<KeyValue> = resource.iter().map(|(k, v)| KeyValue::new(k, v)).collect();
+        let resource = Resource::builder()
+            .with_attributes(vec![
+                KeyValue::new("service.name", "test-shim"),
+                KeyValue::new("service.version", "1.2.3"),
+            ])
+            .build();
+        let attrs: Vec<KeyValue> = resource
+            .iter()
+            .map(|(k, v)| KeyValue::new(k.clone(), v.clone()))
+            .collect();
         let version_attr = attrs.iter().find(|a| a.key.as_str() == "service.version");
         assert!(version_attr.is_some());
     }
@@ -93,10 +82,7 @@ mod tests {
     #[test]
     fn trace_span_creation_and_attributes() {
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "span-test",
-            )]))
+            .with_resource(test_resource("span-test"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
@@ -113,19 +99,14 @@ mod tests {
     #[test]
     fn trace_error_recording_in_span() {
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "error-test",
-            )]))
+            .with_resource(test_resource("error-test"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
         let mut span = tracer.start("error-span");
-        span.record_error(opentelemetry::error::Error::from(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "simulated failure",
-        )));
-        span.set_status(opentelemetry::trace::Status::error("simulated failure"));
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "simulated failure");
+        span.record_error(&io_err);
+        span.set_status(Status::error("simulated failure"));
         span.end();
 
         let _ = provider.shutdown();
@@ -136,20 +117,17 @@ mod tests {
         use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId};
 
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "link-test",
-            )]))
+            .with_resource(test_resource("link-test"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
-        let parent_span = tracer.start("parent");
+        let mut parent_span = tracer.start("parent");
         let parent_ctx = parent_span.span_context().clone();
 
         // Create a linked span context
         let linked_ctx = SpanContext::new(
-            TraceId::from_u128(42),
-            SpanId::from_u64(7),
+            TraceId::from(42u128),
+            SpanId::from(7u64),
             TraceFlags::SAMPLED,
             true,
             Default::default(),
@@ -172,23 +150,20 @@ mod tests {
 
     #[test]
     fn trace_context_propagation() {
-        use opentelemetry::trace::TraceId;
+        use opentelemetry::trace::{TraceContextExt, TraceId};
 
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "context-propagation",
-            )]))
+            .with_resource(test_resource("context-propagation"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
         // Start a parent span and extract its context
-        let parent_span = tracer.start("parent-span");
+        let mut parent_span = tracer.start("parent-span");
         let parent_span_ctx = parent_span.span_context().clone();
 
         // Create child span using parent context
         let parent_context =
-            opentelemetry::Context::current().with_remote_span_context(parent_span_ctx);
+            opentelemetry::Context::current().with_remote_span_context(parent_span_ctx.clone());
         let mut child_span = tracer.start_with_context("child-span", &parent_context);
         child_span.set_attribute(KeyValue::new(
             "parent.trace_id",
@@ -204,13 +179,8 @@ mod tests {
 
     #[test]
     fn trace_span_events() {
-        use opentelemetry::trace::StatusCode;
-
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "event-test",
-            )]))
+            .with_resource(test_resource("event-test"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
@@ -223,7 +193,7 @@ mod tests {
                 KeyValue::new("delay_ms", 100i64),
             ],
         );
-        span.set_status(StatusCode::Ok);
+        span.set_status(Status::Ok);
         span.end();
 
         let _ = provider.shutdown();
@@ -232,10 +202,10 @@ mod tests {
     #[test]
     fn trace_multiple_providers_independent() {
         let provider1 = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new("service.name", "shim-1")]))
+            .with_resource(test_resource("shim-1"))
             .build();
         let provider2 = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new("service.name", "shim-2")]))
+            .with_resource(test_resource("shim-2"))
             .build();
 
         let tracer1 = provider1.tracer("tracer-1");
@@ -254,10 +224,7 @@ mod tests {
     #[test]
     fn trace_span_with_nested_operations() {
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "nested-test",
-            )]))
+            .with_resource(test_resource("nested-test"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
@@ -283,10 +250,7 @@ mod tests {
     fn batch_processor_builder() {
         // Verify that building a provider with batch exporter works
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "batch-test",
-            )]))
+            .with_resource(test_resource("batch-test"))
             .build();
 
         let tracer = provider.tracer("batch-test-tracer");
@@ -301,10 +265,7 @@ mod tests {
     #[test]
     fn trace_span_with_special_characters() {
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "special-chars",
-            )]))
+            .with_resource(test_resource("special-chars"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
@@ -319,10 +280,7 @@ mod tests {
     #[test]
     fn trace_multiple_spans_same_tracer() {
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "multi-span",
-            )]))
+            .with_resource(test_resource("multi-span"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
@@ -337,20 +295,15 @@ mod tests {
 
     #[test]
     fn trace_span_status_codes() {
-        use opentelemetry::trace::StatusCode;
-
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "status-test",
-            )]))
+            .with_resource(test_resource("status-test"))
             .build();
         let tracer = provider.tracer("test-tracer");
 
         let mut span = tracer.start("status-span");
-        span.set_status(StatusCode::Ok);
-        span.set_status(StatusCode::Error);
-        span.set_status(StatusCode::Unset);
+        span.set_status(Status::Ok);
+        span.set_status(Status::error("test error"));
+        span.set_status(Status::Unset);
         span.end();
 
         let _ = provider.shutdown();
@@ -359,10 +312,7 @@ mod tests {
     #[test]
     fn trace_span_attribute_types() {
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "attr-types",
-            )]))
+            .with_resource(test_resource("attr-types"))
             .build();
         let tracer = provider.tracer("test-tracer");
 

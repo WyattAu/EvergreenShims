@@ -80,13 +80,14 @@ async fn main() -> Result<()> {
 
     // Initialize logging — OpenTelemetry takes precedence when an endpoint is given.
     #[cfg(feature = "otel")]
-    {
+    let _otel_guard = {
         if let Some(ref endpoint) = args.otel_endpoint {
-            shim_core::otel::init_otel_tracing(endpoint, args.debug, args.json);
+            shim_core::otel::init_otel_tracing(endpoint, args.debug, args.json)
         } else {
             let _ = shim_core::structured_logging::init_structured_logging(args.debug, args.json);
+            None
         }
-    }
+    };
     #[cfg(not(feature = "otel"))]
     {
         if args.otel_endpoint.is_some() {
@@ -159,7 +160,11 @@ struct CapabilityOutcome {
 /// Returns true if the fd is readable (child exited), false on timeout.
 async fn pidfd_readable(fd: std::os::fd::RawFd) -> bool {
     tokio::task::spawn_blocking(move || {
-        let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         let ret = unsafe { libc::poll(&mut pfd, 1, 500) };
         ret > 0 && (pfd.revents & libc::POLLIN) != 0
     })
@@ -488,7 +493,8 @@ async fn run_shim(config_path: PathBuf, command: Option<String>, args: Vec<Strin
             if elapsed < grace_secs && !grace_retried {
                 tracing::warn!(
                     "Child exited during startup grace ({}s < {}s), restarting...",
-                    elapsed, grace_secs
+                    elapsed,
+                    grace_secs
                 );
                 grace_retried = true;
                 child.stop().await.ok();

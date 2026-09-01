@@ -10,7 +10,7 @@ description = "Core types and traits for EvergreenShims"
 default = ["http"]
 http = ["dep:reqwest"]
 redis-bus = ["dep:redis"]
-otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+otel = ["dep:otelkit"]
 wasm = []
 wasm-runtime = ["wasm", "dep:wasmtime"]
 
@@ -36,10 +36,7 @@ notify = "7"
 reqwest = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true }
-opentelemetry = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-tracing-opentelemetry = { workspace = true, optional = true }
+otelkit = { workspace = true, optional = true }
 wasmtime = { version = "28", optional = true }
 
 [dev-dependencies]
@@ -48,3 +45,5 @@ pretty_assertions.workspace = true
 temp-env.workspace = true
 serial_test.workspace = true
 wat = "1"
+opentelemetry = "0.28"
+opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }

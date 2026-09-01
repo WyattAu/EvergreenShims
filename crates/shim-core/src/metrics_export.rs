@@ -16,7 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use prometheus::{
-    Encoder, Gauge, GaugeVec, IntCounter, IntCounterVec, Opts, Registry, TextEncoder,
+    Encoder, Gauge, IntCounter, IntCounterVec, Opts, Registry, TextEncoder,
 };
 use tracing::info;
 
@@ -176,7 +176,7 @@ impl MetricsExporter {
         let mut metrics = self.custom_metrics.write().unwrap();
         metrics
             .entry(shim_name.to_string())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(metric_name.to_string(), value);
     }
 

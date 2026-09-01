@@ -378,7 +378,7 @@ impl AlertManager {
         payload: &WebhookPayload,
     ) -> crate::error::Result<()> {
         let body =
-            serde_json::to_vec(payload).map_err(|e| crate::error::Error::Serialization(e))?;
+            serde_json::to_vec(payload).map_err(crate::error::Error::Serialization)?;
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -689,7 +689,7 @@ mod tests {
             "{}:{}:{}",
             alert1.source, alert1.event_type, alert1.severity
         );
-        let key2 = format!(
+        let _key2 = format!(
             "{}:{}:{}",
             alert2.source, alert2.event_type, alert2.severity
         );
