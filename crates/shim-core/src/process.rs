@@ -271,10 +271,7 @@ impl ChildProcess {
                     for line in content.lines() {
                         if line.starts_with("State:") {
                             if line.contains("(zombie)") {
-                                tracing::info!(
-                                    "Child process PID {} is zombie (exited)",
-                                    pid
-                                );
+                                tracing::info!("Child process PID {} is zombie (exited)", pid);
                                 return false;
                             }
                             return true;
@@ -283,10 +280,7 @@ impl ChildProcess {
                     true
                 }
                 Err(_) => {
-                    tracing::info!(
-                        "Child process PID {} status file gone (exited)",
-                        pid
-                    );
+                    tracing::info!("Child process PID {} status file gone (exited)", pid);
                     false
                 }
             }
@@ -327,7 +321,9 @@ impl ChildProcess {
     /// Close the pidfd if open. Called during shutdown.
     pub fn close_pidfd(&mut self) {
         if let Some(fd) = self.pidfd.take() {
-            unsafe { libc::close(fd); }
+            unsafe {
+                libc::close(fd);
+            }
         }
     }
 }
