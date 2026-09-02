@@ -24,14 +24,40 @@ use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::watch;
 
+use loop_retry::{with_backoff, IsRetryable, RetryConfig};
+
 /// PostgreSQL WAL segment size: 16 MB.
 const WAL_SEGMENT_SIZE: u64 = 0x1000000;
 
-/// Maximum publish retries with exponential backoff.
-const MAX_RETRIES: u32 = 3;
-
 /// Ring buffer capacity for published events (for debugging).
 const DEFAULT_RING_CAPACITY: usize = 1000;
+
+/// Error type for webhook delivery with retry classification.
+#[derive(Debug)]
+enum WebhookError {
+    /// Non-retryable HTTP error (4xx except 429).
+    Http(u16),
+    /// Retryable HTTP error (5xx, 429).
+    HttpRetryable(u16),
+    /// Network/transport error.
+    Transport(String),
+}
+
+impl std::fmt::Display for WebhookError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http(status) => write!(f, "HTTP {}", status),
+            Self::HttpRetryable(status) => write!(f, "HTTP {} (retryable)", status),
+            Self::Transport(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl IsRetryable for WebhookError {
+    fn is_retryable(&self) -> bool {
+        matches!(self, Self::HttpRetryable(_) | Self::Transport(_))
+    }
+}
 
 /// CDC event operation types.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -292,6 +318,14 @@ impl CdcShim {
             }
         };
 
+        let config = RetryConfig {
+            max_retries: 2,
+            initial_delay: std::time::Duration::from_secs(1),
+            max_delay: std::time::Duration::from_secs(4),
+            backoff_multiplier: 2.0,
+            jitter: false,
+        };
+
         let mut published = 0u64;
         for event in events {
             let payload = match self.serialize_event(event) {
@@ -306,57 +340,57 @@ impl CdcShim {
                 }
             };
 
-            let mut last_err = None;
-            for attempt in 0..MAX_RETRIES {
-                match client
-                    .post(&url)
-                    .header("Content-Type", "application/json")
-                    .body(payload.clone())
-                    .send()
-                    .await
-                {
-                    Ok(resp) => {
-                        if resp.status().is_success() {
-                            published += 1;
-                            last_err = None;
-                            break;
-                        } else {
-                            let status = resp.status();
-                            let err_msg = format!("HTTP {}", status);
+            let event_id = event.event_id.clone();
+            let result = with_backoff(&config, || {
+                let payload = payload.clone();
+                let url = url.clone();
+                let client = client.clone();
+                let event_id = event_id.clone();
+                async move {
+                    let resp = client
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .body(payload)
+                        .send()
+                        .await
+                        .map_err(|e| {
                             tracing::warn!(
-                                event_id = %event.event_id,
-                                attempt = attempt + 1,
-                                status = %status,
+                                event_id = %event_id,
+                                error = %e,
                                 "Webhook delivery failed"
                             );
-                            last_err = Some(err_msg);
-                        }
+                            WebhookError::Transport(e.to_string())
+                        })?;
+
+                    if resp.status().is_success() {
+                        return Ok(());
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            event_id = %event.event_id,
-                            attempt = attempt + 1,
-                            error = %e,
-                            "Webhook delivery failed"
-                        );
-                        last_err = Some(e.to_string());
+
+                    let status = resp.status().as_u16();
+                    tracing::warn!(
+                        event_id = %event_id,
+                        status = %status,
+                        "Webhook delivery failed"
+                    );
+
+                    if status == 429 || status >= 500 {
+                        Err(WebhookError::HttpRetryable(status))
+                    } else {
+                        Err(WebhookError::Http(status))
                     }
                 }
+            })
+            .await;
 
-                // Exponential backoff: 1s, 2s, 4s
-                if attempt < MAX_RETRIES - 1 {
-                    let delay = std::time::Duration::from_secs(1u64 << attempt);
-                    tokio::time::sleep(delay).await;
+            match result {
+                Ok(()) => published += 1,
+                Err(e) => {
+                    tracing::error!(
+                        event_id = %event.event_id,
+                        "Webhook delivery failed after retries: {}",
+                        e
+                    );
                 }
-            }
-
-            if let Some(err) = last_err {
-                tracing::error!(
-                    event_id = %event.event_id,
-                    "Webhook delivery failed after {} attempts: {}",
-                    MAX_RETRIES,
-                    err
-                );
             }
         }
 

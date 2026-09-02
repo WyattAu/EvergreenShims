@@ -8,6 +8,7 @@ description = "MongoDB health checks, backup, and CDC"
 
 [dependencies]
 shim-core = { path = "../shim-core" }
+loop-retry.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 async-trait.workspace = true

@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
 use tokio::sync::watch;
 
+use loop_retry::{with_backoff, IsRetryable, RetryConfig};
+
 /// Elasticsearch cluster health.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EsHealth {
@@ -49,46 +51,69 @@ impl ElasticsearchShim {
     pub async fn check_health(&mut self) -> anyhow::Result<EsHealth> {
         self.health_checks += 1;
 
-        let max_retries = 3;
-        let mut last_error = None;
-
-        for attempt in 0..max_retries {
-            if let Ok(client) = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-            {
-                let url = format!("{}/_cluster/health", self.url);
-                if let Ok(resp) = client.get(&url).send().await {
-                    if let Ok(val) = resp.json::<serde_json::Value>().await {
-                        return Ok(EsHealth {
-                            status: val["status"].as_str().unwrap_or("unknown").to_string(),
-                            cluster_name: val["cluster_name"]
-                                .as_str()
-                                .unwrap_or("unknown")
-                                .to_string(),
-                            node_count: val["number_of_nodes"].as_u64().unwrap_or(0) as u32,
-                            active_shards: val["active_shards"].as_u64().unwrap_or(0) as u32,
-                            relocating_shards: val["relocating_shards"].as_u64().unwrap_or(0)
-                                as u32,
-                            initializing_shards: val["initializing_shards"].as_u64().unwrap_or(0)
-                                as u32,
-                            unassigned_shards: val["unassigned_shards"].as_u64().unwrap_or(0)
-                                as u32,
-                        });
-                    }
-                }
+        #[derive(Debug)]
+        struct AnyError(anyhow::Error);
+        impl std::fmt::Display for AnyError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
             }
-
-            last_error = Some(anyhow::anyhow!(
-                "ES health check failed on attempt {}",
-                attempt + 1
-            ));
-            if attempt < max_retries - 1 {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        impl IsRetryable for AnyError {
+            fn is_retryable(&self) -> bool {
+                true
+            }
+        }
+        impl From<anyhow::Error> for AnyError {
+            fn from(e: anyhow::Error) -> Self {
+                Self(e)
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Health check failed after retries")))
+        let config = RetryConfig {
+            max_retries: 3,
+            initial_delay: std::time::Duration::from_secs(1),
+            max_delay: std::time::Duration::from_secs(4),
+            backoff_multiplier: 2.0,
+            jitter: false,
+        };
+
+        let url = format!("{}/_cluster/health", self.url);
+
+        with_backoff(&config, || {
+            let url = url.clone();
+            async move {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                    .map_err(|e| AnyError(anyhow::Error::from(e)))?;
+
+                let resp = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| AnyError(anyhow::Error::from(e)))?;
+
+                let val: serde_json::Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| AnyError(anyhow::Error::from(e)))?;
+
+                Ok::<EsHealth, AnyError>(EsHealth {
+                    status: val["status"].as_str().unwrap_or("unknown").to_string(),
+                    cluster_name: val["cluster_name"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    node_count: val["number_of_nodes"].as_u64().unwrap_or(0) as u32,
+                    active_shards: val["active_shards"].as_u64().unwrap_or(0) as u32,
+                    relocating_shards: val["relocating_shards"].as_u64().unwrap_or(0) as u32,
+                    initializing_shards: val["initializing_shards"].as_u64().unwrap_or(0) as u32,
+                    unassigned_shards: val["unassigned_shards"].as_u64().unwrap_or(0) as u32,
+                })
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!(e.into_inner().0))
     }
 
     /// Create a snapshot repository.

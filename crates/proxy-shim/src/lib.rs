@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use loop_retry::RetryConfig;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use shim_core::{Capability, Config, Metric, Result};
@@ -447,10 +448,14 @@ impl ProxyShim {
             return 0;
         }
         let state = self.state.read();
-        let base = state.retry_base_ms;
-        let delay = base * 2u64.pow(attempt - 1);
-        let max_delay = base * 2u64.pow(state.retry_attempts);
-        delay.min(max_delay)
+        let config = RetryConfig {
+            initial_delay: Duration::from_millis(state.retry_base_ms),
+            max_delay: Duration::from_millis(state.retry_base_ms * 2u64.pow(state.retry_attempts)),
+            backoff_multiplier: 2.0,
+            jitter: false,
+            ..Default::default()
+        };
+        config.delay_for_attempt(attempt - 1).as_millis() as u64
     }
 
     /// Add a route rule.

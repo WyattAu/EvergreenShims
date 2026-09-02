@@ -8,6 +8,7 @@ description = "Elasticsearch health checks and snapshot management"
 
 [dependencies]
 shim-core = { path = "../shim-core" }
+loop-retry.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
