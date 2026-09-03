@@ -17,13 +17,29 @@
 //! ARCHIVAL_COLD_DAYS       Days in cold tier before purge (0 = disabled)
 //! ARCHIVAL_RETENTION_DAYS  Global retention days (default: 365)
 //! ARCHIVAL_ARCHIVE_PATH    Local archive directory (default: /var/lib/archival)
+//!
+//! ### S3 (ARCHIVAL_STORAGE=s3)
+//!
+//! ```text
+//! ARCHIVAL_S3_REGION            Region (default: us-east-1)
+//! ARCHIVAL_S3_ENDPOINT          Custom endpoint for MinIO/LocalStack/R2
+//! ARCHIVAL_S3_PREFIX            Key prefix (default: archives)
+//! ARCHIVAL_S3_FORCE_PATH_STYLE  true/1 for path-style addressing (default: false)
+//! ARCHIVAL_S3_SSE               true/1 for server-side encryption (default: true)
+//! ARCHIVAL_S3_ACCESS_KEY        Static access key (optional)
+//! ARCHIVAL_S3_SECRET_KEY        Static secret key (optional)
+//! ```
+//!
+//! When `ARCHIVAL_S3_ACCESS_KEY`/`ARCHIVAL_S3_SECRET_KEY` are unset,
+//! credentials come from the standard AWS chain (`AWS_ACCESS_KEY_ID`,
+//! `AWS_PROFILE`, IMDS, container credentials).
 //! ```
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use blobkit::local::LocalStore;
-use blobkit::s3::{S3Config, S3Store};
+use blobkit::s3::{CredentialsMode, S3Config, S3Store};
 use blobkit::store::BlobStore;
 use blobkit::{BucketName, ObjectKey};
 use bytes::Bytes;
@@ -355,30 +371,50 @@ impl ArchivalShim {
         Ok(store)
     }
 
-    /// Build an S3 blob store for production.
+    /// Build an S3 blob store for production via `blobkit::S3Store`.
     ///
-    /// NOTE: `blobkit::S3Store` is a stub in v0.1 and returns
-    /// `BlobError::Unsupported` for all operations. The real S3 implementation
-    /// (wiring `aws-sdk-s3` behind the `s3` feature, including raw S3 client
-    /// replacement, endpoint handling, and `force_path_style`) will be added in
-    /// blobkit v0.2. This keeps the production path typed via `BucketName` while
-    /// allowing compilation today.
+    /// Configuration sources:
+    /// - bucket/region/prefix/path-style/SSE: struct fields (from `ARCHIVAL_*` / `ARCHIVAL_S3_*` env vars)
+    /// - endpoint: `ARCHIVAL_S3_ENDPOINT` (parsed to a `Url` for MinIO/LocalStack/R2)
+    /// - credentials: `ARCHIVAL_S3_ACCESS_KEY` + `ARCHIVAL_S3_SECRET_KEY` when both
+    ///   are set (static mode); otherwise the standard AWS credential chain
+    ///   (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`, IMDS, container credentials)
     #[allow(dead_code)]
-    fn build_s3_store(&self) -> anyhow::Result<S3Store> {
-        // Typed bucket validation via blobkit::BucketName (replaces hand-rolled stringly checks).
-        // Migration uses BucketName::try_from / BucketName::new and ObjectKey::try_from.
+    async fn build_s3_store(&self) -> anyhow::Result<S3Store> {
         let bucket = BucketName::new(self.bucket.clone())
             .map_err(|e| anyhow::anyhow!("invalid bucket '{}': {}", self.bucket, e))?;
-        let cfg = S3Config::new(bucket, self.s3_region.clone());
-        // Custom endpoint (MinIO/LocalStack) will be supported via S3Config::with_endpoint in v0.2
-        Ok(S3Store::new(cfg))
+        let mut cfg =
+            S3Config::new(bucket, self.s3_region.clone()).with_path_style(self.s3_force_path_style);
+
+        if let Some(endpoint) = &self.s3_endpoint {
+            let url = url::Url::parse(endpoint).map_err(|e| {
+                anyhow::anyhow!("invalid ARCHIVAL_S3_ENDPOINT '{}': {}", endpoint, e)
+            })?;
+            cfg = cfg.with_endpoint(url);
+        }
+
+        if let (Ok(access_key), Ok(secret_key)) = (
+            std::env::var("ARCHIVAL_S3_ACCESS_KEY"),
+            std::env::var("ARCHIVAL_S3_SECRET_KEY"),
+        ) {
+            if !access_key.is_empty() && !secret_key.is_empty() {
+                cfg = cfg.with_credentials(CredentialsMode::Static {
+                    access_key,
+                    secret_key,
+                });
+            }
+        }
+
+        S3Store::new(cfg)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to build S3 client: {}", e))
     }
 
     /// Upload data to blob storage via `BlobStore::put`.
     ///
     /// Key format: `{s3_prefix}/{table}/{record_id}.dat` validated via
     /// `ObjectKey::try_from(bucket_string)?` / `ObjectKey::try_from(key)?`.
-    /// For S3 production, uses `blobkit::S3Store` (stub returns Unsupported until blobkit v0.2).
+    /// Uses the real `blobkit::S3Store` (see `build_s3_store` for configuration).
     /// Returns the S3 URI on success.
     #[allow(dead_code)]
     async fn upload_to_s3(
@@ -395,14 +431,15 @@ impl ArchivalShim {
             .map_err(|e| anyhow::anyhow!("invalid object key '{}': {}", raw_key, e))?;
         let bytes = Bytes::copy_from_slice(data);
 
-        // Production path: blobkit::S3Store (stub in v0.1 — will be wired in blobkit v0.2)
-        // This replaces the previous raw S3 client construction flow.
-        let cfg = S3Config::new(bucket.clone(), self.s3_region.clone());
-        let store = S3Store::new(cfg);
-        store
-            .put(key.clone(), bytes)
-            .await
-            .map_err(|e| anyhow::anyhow!("blob upload failed (blobkit S3Store stub in v0.1, will be wired in v0.2): {}/{}: {}", bucket.as_str(), key.as_str(), e))?;
+        let store = self.build_s3_store().await?;
+        store.put(key.clone(), bytes).await.map_err(|e| {
+            anyhow::anyhow!(
+                "blob upload failed: {}/{}: {}",
+                bucket.as_str(),
+                key.as_str(),
+                e
+            )
+        })?;
 
         let s3_uri = format!("s3://{}/{}", bucket.as_str(), key.as_str());
         tracing::info!("blob archive upload: {} bytes -> {}", data.len(), s3_uri);
@@ -419,11 +456,10 @@ impl ArchivalShim {
         let key = ObjectKey::try_from(raw_key.clone())
             .map_err(|e| anyhow::anyhow!("invalid object key '{}': {}", raw_key, e))?;
 
-        let cfg = S3Config::new(bucket.clone(), self.s3_region.clone());
-        let store = S3Store::new(cfg);
+        let store = self.build_s3_store().await?;
         store.delete(&key).await.map_err(|e| {
             anyhow::anyhow!(
-                "blob delete failed (blobkit stub): {}/{}: {}",
+                "blob delete failed: {}/{}: {}",
                 bucket.as_str(),
                 key.as_str(),
                 e
@@ -449,15 +485,9 @@ impl ArchivalShim {
         let key = ObjectKey::try_from(raw_key.clone())
             .map_err(|e| anyhow::anyhow!("invalid object key '{}': {}", raw_key, e))?;
 
-        let cfg = S3Config::new(bucket.clone(), self.s3_region.clone());
-        let store = S3Store::new(cfg);
+        let store = self.build_s3_store().await?;
         let data = store.get(&key).await.map_err(|e| {
-            anyhow::anyhow!(
-                "S3 get failed (blobkit stub): {}/{}: {}",
-                bucket.as_str(),
-                key.as_str(),
-                e
-            )
+            anyhow::anyhow!("S3 get failed: {}/{}: {}", bucket.as_str(), key.as_str(), e)
         })?;
         Ok(data)
     }
