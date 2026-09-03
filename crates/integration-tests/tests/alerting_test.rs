@@ -6,7 +6,8 @@
 
 use std::collections::HashMap;
 
-use shim_core::alerting::{Alert, AlertManager, AlertManagerWebhook, AlertSeverity, Severity};
+use shim_core::alerting::{Alert, AlertManager, AlertManagerWebhook, AlertSeverity};
+use shim_core::Severity;
 use shim_core::ShimBus;
 
 #[test]
