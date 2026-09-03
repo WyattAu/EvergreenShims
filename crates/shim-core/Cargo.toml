@@ -32,6 +32,7 @@ libc = "0.2"
 parking_lot.workspace = true
 axum.workspace = true
 cron.workspace = true
+validkit = { path = "../../../validkit", features = ["url"] }
 notify = "7"
 reqwest = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }

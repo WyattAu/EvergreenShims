@@ -662,11 +662,11 @@ impl Config {
 
         // --- vault ---
         if let Some(ref vault) = self.vault {
-            if !is_valid_url(&vault.addr) {
+            if validkit::HttpsUrl::try_from(vault.addr.as_str()).is_err() {
                 errors.push(ConfigValidationError {
                     field: "vault.addr".into(),
                     message: format!(
-                        "'{}' is not a valid URL (must start with http:// or https://)",
+                        "'{}' is not a valid URL (must be https:// without credentials)",
                         vault.addr
                     ),
                 });
@@ -687,7 +687,9 @@ impl Config {
                     message: "must be greater than 0".into(),
                 });
             }
-            if !backup.schedule.is_empty() && !is_valid_cron(&backup.schedule) {
+            if !backup.schedule.is_empty()
+                && validkit::CronExpr::try_from(backup.schedule.as_str()).is_err()
+            {
                 errors.push(ConfigValidationError {
                     field: "backup.schedule".into(),
                     message: format!("'{}' is not a valid cron expression", backup.schedule),
@@ -833,33 +835,26 @@ impl Config {
             }
         }
 
-        // --- vault.addr: strict URL scheme validation ---
+        // --- vault.addr: strict URL scheme validation (migrated to validkit) ---
         if let Some(ref vault) = self.vault {
-            if !vault.addr.starts_with("http://") && !vault.addr.starts_with("https://") {
+            if let Err(e) = validkit::HttpsUrl::try_from(vault.addr.as_str()) {
                 errors.push(ConfigValidationError {
                     field: "vault.addr".into(),
-                    message: format!(
-                        "URL scheme must be http:// or https://, got '{}'",
-                        &vault.addr[..vault.addr.find("://").unwrap_or(vault.addr.len())]
-                    ),
+                    message: format!("invalid vault URL: {}", e),
                 });
             }
         }
 
-        // --- failover: webhook URL scheme validation ---
+        // --- failover: webhook URL scheme validation (migrated to validkit) ---
         if let Some(ref failover) = self.failover {
             if let Some(ref webhook) = failover.webhook {
-                if !webhook.is_empty()
-                    && !webhook.starts_with("http://")
-                    && !webhook.starts_with("https://")
-                {
-                    errors.push(ConfigValidationError {
-                        field: "failover.webhook".into(),
-                        message: format!(
-                            "webhook URL scheme must be http:// or https://, got '{}'",
-                            webhook
-                        ),
-                    });
+                if !webhook.is_empty() {
+                    if let Err(e) = validkit::HttpsUrl::try_from(webhook.as_str()) {
+                        errors.push(ConfigValidationError {
+                            field: "failover.webhook".into(),
+                            message: format!("invalid webhook URL: {}", e),
+                        });
+                    }
                 }
             }
         }
@@ -966,13 +961,18 @@ impl Config {
     }
 }
 
+#[allow(dead_code)]
 fn is_valid_url(s: &str) -> bool {
-    s.starts_with("http://") || s.starts_with("https://")
+    // Migrated to validkit: HttpsUrl enforces https-only, no credentials, host required.
+    // Kept as bool wrapper for backwards compat; callers should prefer HttpsUrl::try_from directly.
+    validkit::HttpsUrl::try_from(s).is_ok()
 }
 
+#[allow(dead_code)]
 fn is_valid_cron(expr: &str) -> bool {
-    let count = expr.split_whitespace().count();
-    count == 5 || count == 6 || count == 7
+    // Migrated to validkit: CronExpr validates 5-field cron with regex/syntax checks.
+    // ValidError is mapped to bool for backwards compat.
+    validkit::CronExpr::try_from(expr).is_ok()
 }
 
 #[cfg(test)]

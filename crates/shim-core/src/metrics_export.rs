@@ -15,9 +15,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use prometheus::{
-    Encoder, Gauge, IntCounter, IntCounterVec, Opts, Registry, TextEncoder,
-};
+use prometheus::{Encoder, Gauge, IntCounter, IntCounterVec, Opts, Registry, TextEncoder};
 use tracing::info;
 
 use crate::error::Result;

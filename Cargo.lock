@@ -5608,6 +5608,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "validkit",
  "wasmtime",
  "wat",
 ]
@@ -6746,6 +6747,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]
@@ -6782,6 +6784,16 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "validkit"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]

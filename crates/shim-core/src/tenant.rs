@@ -20,12 +20,12 @@ use crate::Metric;
 
 /// Strict tenant-ID pattern: alphanumeric and hyphens, 3-64 characters.
 /// Prevents injection of special characters, path traversals, etc.
+/// Migrated to validkit::TenantIdSlug (3-63 lowercase alphanumeric+hyphen, no leading/trailing hyphen, no .. or .lock).
+#[allow(dead_code)]
 fn is_valid_tenant_id(id: &str) -> bool {
-    let len = id.len();
-    if !(3..=64).contains(&len) {
-        return false;
-    }
-    id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    // Backwards compat wrapper: validkit returns ValidError on failure, we map to bool.
+    // Note: validkit is stricter (lowercase, 63 max, no leading/trailing hyphen) — tighten vs old.
+    validkit::TenantIdSlug::try_from(id).is_ok()
 }
 
 /// Error returned when a tenant ID fails validation.
@@ -330,7 +330,7 @@ impl TenantIsolator {
         let mut configs = HashMap::new();
         let mut usage = HashMap::new();
         for tenant in &config.tenants {
-            if !is_valid_tenant_id(&tenant.tenant_id) {
+            if validkit::TenantIdSlug::try_from(tenant.tenant_id.as_str()).is_err() {
                 return Err(InvalidTenantId(tenant.tenant_id.clone()));
             }
             configs.insert(tenant.tenant_id.clone(), tenant.clone());
@@ -366,19 +366,18 @@ impl TenantIsolator {
     }
 
     /// Validate a tenant ID against the strict pattern.
+    /// Migrated to validkit: TenantIdSlug::try_from with ValidError -> InvalidTenantId mapping.
     pub fn validate_tenant_id(id: &str) -> Result<(), InvalidTenantId> {
-        if is_valid_tenant_id(id) {
-            Ok(())
-        } else {
-            Err(InvalidTenantId(id.to_string()))
-        }
+        validkit::TenantIdSlug::try_from(id)
+            .map(|_| ())
+            .map_err(|_| InvalidTenantId(id.to_string()))
     }
 
     /// Register a tenant at runtime.
     ///
     /// Returns `Err` if the tenant ID is invalid.
     pub fn register_tenant(&mut self, config: TenantConfig) -> Result<(), InvalidTenantId> {
-        if !is_valid_tenant_id(&config.tenant_id) {
+        if validkit::TenantIdSlug::try_from(config.tenant_id.as_str()).is_err() {
             return Err(InvalidTenantId(config.tenant_id.clone()));
         }
         let tenant_id = config.tenant_id.clone();
