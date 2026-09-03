@@ -1006,8 +1006,9 @@ mod tests {
         assert!(is_valid_tenant_id("abc"));
         assert!(is_valid_tenant_id("tenant-1"));
         assert!(is_valid_tenant_id("my-tenant-abc-123"));
-        assert!(is_valid_tenant_id("ABC-123"));
-        assert!(is_valid_tenant_id("a".repeat(64).as_str()));
+        // validkit TenantIdSlug requires lowercase and allows up to 63 chars.
+        assert!(is_valid_tenant_id("abc-123"));
+        assert!(is_valid_tenant_id("a".repeat(63).as_str()));
     }
 
     #[test]

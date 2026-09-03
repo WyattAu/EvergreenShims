@@ -687,13 +687,18 @@ impl Config {
                     message: "must be greater than 0".into(),
                 });
             }
-            if !backup.schedule.is_empty()
-                && validkit::CronExpr::try_from(backup.schedule.as_str()).is_err()
-            {
-                errors.push(ConfigValidationError {
-                    field: "backup.schedule".into(),
-                    message: format!("'{}' is not a valid cron expression", backup.schedule),
-                });
+            // --- backup.schedule: validate cron is actually parseable ---
+            // `cron::Schedule` (6/7-field, seconds-precision) is the same
+            // parser the scheduler uses at runtime. Do not also validate with
+            // `validkit::CronExpr` (strict 5-field): no expression satisfies
+            // both grammars.
+            if !backup.schedule.is_empty() {
+                if let Err(e) = backup.schedule.parse::<cron::Schedule>() {
+                    errors.push(ConfigValidationError {
+                        field: "backup.schedule".into(),
+                        message: format!("cron parse error: {}", e),
+                    });
+                }
             }
         }
 
@@ -810,18 +815,6 @@ impl Config {
                     field: "migration.db_port".into(),
                     message: format!("port {} is out of valid range 1-65535", migration.db_port),
                 });
-            }
-        }
-
-        // --- backup.schedule: validate cron is actually parseable ---
-        if let Some(ref backup) = self.backup {
-            if !backup.schedule.is_empty() {
-                if let Err(e) = backup.schedule.parse::<cron::Schedule>() {
-                    errors.push(ConfigValidationError {
-                        field: "backup.schedule".into(),
-                        message: format!("cron parse error: {}", e),
-                    });
-                }
             }
         }
 
@@ -1757,6 +1750,8 @@ listen = "127.0.0.1:8080"
     fn test_validate_schema_valid_cron_expression() {
         let mut config = Config::default();
         config.backup = Some(BackupConfig {
+            // `cron::Schedule` uses 6/7-field (seconds-precision) expressions —
+            // same format as backup-shim's default BACKUP_SCHEDULE.
             schedule: "0 0 2 * * *".into(),
             storage: "s3".into(),
             retention_days: 7,
