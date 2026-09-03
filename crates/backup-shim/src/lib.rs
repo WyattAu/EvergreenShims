@@ -23,6 +23,23 @@
 //! REDIS_PASSWORD       Redis password
 //! BACKUP_COMPRESSION   Compression: none, gzip, zstd (default: gzip)
 //! BACKUP_TIMEOUT_SECS  Timeout for dump command (default: 3600)
+//!
+//! ### S3 (BACKUP_STORAGE=s3)
+//!
+//! ```text
+//! BACKUP_S3_BUCKET              Target bucket (required for S3 storage)
+//! BACKUP_S3_REGION              Region (default: us-east-1)
+//! BACKUP_S3_ENDPOINT            Custom endpoint for MinIO/LocalStack/R2
+//! BACKUP_S3_PREFIX              Key prefix (default: backups)
+//! BACKUP_S3_FORCE_PATH_STYLE    true/1 for path-style addressing (default: false)
+//! BACKUP_S3_SSE                 true/1 for server-side encryption (default: true)
+//! BACKUP_S3_ACCESS_KEY          Static access key (optional)
+//! BACKUP_S3_SECRET_KEY          Static secret key (optional)
+//! ```
+//!
+//! When `BACKUP_S3_ACCESS_KEY`/`BACKUP_S3_SECRET_KEY` are unset, credentials
+//! come from the standard AWS chain (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`,
+//! IMDS, container credentials).
 //! ```
 
 use std::str::FromStr;
@@ -34,7 +51,7 @@ fn lock_mutex<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 use blobkit::local::LocalStore;
-use blobkit::s3::{S3Config, S3Store};
+use blobkit::s3::{CredentialsMode, S3Config, S3Store};
 use blobkit::store::BlobStore;
 use blobkit::{BucketName, ObjectKey};
 use bytes::Bytes;
@@ -367,6 +384,7 @@ impl BackupShim {
     /// Uses `blobkit::LocalStore` with `max_bytes: 10*1024*1024` to prevent
     /// unbounded uploads from exhausting disk/memory. Replaces ad-hoc
     /// `tokio::fs` writes with the unified `BlobStore` trait.
+    #[allow(dead_code)]
     async fn build_local_store(&self) -> anyhow::Result<LocalStore> {
         let root = PathBuf::from(self.output_dir.clone());
         // Ensure max_bytes guard via LocalStore { max_bytes: 10*1024*1024 }
@@ -376,31 +394,49 @@ impl BackupShim {
         Ok(store)
     }
 
-    /// Build an S3 blob store for production.
+    /// Build an S3 blob store for production via `blobkit::S3Store`.
     ///
-    /// NOTE: `blobkit::S3Store` is a stub in v0.1 and returns
-    /// `BlobError::Unsupported` for all operations. The real S3 implementation
-    /// (wiring `aws-sdk-s3` behind the `s3` feature, including raw S3 client
-    /// replacement, endpoint handling, and `force_path_style`) will be added in
-    /// blobkit v0.2. This keeps the production path typed via `BucketName` while
-    /// allowing compilation today.
-    fn build_s3_store(&self) -> anyhow::Result<S3Store> {
-        // Typed bucket validation via blobkit::BucketName (replaces hand-rolled stringly checks).
-        // Migration uses BucketName::try_from / BucketName::new and ObjectKey::try_from.
+    /// Configuration sources:
+    /// - bucket/region/prefix/path-style/SSE: struct fields (from `BACKUP_S3_*` env vars)
+    /// - endpoint: `BACKUP_S3_ENDPOINT` (parsed to a `Url` for MinIO/LocalStack/R2)
+    /// - credentials: `BACKUP_S3_ACCESS_KEY` + `BACKUP_S3_SECRET_KEY` when both
+    ///   are set (static mode); otherwise the standard AWS credential chain
+    ///   (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`, IMDS, container credentials)
+    async fn build_s3_store(&self) -> anyhow::Result<S3Store> {
         let bucket = BucketName::new(self.s3_bucket.clone())
             .map_err(|e| anyhow::anyhow!("invalid bucket '{}': {}", self.s3_bucket, e))?;
-        let cfg = S3Config::new(bucket, self.s3_region.clone());
-        // Custom endpoint (MinIO/LocalStack) will be supported via S3Config::with_endpoint in v0.2
-        Ok(S3Store::new(cfg))
+        let mut cfg =
+            S3Config::new(bucket, self.s3_region.clone()).with_path_style(self.s3_force_path_style);
+
+        if let Some(endpoint) = &self.s3_endpoint {
+            let url = url::Url::parse(endpoint)
+                .map_err(|e| anyhow::anyhow!("invalid BACKUP_S3_ENDPOINT '{}': {}", endpoint, e))?;
+            cfg = cfg.with_endpoint(url);
+        }
+
+        if let (Ok(access_key), Ok(secret_key)) = (
+            std::env::var("BACKUP_S3_ACCESS_KEY"),
+            std::env::var("BACKUP_S3_SECRET_KEY"),
+        ) {
+            if !access_key.is_empty() && !secret_key.is_empty() {
+                cfg = cfg.with_credentials(CredentialsMode::Static {
+                    access_key,
+                    secret_key,
+                });
+            }
+        }
+
+        S3Store::new(cfg)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to build S3 client: {}", e))
     }
 
     /// Upload a file to blob storage.
     ///
     /// The key is constructed as `{s3_prefix}/{database}/{filename}` and validated
-    /// via `ObjectKey::try_from`. Uses `BlobStore::put` with `Bytes`.
-    /// For S3 production, uses `blobkit::S3Store` (stub returns Unsupported until blobkit v0.2).
+    /// via `ObjectKey::try_from`. Uses `BlobStore::put` with `Bytes` through the
+    /// real `blobkit::S3Store` (see `build_s3_store` for configuration).
     /// For local storage, `build_local_store` provides a `LocalStore` with `max_bytes` guard.
-    /// If `s3_server_side_encryption` is enabled, S3 SSE will be configured in blobkit v0.2 via S3Config.
     /// Returns the full S3 URI on success.
     async fn upload_to_s3(&self, local_path: &str, filename: &str) -> anyhow::Result<String> {
         // Validate bucket and key via typed newtypes (replaces stringly BucketName/ObjectKey)
@@ -424,13 +460,10 @@ impl BackupShim {
         let body_len = data.len() as u64;
         let bytes = Bytes::from(data);
 
-        // Production path: blobkit::S3Store (stub in v0.1 — will be wired in blobkit v0.2)
-        // This replaces the previous raw S3 client construction flow.
-        let cfg = S3Config::new(bucket.clone(), self.s3_region.clone());
-        let store = S3Store::new(cfg);
+        let store = self.build_s3_store().await?;
         store.put(key.clone(), bytes).await.map_err(|e| {
             anyhow::anyhow!(
-                "S3 upload failed (blobkit S3Store stub in v0.1, will be wired in v0.2): {}/{}: {}",
+                "S3 upload failed: {}/{}: {}",
                 bucket.as_str(),
                 key.as_str(),
                 e
@@ -461,11 +494,10 @@ impl BackupShim {
         let key = ObjectKey::try_from(raw_key.clone())
             .map_err(|e| anyhow::anyhow!("invalid object key '{}': {}", raw_key, e))?;
 
-        let cfg = S3Config::new(bucket.clone(), self.s3_region.clone());
-        let store = S3Store::new(cfg);
+        let store = self.build_s3_store().await?;
         store.delete(&key).await.map_err(|e| {
             anyhow::anyhow!(
-                "blob delete failed (blobkit stub): {}/{}: {}",
+                "S3 delete failed: {}/{}: {}",
                 bucket.as_str(),
                 key.as_str(),
                 e

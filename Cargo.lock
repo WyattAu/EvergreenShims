@@ -228,8 +228,6 @@ version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "aws-config",
- "aws-sdk-s3",
  "blobkit",
  "bytes",
  "chrono",
@@ -240,6 +238,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -923,8 +922,6 @@ version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "aws-config",
- "aws-sdk-s3",
  "blobkit",
  "bytes",
  "chrono",
@@ -940,6 +937,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -993,14 +991,19 @@ dependencies = [
 
 [[package]]
 name = "blobkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "bytes",
  "dashmap",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "url",
 ]
 
 [[package]]
