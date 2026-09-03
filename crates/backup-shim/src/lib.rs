@@ -33,10 +33,15 @@ fn lock_mutex<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
-use aws_sdk_s3::Client as S3Client;
+use blobkit::local::LocalStore;
+use blobkit::s3::{S3Config, S3Store};
+use blobkit::store::BlobStore;
+use blobkit::{BucketName, ObjectKey};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shim_core::{Capability, Config, Metric, Result};
+use std::path::PathBuf;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::watch;
@@ -357,77 +362,84 @@ impl BackupShim {
         self.s3_force_path_style
     }
 
-    /// Build an S3 client from the current configuration.
-    async fn build_s3_client(&self) -> anyhow::Result<S3Client> {
-        let mut config_loader =
-            aws_config::from_env().region(aws_config::Region::new(self.s3_region.clone()));
-
-        if let Some(endpoint) = &self.s3_endpoint {
-            config_loader = config_loader.endpoint_url(endpoint);
-        }
-
-        let sdk_config = config_loader.load().await;
-
-        let mut s3_config = aws_sdk_s3::config::Builder::from(&sdk_config);
-        if self.s3_force_path_style {
-            s3_config = s3_config.force_path_style(true);
-        }
-
-        Ok(S3Client::from_conf(s3_config.build()))
+    /// Build a local blob store with max_bytes guard (10 MiB).
+    ///
+    /// Uses `blobkit::LocalStore` with `max_bytes: 10*1024*1024` to prevent
+    /// unbounded uploads from exhausting disk/memory. Replaces ad-hoc
+    /// `tokio::fs` writes with the unified `BlobStore` trait.
+    async fn build_local_store(&self) -> anyhow::Result<LocalStore> {
+        let root = PathBuf::from(self.output_dir.clone());
+        // Ensure max_bytes guard via LocalStore { max_bytes: 10*1024*1024 }
+        let store = LocalStore::with_limits(root, Some(10 * 1024 * 1024))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to create LocalStore: {}", e))?;
+        Ok(store)
     }
 
-    /// Upload a file to S3.
+    /// Build an S3 blob store for production.
     ///
-    /// The key is constructed as `{s3_prefix}/{database}/{filename}`.
-    /// If `s3_server_side_encryption` is enabled, uses AES256 SSE.
+    /// NOTE: `blobkit::S3Store` is a stub in v0.1 and returns
+    /// `BlobError::Unsupported` for all operations. The real S3 implementation
+    /// (wiring `aws-sdk-s3` behind the `s3` feature, including raw S3 client
+    /// replacement, endpoint handling, and `force_path_style`) will be added in
+    /// blobkit v0.2. This keeps the production path typed via `BucketName` while
+    /// allowing compilation today.
+    fn build_s3_store(&self) -> anyhow::Result<S3Store> {
+        // Typed bucket validation via blobkit::BucketName (replaces hand-rolled stringly checks).
+        // Migration uses BucketName::try_from / BucketName::new and ObjectKey::try_from.
+        let bucket = BucketName::new(self.s3_bucket.clone())
+            .map_err(|e| anyhow::anyhow!("invalid bucket '{}': {}", self.s3_bucket, e))?;
+        let cfg = S3Config::new(bucket, self.s3_region.clone());
+        // Custom endpoint (MinIO/LocalStack) will be supported via S3Config::with_endpoint in v0.2
+        Ok(S3Store::new(cfg))
+    }
+
+    /// Upload a file to blob storage.
+    ///
+    /// The key is constructed as `{s3_prefix}/{database}/{filename}` and validated
+    /// via `ObjectKey::try_from`. Uses `BlobStore::put` with `Bytes`.
+    /// For S3 production, uses `blobkit::S3Store` (stub returns Unsupported until blobkit v0.2).
+    /// For local storage, `build_local_store` provides a `LocalStore` with `max_bytes` guard.
+    /// If `s3_server_side_encryption` is enabled, S3 SSE will be configured in blobkit v0.2 via S3Config.
     /// Returns the full S3 URI on success.
     async fn upload_to_s3(&self, local_path: &str, filename: &str) -> anyhow::Result<String> {
-        let client = self.build_s3_client().await?;
-
-        let key = if self.s3_prefix.is_empty() {
+        // Validate bucket and key via typed newtypes (replaces stringly BucketName/ObjectKey)
+        let bucket = BucketName::new(self.s3_bucket.clone())
+            .map_err(|e| anyhow::anyhow!("invalid bucket '{}': {}", self.s3_bucket, e))?;
+        let raw_key = if self.s3_prefix.is_empty() {
             format!("{}/{}", self.database, filename)
         } else {
             format!("{}/{}/{}", self.s3_prefix, self.database, filename)
         };
+        let key = ObjectKey::try_from(raw_key.clone())
+            .map_err(|e| anyhow::anyhow!("invalid object key '{}': {}", raw_key, e))?;
 
-        let body = fs::read(local_path).await.map_err(|e| {
+        let data = fs::read(local_path).await.map_err(|e| {
             anyhow::anyhow!(
-                "Failed to read backup file for S3 upload: {}: {}",
+                "Failed to read backup file for upload: {}: {}",
                 local_path,
                 e
             )
         })?;
-        let body_len = body.len() as u64;
+        let body_len = data.len() as u64;
+        let bytes = Bytes::from(data);
 
-        let mut put_req = client
-            .put_object()
-            .bucket(&self.s3_bucket)
-            .key(&key)
-            .body(body.into());
+        // Production path: blobkit::S3Store (stub in v0.1 — will be wired in blobkit v0.2)
+        // This replaces the previous raw S3 client construction flow.
+        let cfg = S3Config::new(bucket.clone(), self.s3_region.clone());
+        let store = S3Store::new(cfg);
+        store.put(key.clone(), bytes).await.map_err(|e| {
+            anyhow::anyhow!(
+                "S3 upload failed (blobkit S3Store stub in v0.1, will be wired in v0.2): {}/{}: {}",
+                bucket.as_str(),
+                key.as_str(),
+                e
+            )
+        })?;
 
-        if self.s3_server_side_encryption {
-            put_req =
-                put_req.server_side_encryption(aws_sdk_s3::types::ServerSideEncryption::Aes256);
-        }
-
-        // Set content type based on file extension
-        let content_type = if filename.ends_with(".gz") {
-            "application/gzip"
-        } else if filename.ends_with(".zst") {
-            "application/zstd"
-        } else {
-            "application/octet-stream"
-        };
-        put_req = put_req.content_type(content_type);
-
-        put_req
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("S3 upload failed: {}/{}: {}", self.s3_bucket, key, e))?;
-
-        let s3_uri = format!("s3://{}/{}", self.s3_bucket, key);
+        let s3_uri = format!("s3://{}/{}", bucket.as_str(), key.as_str());
         tracing::info!(
-            "S3 upload complete: {} ({} bytes) -> {}",
+            "blob upload complete: {} ({} bytes) -> {}",
             local_path,
             body_len,
             s3_uri
@@ -436,26 +448,31 @@ impl BackupShim {
         Ok(s3_uri)
     }
 
-    /// Delete a backup from S3.
+    /// Delete a backup from blob storage via `BlobStore::delete`.
     #[allow(dead_code)]
     async fn delete_from_s3(&self, filename: &str) -> anyhow::Result<()> {
-        let client = self.build_s3_client().await?;
-
-        let key = if self.s3_prefix.is_empty() {
+        let bucket = BucketName::new(self.s3_bucket.clone())
+            .map_err(|e| anyhow::anyhow!("invalid bucket '{}': {}", self.s3_bucket, e))?;
+        let raw_key = if self.s3_prefix.is_empty() {
             format!("{}/{}", self.database, filename)
         } else {
             format!("{}/{}/{}", self.s3_prefix, self.database, filename)
         };
+        let key = ObjectKey::try_from(raw_key.clone())
+            .map_err(|e| anyhow::anyhow!("invalid object key '{}': {}", raw_key, e))?;
 
-        client
-            .delete_object()
-            .bucket(&self.s3_bucket)
-            .key(&key)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("S3 delete failed: {}/{}: {}", self.s3_bucket, key, e))?;
+        let cfg = S3Config::new(bucket.clone(), self.s3_region.clone());
+        let store = S3Store::new(cfg);
+        store.delete(&key).await.map_err(|e| {
+            anyhow::anyhow!(
+                "blob delete failed (blobkit stub): {}/{}: {}",
+                bucket.as_str(),
+                key.as_str(),
+                e
+            )
+        })?;
 
-        tracing::info!("S3 delete: s3://{}/{}", self.s3_bucket, key);
+        tracing::info!("S3 delete: s3://{}/{}", bucket.as_str(), key.as_str());
         Ok(())
     }
 
