@@ -18,6 +18,8 @@ chrono.workspace = true
 prometheus.workspace = true
 aws-sdk-s3.workspace = true
 aws-config.workspace = true
+blobkit = { path = "../../../blobkit" }
+bytes.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
