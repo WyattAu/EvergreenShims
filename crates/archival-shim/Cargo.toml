@@ -16,7 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 prometheus.workspace = true
-blobkit = { path = "../../../blobkit", features = ["s3"] }
+blobkit = { path = "../blobkit", features = ["s3"] }
 url = "2"
 bytes.workspace = true
 

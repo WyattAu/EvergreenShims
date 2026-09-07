@@ -1,0 +1,46 @@
+[package]
+name = "validkit"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Typed newtypes for validated domain primitives — email, URL, cron, tenant, locale, and more"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/WyattAu/validkit"
+keywords = ["validation", "email", "url", "cron", "newtype"]
+categories = ["rust-patterns"]
+exclude = ["/target"]
+
+[dependencies]
+thiserror = { version = "2", default-features = false }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+url = { version = "2", features = ["serde"], optional = true }
+regex = { version = "1", optional = true }
+idna = { version = "1", optional = true }
+
+[dev-dependencies]
+proptest = "1"
+serde_json = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+regex = "1"
+
+[features]
+default = ["std"]
+std = ["thiserror/std", "serde?/std", "chrono?/clock", "url?/std"]
+serde = ["dep:serde", "dep:serde_json"]
+chrono = ["dep:chrono"]
+url = ["dep:url"]
+regex = ["dep:regex"]
+openapi = []
+full = ["serde", "chrono", "url", "regex"]
+
+[[bench]]
+name = "valid_bench"
+harness = false
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+indexing_slicing = "deny"
+panic = "deny"
