@@ -1,0 +1,49 @@
+[package]
+name = "otelkit"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Tracing and telemetry initialization for Rust — OpenTelemetry, OTLP export, Sentry integration, and structured logging"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/WyattAu/otelkit"
+keywords = ["tracing", "opentelemetry", "telemetry", "logging", "sentry"]
+categories = ["development-tools::debugging", "asynchronous"]
+exclude = ["/target"]
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
+tracing-opentelemetry = { version = "0.29", optional = true }
+
+[dependencies.opentelemetry]
+version = "0.28"
+optional = true
+
+[dependencies.opentelemetry_sdk]
+version = "0.28"
+optional = true
+
+[dependencies.opentelemetry-otlp]
+version = "0.28"
+optional = true
+
+[dependencies.sentry]
+version = "0.34"
+optional = true
+
+[features]
+default = ["std", "json"]
+std = ["tracing-subscriber/std"]
+json = ["tracing-subscriber/json"]
+otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "tracing-opentelemetry"]
+sentry = ["dep:sentry"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+indexing_slicing = "deny"
+panic = "deny"

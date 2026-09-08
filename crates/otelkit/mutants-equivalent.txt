@@ -1,0 +1,13 @@
+# Equivalent mutants — otelkit (cargo-mutants --all-features, 2026-09-07)
+#
+# Survivors triaged as EQUIVALENT-in-host-suite. Baseline: 16 mutants, 3
+# unviable, 12/13 viable killed (92.3%).
+
+src/lib.rs:23:9: replace <impl Drop for TelemetryGuard>::drop with ()
+  Rationale: the drop body only flushes/shuts down the OTLP tracer provider
+  and Sentry client. Those side effects are observable only through an
+  external collector/transport — the guard's fields are private, nothing is
+  returned, and shutdown failures are reported solely via eprintln to
+  stderr. No in-process assertion can distinguish a dropped flush; killing
+  it would require a live OTLP collector (or stderr-capturing subprocess)
+  harness.
