@@ -1,6 +1,6 @@
 [package]
 name = "otelkit"
-version = "1.0.0"
+version = "2.0.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Tracing and telemetry initialization for Rust — OpenTelemetry, OTLP export, Sentry integration, and structured logging"
@@ -14,18 +14,30 @@ exclude = ["/target"]
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
-tracing-opentelemetry = { version = "0.29", optional = true }
+tracing-opentelemetry = { version = "0.33", optional = true }
 
 [dependencies.opentelemetry]
-version = "0.28"
+version = "0.32"
 optional = true
 
 [dependencies.opentelemetry_sdk]
-version = "0.28"
+version = "0.32"
 optional = true
 
 [dependencies.opentelemetry-otlp]
-version = "0.28"
+version = "0.32"
+optional = true
+
+[dependencies.opentelemetry-stdout]
+version = "0.32"
+optional = true
+
+[dependencies.opentelemetry-prometheus]
+version = "0.32"
+optional = true
+
+[dependencies.prometheus]
+version = "0.14"
 optional = true
 
 [dependencies.sentry]
@@ -37,6 +49,8 @@ default = ["std", "json"]
 std = ["tracing-subscriber/std"]
 json = ["tracing-subscriber/json"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "tracing-opentelemetry"]
+stdout = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-stdout", "tracing-opentelemetry"]
+prometheus = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-prometheus", "dep:prometheus"]
 sentry = ["dep:sentry"]
 
 [dev-dependencies]

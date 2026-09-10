@@ -1,4 +1,5 @@
 use crate::error::TelemetryError;
+use crate::exporter::Exporter;
 
 /// Output format for structured logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,11 @@ pub struct TelemetryConfig {
     pub sentry_dsn: Option<String>,
     /// Trace sample rate (0.0 – 1.0).
     pub sample_rate: f32,
+    /// Exporter backend selection.
+    ///
+    /// Defaults to [`Exporter::Otlp`], which preserves the historical
+    /// behavior. Added in 2.0.0.
+    pub exporter: Exporter,
 }
 
 impl Default for TelemetryConfig {
@@ -48,6 +54,7 @@ impl Default for TelemetryConfig {
             otlp_endpoint: None,
             sentry_dsn: None,
             sample_rate: 1.0,
+            exporter: Exporter::default(),
         }
     }
 }
@@ -69,7 +76,15 @@ impl TelemetryConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1.0),
+            exporter: Exporter::from_str_opt(
+                &std::env::var("OTEL_EXPORTER").unwrap_or_else(|_| "otlp".into()),
+            ),
         })
+    }
+
+    /// Create a config with the given service name and defaults.
+    pub fn new(service_name: impl Into<String>) -> Self {
+        Self::default().service_name(service_name)
     }
 
     /// Set the service name.
@@ -111,6 +126,12 @@ impl TelemetryConfig {
     /// Set the trace sample rate.
     pub fn sample_rate(mut self, rate: f32) -> Self {
         self.sample_rate = rate.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set the telemetry exporter backend.
+    pub fn exporter(mut self, exporter: Exporter) -> Self {
+        self.exporter = exporter;
         self
     }
 }
