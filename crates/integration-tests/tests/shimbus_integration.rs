@@ -154,6 +154,9 @@ async fn test_correlation_id_roundtrip() {
     let seq = bus.publish(evt.clone());
     evt.sequence = seq;
 
+    // The uncorrelated `emit()` event above occupies the queue first; drain
+    // it, then the published (correlated) event must follow.
+    let _emitted = rx.try_recv().unwrap();
     let received = rx.try_recv().unwrap();
     assert_eq!(received.correlation_id, Some(correlation));
 }

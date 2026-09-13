@@ -35,10 +35,6 @@ members = [
     "crates/shimctl",
     "crates/shim-plugin",
     "crates/shim-operator",
-    "crates/validkit",
-    "crates/blobkit",
-    "crates/otelkit",
-    "crates/retry-backoff",
 ]
 resolver = "2"
 exclude = ["examples/custom-shim-plugin", "examples/cloud-metadata-plugin"]
@@ -79,7 +75,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Observability
-otelkit = { path = "crates/otelkit", features = ["otlp"] }
+# Estate validation/telemetry/storage/retry crates (crates.io, newest).
+validkit = { version = "1.3", features = ["url"] }
+blobkit = { version = "0.4", features = ["s3"] }
+otelkit = { version = "2.0", features = ["otlp"] }
 
 # Database (ring-free: uses aws-lc-rs for musl static builds)
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "mysql"] }
@@ -110,7 +109,7 @@ hmac = "0.12"
 aes-gcm = "0.10"
 
 # Retry
-loop-retry = { path = "crates/retry-backoff" }
+loop-retry = "0.1"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }

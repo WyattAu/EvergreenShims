@@ -32,7 +32,7 @@ libc = "0.2"
 parking_lot.workspace = true
 axum.workspace = true
 cron.workspace = true
-validkit = { path = "../validkit", features = ["url"] }
+validkit.workspace = true
 notify = "7"
 reqwest = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
@@ -42,6 +42,9 @@ wasmtime = { version = "28", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+blobkit.workspace = true
+loop-retry.workspace = true
+bytes.workspace = true
 pretty_assertions.workspace = true
 temp-env.workspace = true
 serial_test.workspace = true
