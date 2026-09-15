@@ -25,3 +25,13 @@ platforms = [
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true
+
+# evergreen-shim is the size-gated release binary (CI "Binary Size Check",
+# 3.5MB stripped-musl budget): hakari's workspace-wide feature union adds
+# ~500KB to that binary (measured 3.83MB vs 3.32MB pre-hakari), so it is
+# kept out of the workspace-hack graph entirely. Consequence: `cargo hakari
+# verify` reports duplicated feature sets for evergreen-shim's dependency
+# slice — that is the deliberate trade, not a bug. All other members keep
+# full unification.
+[traversal-excludes]
+workspace-members = ["evergreen-shim"]

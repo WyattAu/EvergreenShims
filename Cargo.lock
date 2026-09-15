@@ -2243,7 +2243,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vault-shim",
- "workspace-hack",
 ]
 
 [[package]]
