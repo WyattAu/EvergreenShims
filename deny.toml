@@ -24,6 +24,12 @@ ignore = [
     "RUSTSEC-2025-0012",
     # derivative unmaintained; no vulnerability, derive macro still works
     "RUSTSEC-2024-0388",
+    # h2 0.3.x unbounded empty DATA frames (low severity); fix only exists on 0.4.x.
+    # This 0.3 line comes via the AWS SDK legacy HTTP client (aws-smithy-http-client),
+    # which cannot move to h2 0.4 within semver. The h2 0.4.x line we use elsewhere
+    # is patched (0.4.19) and kept above the fix via Cargo.lock.
+    # TODO: drop this ignore when aws-sdk bumps aws-smithy-http-client to a hyper-1.x client.
+    { id = "RUSTSEC-2026-0258", reason = "h2 0.3-only path via AWS SDK legacy client; no fixed 0.3 release, tracked for removal" },
 ]
 
 [licenses]
