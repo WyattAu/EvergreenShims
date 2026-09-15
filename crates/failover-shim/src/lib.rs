@@ -1720,7 +1720,7 @@ impl MultiClusterMonitor {
     /// Checks each cluster's endpoints via TCP, measures latency,
     /// and updates cluster status.
     pub async fn check_all_clusters(&mut self) {
-        for (_name, cluster) in self.clusters.iter_mut() {
+        for cluster in self.clusters.values_mut() {
             let mut total_latency: u64 = 0;
             let mut reachable = 0u32;
             let total = cluster.endpoints.len() as u32;

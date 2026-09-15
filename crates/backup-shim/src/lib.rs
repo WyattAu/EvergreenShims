@@ -1869,9 +1869,13 @@ mod tests {
 
     #[test]
     fn test_backup_shim_default_trait() {
-        let shim = BackupShim::default();
-        assert_eq!(shim.db_type, "postgres");
-        assert_eq!(shim.retention_days, 30);
+        temp_env::with_var_unset("BACKUP_DB_TYPE", || {
+            temp_env::with_var_unset("BACKUP_RETENTION_DAYS", || {
+                let shim = BackupShim::default();
+                assert_eq!(shim.db_type, "postgres");
+                assert_eq!(shim.retention_days, 30);
+            });
+        });
     }
 
     #[test]
