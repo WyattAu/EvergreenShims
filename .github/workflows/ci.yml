@@ -313,7 +313,13 @@ jobs:
           strip target/x86_64-unknown-linux-musl/release/shim
           SIZE=$(stat -c%s target/x86_64-unknown-linux-musl/release/shim 2>/dev/null || echo 0)
           echo "Health shim binary size (stripped): ${SIZE} bytes"
-          THRESHOLD=3000000
+          # 3.5MB budget: shim v2.0.0 grew the health binary from ~3.05MB to ~3.32MB
+          # (measured: v1.3.0 3,054,568B -> v2.0.0 3,324,448B, +274KB) via legitimate
+          # v2 features: pidfd process monitoring, startup grace period, validkit
+          # config validation, loop-retry adoption. Release profile already uses
+          # lto=fat, codegen-units=1, opt-level=z, strip, panic=abort — no headroom
+          # left from toolchain flags. 3.5M leaves ~5% for future work.
+          THRESHOLD=3500000
           if [ "$SIZE" -gt "$THRESHOLD" ]; then
             echo "::error::Binary exceeds ${THRESHOLD} bytes threshold (${SIZE} bytes)"
             exit 1

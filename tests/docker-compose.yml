@@ -49,7 +49,9 @@ services:
       - "18200:8200"
 
   minio:
-    image: minio/minio:latest
+    # minio/minio was removed from Docker Hub (repo 404s); MinIO now publishes
+    # to quay.io. Pin to quay so anonymous CI pulls keep working.
+    image: quay.io/minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: test
