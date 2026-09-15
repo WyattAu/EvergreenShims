@@ -3,6 +3,11 @@
 //! Provides a gRPC service for querying shim status, metrics,
 //! configuration reload, and capability discovery.
 
+// tonic-generated service methods return `Result<_, tonic::Status>`; Status
+// exceeds clippy's result_large_err threshold and the generated code in
+// OUT_DIR cannot be annotated directly. Boxing the error is not an option —
+// the signatures are fixed by the tonic codegen.
+#[allow(clippy::result_large_err)]
 pub mod proto {
     tonic::include_proto!("evergreen.shim");
 }
