@@ -35,6 +35,7 @@ members = [
     "crates/shimctl",
     "crates/shim-plugin",
     "crates/shim-operator",
+    "workspace-hack",
 ]
 resolver = "2"
 exclude = ["examples/custom-shim-plugin", "examples/cloud-metadata-plugin"]

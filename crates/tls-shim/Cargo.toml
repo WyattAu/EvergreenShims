@@ -23,6 +23,7 @@ reqwest.workspace = true
 parking_lot.workspace = true
 rcgen.workspace = true
 acme-micro.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tempfile.workspace = true

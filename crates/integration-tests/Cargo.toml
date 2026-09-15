@@ -39,6 +39,7 @@ sqlx.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
 serial_test.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 pretty_assertions.workspace = true
