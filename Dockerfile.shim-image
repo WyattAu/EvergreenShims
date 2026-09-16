@@ -18,6 +18,10 @@ WORKDIR /src
 
 FROM chef AS planner
 COPY . .
+# The workspace-hack feature union inflates the shipped musl binary
+# (~500KB; see the CI Binary Size Check job) — disable it before the
+# recipe is prepared so the image keeps the minimal-feature build.
+RUN cargo install cargo-hakari --locked && cargo hakari disable
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
