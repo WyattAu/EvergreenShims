@@ -33,6 +33,7 @@ impl HealthStatus {
 }
 
 /// Health check trait.
+#[allow(clippy::double_must_use)] // async_trait's boxed-future desugaring trips it
 #[async_trait::async_trait]
 pub trait HealthCheck: Send + Sync {
     /// Check liveness (is the process running?).

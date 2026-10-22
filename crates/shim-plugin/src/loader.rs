@@ -334,7 +334,7 @@ mod tests {
         let path = good_plugin_path();
         let plugin = PluginCapability::load(&path).unwrap();
         assert_eq!(plugin.name(), "good_test_plugin");
-        assert!(plugin.name().len() > 0);
+        assert!(!plugin.name().is_empty());
     }
 
     #[tokio::test]

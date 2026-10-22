@@ -8,11 +8,9 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
-use prometheus::{IntCounter, IntCounterVec, Opts, Registry};
+use prometheus::{IntCounter, Opts, Registry};
 use redis::aio::ConnectionManager;
-use tokio::sync::broadcast;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::bus::ShimBus;
 use crate::error::{Error, Result};
@@ -24,8 +22,6 @@ const STREAM_PREFIX: &str = "evergreen:shimbus:events";
 const CONSUMER_GROUP: &str = "evergreen-shims";
 /// Maximum stream length (trim to ~10k events).
 const MAX_STREAM_LEN: usize = 10_000;
-/// Warning threshold ratio for consumed events before logging.
-const CONSUME_WARNING_THRESHOLD: u64 = 1000;
 
 /// Metrics for the Redis bridge.
 pub struct RedisBridgeMetrics {
@@ -36,6 +32,10 @@ pub struct RedisBridgeMetrics {
     /// Total errors encountered.
     pub errors: IntCounter,
 }
+
+/// The XREADGROUP reply shape: one entry per stream, each carrying
+/// (field, value) pairs per message.
+type XReadGroupReply = Option<Vec<(String, Vec<(String, Vec<(String, String)>)>)>>;
 
 impl RedisBridgeMetrics {
     /// Create and register metrics on the given registry.
@@ -214,21 +214,20 @@ impl RedisBridge {
         let mut last_id = "0-0".to_string();
 
         loop {
-            let result: Option<Vec<(String, Vec<(String, Vec<(String, String)>)>)>> =
-                redis::cmd("XREADGROUP")
-                    .arg("GROUP")
-                    .arg(CONSUMER_GROUP)
-                    .arg(&self.instance_id)
-                    .arg("COUNT")
-                    .arg(10)
-                    .arg("BLOCK")
-                    .arg(poll_interval_ms)
-                    .arg("STREAMS")
-                    .arg(&self.stream_key)
-                    .arg(">")
-                    .query_async(&mut conn)
-                    .await
-                    .ok();
+            let result: XReadGroupReply = redis::cmd("XREADGROUP")
+                .arg("GROUP")
+                .arg(CONSUMER_GROUP)
+                .arg(&self.instance_id)
+                .arg("COUNT")
+                .arg(10)
+                .arg("BLOCK")
+                .arg(poll_interval_ms)
+                .arg("STREAMS")
+                .arg(&self.stream_key)
+                .arg(">")
+                .query_async(&mut conn)
+                .await
+                .ok();
 
             if let Some(streams) = result {
                 for (_stream_name, messages) in streams {
@@ -259,7 +258,7 @@ impl RedisBridge {
     }
 
     /// Publish a local bus event to Redis (call this from a bus subscriber).
-    pub fn relay_to_redis(event: &ShimEvent) -> Result<()> {
+    pub fn relay_to_redis(_event: &ShimEvent) -> Result<()> {
         // This is a static method for use in relay loops;
         // actual connection needs to be passed in.
         // For simplicity, the bridge itself handles this via `start_consuming`.
@@ -288,21 +287,20 @@ impl RedisBridge {
         let mut last_id = "0-0".to_string();
 
         loop {
-            let result: Option<Vec<(String, Vec<(String, Vec<(String, String)>)>)>> =
-                redis::cmd("XREADGROUP")
-                    .arg("GROUP")
-                    .arg(CONSUMER_GROUP)
-                    .arg(&self.instance_id)
-                    .arg("COUNT")
-                    .arg(10)
-                    .arg("BLOCK")
-                    .arg(poll_interval_ms)
-                    .arg("STREAMS")
-                    .arg(&self.stream_key)
-                    .arg(">")
-                    .query_async(&mut conn)
-                    .await
-                    .ok();
+            let result: XReadGroupReply = redis::cmd("XREADGROUP")
+                .arg("GROUP")
+                .arg(CONSUMER_GROUP)
+                .arg(&self.instance_id)
+                .arg("COUNT")
+                .arg(10)
+                .arg("BLOCK")
+                .arg(poll_interval_ms)
+                .arg("STREAMS")
+                .arg(&self.stream_key)
+                .arg(">")
+                .query_async(&mut conn)
+                .await
+                .ok();
 
             if let Some(streams) = result {
                 for (_stream_name, messages) in streams {

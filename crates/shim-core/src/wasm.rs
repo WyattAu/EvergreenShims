@@ -18,6 +18,7 @@ use async_trait::async_trait;
 // ---------------------------------------------------------------------------
 
 /// Extension trait that adds WASM-specific lifecycle hooks to [`Capability`].
+#[allow(clippy::double_must_use)] // async_trait's boxed-future desugaring trips it
 #[async_trait]
 pub trait WasmCapability: Capability {
     /// Called when the WASM module is being instantiated.
@@ -797,7 +798,6 @@ mod runtime_tests {
     use super::runtime::*;
     use crate::Config;
     use std::path::Path;
-    use std::sync::Arc;
 
     /// A tiny WASM module that exports `_start` and `memory` (no-op).
     fn noop_wasm() -> Vec<u8> {

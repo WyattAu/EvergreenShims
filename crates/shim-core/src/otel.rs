@@ -35,7 +35,7 @@ pub fn init_otel_tracing(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use opentelemetry::trace::{Span, Status, Tracer, TracerProvider};
     use opentelemetry::KeyValue;
     use opentelemetry_sdk::resource::Resource;
@@ -104,7 +104,7 @@ mod tests {
         let tracer = provider.tracer("test-tracer");
 
         let mut span = tracer.start("error-span");
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "simulated failure");
+        let io_err = std::io::Error::other("simulated failure");
         span.record_error(&io_err);
         span.set_status(Status::error("simulated failure"));
         span.end();
@@ -122,7 +122,7 @@ mod tests {
         let tracer = provider.tracer("test-tracer");
 
         let mut parent_span = tracer.start("parent");
-        let parent_ctx = parent_span.span_context().clone();
+        let _parent_ctx = parent_span.span_context().clone();
 
         // Create a linked span context
         let linked_ctx = SpanContext::new(
@@ -320,7 +320,7 @@ mod tests {
         span.set_attribute(KeyValue::new("str_key", "string_value"));
         span.set_attribute(KeyValue::new("bool_key", true));
         span.set_attribute(KeyValue::new("i64_key", 42i64));
-        span.set_attribute(KeyValue::new("f64_key", 3.14));
+        span.set_attribute(KeyValue::new("f64_key", std::f64::consts::PI));
         span.end();
 
         let _ = provider.shutdown();

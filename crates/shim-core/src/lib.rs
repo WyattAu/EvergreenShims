@@ -69,6 +69,7 @@ pub use tenant::{
 };
 
 /// A shim capability that can be enabled/disabled.
+#[allow(clippy::double_must_use)] // async_trait's boxed-future desugaring trips it
 #[async_trait::async_trait]
 pub trait Capability: Send + Sync {
     /// Name of the capability (e.g., "health", "vault").

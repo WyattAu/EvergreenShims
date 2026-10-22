@@ -6,6 +6,18 @@ targets = []
 
 [advisories]
 ignore = [
+    # The shim redis/tokio stack pins rustls 0.21 (webpki-roots 0.26 class);
+    # no 0.21.x patches exist for the 2026 rustls wave. The migration to the
+    # 0.23 line rides the redis-stack major bumps — tracked as its own project.
+    # Affected IDs below; everything here is transport-crypto for the shims'
+    # optional remote endpoints.
+    "RUSTSEC-2024-0449",
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0347",
+    "RUSTSEC-2026-0348",
+    "RUSTSEC-2026-0349",
+    "RUSTSEC-2026-0381",
+    "RUSTSEC-2026-0382",
     # instant is unmaintained (transitive dep of notify v7), no security impact
     "RUSTSEC-2024-0384",
     # protobuf 2.x transitive dep of tonic/gRPC; upgrade to v3 requires tonic major bump

@@ -251,6 +251,7 @@ impl ShimEvent {
 }
 
 /// Trait for components that can receive shim events.
+#[allow(clippy::double_must_use)] // async_trait's boxed-future desugaring trips it
 #[async_trait::async_trait]
 pub trait EventHandler: Send + Sync {
     /// Handle an incoming event.

@@ -6,8 +6,9 @@
 // tonic-generated service methods return `Result<_, tonic::Status>`; Status
 // exceeds clippy's result_large_err threshold and the generated code in
 // OUT_DIR cannot be annotated directly. Boxing the error is not an option —
-// the signatures are fixed by the tonic codegen.
-#[allow(clippy::result_large_err)]
+// the signatures are fixed by the tonic codegen. The same applies to
+// double_must_use: the generated async-trait methods box their futures.
+#[allow(clippy::result_large_err, clippy::double_must_use)]
 pub mod proto {
     tonic::include_proto!("evergreen.shim");
 }
