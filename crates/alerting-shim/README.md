@@ -1,1 +1,1 @@
-| `ALERTING_WEBHOOKS` | JSON array of webhook configs | - |
+| `ALERTING_WEBHOOKS` | JSON array of webhook configs |; |

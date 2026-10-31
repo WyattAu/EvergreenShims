@@ -1,1 +1,1 @@
-| `HEALTH_WEBHOOK_URL` | Webhook URL to push health status via POST | - |
+| `HEALTH_WEBHOOK_URL` | Webhook URL to push health status via POST |; |
