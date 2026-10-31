@@ -1,1 +1,1 @@
-| `COST_TENANT_KEY` | Header/key for tenant identification |; |
+| `COST_TENANT_KEY` | Header/key for tenant identification | - |

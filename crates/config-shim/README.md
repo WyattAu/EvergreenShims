@@ -1,1 +1,1 @@
-| `CONFIG_VALIDATE_CMD` | Command to validate config |; |
+| `CONFIG_VALIDATE_CMD` | Command to validate config | - |

@@ -1,1 +1,1 @@
-| `MONGO_DATABASE` | Database name |; |
+| `MONGO_DATABASE` | Database name | - |

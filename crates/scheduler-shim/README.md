@@ -1,1 +1,1 @@
-| `SCHEDULER_TASKS` | JSON array of task definitions (or path to JSON file) |; |
+| `SCHEDULER_TASKS` | JSON array of task definitions (or path to JSON file) | - |
